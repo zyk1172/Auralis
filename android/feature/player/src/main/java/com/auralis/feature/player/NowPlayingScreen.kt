@@ -1,5 +1,6 @@
 package com.auralis.feature.player
 
+import android.content.Context
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -78,6 +79,8 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -86,6 +89,7 @@ import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.designsystem.R as AuralisR
 import com.auralis.core.domain.BrowseDestination
 import com.auralis.core.domain.DownloadStatus
 import com.auralis.core.domain.GlobalId
@@ -166,13 +170,13 @@ fun NowPlayingScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = onClose) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "收起正在播放", tint = colors.primaryText)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.player_dismiss_now_playing), tint = colors.primaryText)
                 }
                 Column(
                     modifier = Modifier.weight(1f),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Text("正在播放", style = MaterialTheme.typography.labelMedium, color = colors.primaryText)
+                    Text(stringResource(R.string.player_tab_now_playing), style = MaterialTheme.typography.labelMedium, color = colors.primaryText)
                     Text(
                         track.albumTitle,
                         style = MaterialTheme.typography.labelSmall,
@@ -254,7 +258,7 @@ private fun PlayerPageSelector(selected: PlayerTab, onSelect: (PlayerTab) -> Uni
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    tab.titleZh,
+                    stringResource(tab.titleRes),
                     style = MaterialTheme.typography.labelLarge,
                     color = if (active) colors.primaryText else colors.secondaryText,
                 )
@@ -284,13 +288,14 @@ private fun HeroContent(track: Track) {
 @Composable
 private fun LyricsContent(graph: AuralisGraph, track: Track, positionMs: Long) {
     val colors = LocalAuralisTheme.current.colors
+    val context = LocalContext.current
     var loadState by remember { mutableStateOf<LyricsLoad>(LyricsLoad.Loading) }
     var reloadKey by remember { mutableStateOf(0) }
     LaunchedEffect(track.globalId, reloadKey) {
         loadState = LyricsLoad.Loading
         runCatching { graph.lyricsService.lyricsFor(track) }
             .onSuccess { doc -> loadState = if (doc == null) LyricsLoad.None else LyricsLoad.Ready(doc) }
-            .onFailure { loadState = LyricsLoad.Error("歌词加载失败：${it.message}") }
+            .onFailure { loadState = LyricsLoad.Error(context.getString(R.string.player_lyrics_load_failed, it.message)) }
     }
     val listState = rememberLazyListState()
     when (val state = loadState) {
@@ -299,11 +304,11 @@ private fun LyricsContent(graph: AuralisGraph, track: Track, positionMs: Long) {
         }
         is LyricsLoad.Error -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("无法加载歌词", style = MaterialTheme.typography.titleMedium, color = colors.primaryText)
+                Text(stringResource(R.string.player_lyrics_unavailable), style = MaterialTheme.typography.titleMedium, color = colors.primaryText)
                 Spacer(Modifier.height(AuralisSpacing.small))
                 Text(state.message, style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
                 Spacer(Modifier.height(AuralisSpacing.medium))
-                TextButton(onClick = { reloadKey += 1 }) { Text("重试") }
+                TextButton(onClick = { reloadKey += 1 }) { Text(stringResource(AuralisR.string.retry)) }
             }
         }
         LyricsLoad.None -> EmptyLyricsHint(colors.primaryText, colors.secondaryText)
@@ -363,10 +368,10 @@ private fun EmptyLyricsHint(primary: Color, secondary: Color) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null, tint = secondary, modifier = Modifier.size(36.dp))
             Spacer(Modifier.height(AuralisSpacing.medium))
-            Text("暂无歌词", style = MaterialTheme.typography.titleMedium, color = primary)
+            Text(stringResource(R.string.player_lyrics_none_title), style = MaterialTheme.typography.titleMedium, color = primary)
             Spacer(Modifier.height(AuralisSpacing.small))
             Text(
-                "服务器没有返回歌词，可稍后在本地文件或候选源中补全。",
+                stringResource(R.string.player_lyrics_none_message),
                 style = MaterialTheme.typography.bodySmall,
                 color = secondary,
                 textAlign = TextAlign.Center,
@@ -398,20 +403,29 @@ private fun QueueContent(
         ) {
             val windowed = queue.totalCount > entries.size
             Text(
-                if (windowed) "队列 ${queue.windowStartLogicalIndex + 1}–${queue.windowStartLogicalIndex + entries.size} / ${queue.totalCount}" else "共 ${queue.totalCount} 首",
+                if (windowed) {
+                    stringResource(
+                        R.string.player_queue_window_format,
+                        queue.windowStartLogicalIndex + 1,
+                        queue.windowStartLogicalIndex + entries.size,
+                        queue.totalCount,
+                    )
+                } else {
+                    stringResource(R.string.player_queue_total_format, queue.totalCount)
+                },
                 style = MaterialTheme.typography.labelMedium,
                 color = colors.secondaryText,
                 modifier = Modifier.weight(1f),
             )
             if (entries.isNotEmpty()) {
                 TextButton(onClick = { editing = !editing }) {
-                    Text(if (editing) "完成" else "编辑")
+                    Text(stringResource(if (editing) AuralisR.string.done else AuralisR.string.edit))
                 }
             }
         }
         if (entries.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text("队列是空的", style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText)
+                Text(stringResource(R.string.player_queue_empty), style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText)
             }
             return@Column
         }
@@ -490,17 +504,17 @@ private fun QueueRow(
         if (!editing) {
             Text(formatClock((track.durationSeconds * 1000).toLong()), style = MaterialTheme.typography.labelSmall, color = colors.secondaryText)
             if (isCurrent) {
-                Icon(Icons.Filled.GraphicEq, contentDescription = "正在播放", tint = colors.accent, modifier = Modifier.size(16.dp))
+                Icon(Icons.Filled.GraphicEq, contentDescription = stringResource(R.string.player_now_playing_indicator), tint = colors.accent, modifier = Modifier.size(16.dp))
             }
         } else {
             IconButton(onClick = { if (canMoveUp) onMove(logicalIndex - 1) }) {
-                Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "上移", tint = if (canMoveUp) colors.primaryText else colors.secondaryText.copy(alpha = 0.35f))
+                Icon(Icons.Filled.KeyboardArrowUp, contentDescription = stringResource(R.string.player_move_up), tint = if (canMoveUp) colors.primaryText else colors.secondaryText.copy(alpha = 0.35f))
             }
             IconButton(onClick = { if (canMoveDown) onMove(logicalIndex + 1) }) {
-                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "下移", tint = if (canMoveDown) colors.primaryText else colors.secondaryText.copy(alpha = 0.35f))
+                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = stringResource(R.string.player_move_down), tint = if (canMoveDown) colors.primaryText else colors.secondaryText.copy(alpha = 0.35f))
             }
             IconButton(onClick = onRemove) {
-                Icon(Icons.Filled.Delete, contentDescription = "从队列移除", tint = colors.error)
+                Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.player_remove_from_queue), tint = colors.error)
             }
         }
     }
@@ -526,6 +540,7 @@ private fun PlaybackControlsArea(
     onTrackAction: PlayerTrackActionHandler?,
 ) {
     val colors = LocalAuralisTheme.current.colors
+    val context = LocalContext.current
     val state = playback.state
     val isPlaying = state is PlaybackState.Playing
     val isBusy = state is PlaybackState.Buffering || state is PlaybackState.Stalled || state is PlaybackState.Preparing
@@ -576,13 +591,13 @@ private fun PlaybackControlsArea(
                 onClick = {
                     scope.launch {
                         runCatching { graph.libraryActions.toggleDisliked(track) }
-                            .onFailure { message = "操作失败：${it.message}" }
+                            .onFailure { message = context.getString(R.string.player_action_failed, it.message) }
                     }
                 },
             ) {
                 Icon(
                     if (isDisliked) Icons.Filled.ThumbDown else Icons.Outlined.ThumbDown,
-                    contentDescription = if (isDisliked) "取消不喜欢" else "不喜欢",
+                    contentDescription = stringResource(if (isDisliked) AuralisR.string.undislike else AuralisR.string.dislike),
                     tint = if (isDisliked) colors.accent else colors.secondaryText,
                     modifier = Modifier.size(26.dp),
                 )
@@ -605,13 +620,13 @@ private fun PlaybackControlsArea(
                 onClick = {
                     scope.launch {
                         runCatching { graph.libraryActions.toggleTrackFavorite(track) }
-                            .onFailure { message = "收藏操作失败：${it.message}" }
+                            .onFailure { message = context.getString(R.string.player_favorite_failed, it.message) }
                     }
                 },
             ) {
                 Icon(
                     if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                    contentDescription = if (isFavorite) "取消收藏" else "收藏",
+                    contentDescription = stringResource(if (isFavorite) AuralisR.string.unfavorite else AuralisR.string.favorite),
                     tint = if (isFavorite) colors.accent else colors.secondaryText,
                     modifier = Modifier.size(26.dp),
                 )
@@ -645,7 +660,7 @@ private fun PlaybackControlsArea(
                 weight = 1f,
                 enabled = true,
                 onClick = { controller.cyclePlayMode() },
-                contentDescription = "播放模式：${playback.playMode.modeTitleZh()}",
+                contentDescription = stringResource(R.string.player_play_mode_desc, stringResource(playback.playMode.modeTitleRes())),
             ) {
                 Icon(
                     playback.playMode.icon(),
@@ -658,7 +673,7 @@ private fun PlaybackControlsArea(
                 weight = 1f,
                 enabled = canPrev,
                 onClick = { controller.previous() },
-                contentDescription = "上一首",
+                contentDescription = stringResource(AuralisR.string.previous),
             ) {
                 Icon(Icons.Filled.SkipPrevious, contentDescription = null, tint = colors.primaryText, modifier = Modifier.size(32.dp))
             }
@@ -677,7 +692,7 @@ private fun PlaybackControlsArea(
                     ) {
                         Icon(
                             if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                            contentDescription = if (isPlaying) "暂停" else "播放",
+                            contentDescription = stringResource(if (isPlaying) AuralisR.string.pause else AuralisR.string.play),
                             tint = colors.background,
                             modifier = Modifier.size(34.dp),
                         )
@@ -688,24 +703,24 @@ private fun PlaybackControlsArea(
                 weight = 1f,
                 enabled = canNext,
                 onClick = { controller.next() },
-                contentDescription = "下一首",
+                contentDescription = stringResource(AuralisR.string.next),
             ) {
                 Icon(Icons.Filled.SkipNext, contentDescription = null, tint = colors.primaryText, modifier = Modifier.size(32.dp))
             }
             Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
                 IconButton(onClick = { menuOpen = true }) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "更多操作", tint = colors.primaryText, modifier = Modifier.size(24.dp))
+                    Icon(Icons.Filled.MoreVert, contentDescription = stringResource(AuralisR.string.more_actions), tint = colors.primaryText, modifier = Modifier.size(24.dp))
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                     DropdownMenuItem(
-                        text = { Text("添加到歌单") },
+                        text = { Text(stringResource(AuralisR.string.add_to_playlist)) },
                         leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null) },
                         onClick = { menuOpen = false; addToPlaylist = true },
                     )
                     HorizontalDivider(color = colors.separator)
                     when {
                         download?.status == DownloadStatus.Downloaded -> DropdownMenuItem(
-                            text = { Text("删除下载") },
+                            text = { Text(stringResource(R.string.player_delete_download)) },
                             leadingIcon = { Icon(Icons.Filled.Delete, null) },
                             onClick = {
                                 menuOpen = false
@@ -713,7 +728,7 @@ private fun PlaybackControlsArea(
                             },
                         )
                         download?.status == DownloadStatus.Downloading || download?.status == DownloadStatus.Queued -> DropdownMenuItem(
-                            text = { Text("取消下载（${((download?.progress ?: 0f) * 100).toInt()}%）") },
+                            text = { Text(stringResource(R.string.player_cancel_download_progress, ((download?.progress ?: 0f) * 100).toInt())) },
                             leadingIcon = { Icon(Icons.Filled.Close, null) },
                             onClick = {
                                 menuOpen = false
@@ -721,19 +736,19 @@ private fun PlaybackControlsArea(
                             },
                         )
                         else -> DropdownMenuItem(
-                            text = { Text("下载到本地") },
+                            text = { Text(stringResource(R.string.player_download_to_device)) },
                             leadingIcon = { Icon(Icons.Filled.ArrowDownward, null) },
                             onClick = {
                                 menuOpen = false
                                 scope.launch {
                                     runCatching { graph.downloadManager.enqueue(track) }
-                                        .onFailure { message = "下载失败：${it.message}" }
+                                        .onFailure { message = context.getString(R.string.player_download_failed, it.message) }
                                 }
                             },
                         )
                     }
                     DropdownMenuItem(
-                        text = { Text("前往专辑") },
+                        text = { Text(stringResource(R.string.player_view_album)) },
                         enabled = albumGlobalId != null,
                         onClick = {
                             menuOpen = false
@@ -742,7 +757,7 @@ private fun PlaybackControlsArea(
                         },
                     )
                     DropdownMenuItem(
-                        text = { Text("前往艺术家") },
+                        text = { Text(stringResource(R.string.player_view_artist)) },
                         enabled = artistGlobalId != null,
                         onClick = {
                             menuOpen = false
@@ -755,12 +770,12 @@ private fun PlaybackControlsArea(
                     if (onTrackAction != null) {
                         HorizontalDivider(color = colors.separator)
                         DropdownMenuItem(
-                            text = { Text("由此继续播放") },
+                            text = { Text(stringResource(R.string.player_continue_from_track)) },
                             leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) },
                             onClick = { menuOpen = false; onTrackAction(track, PlayerTrackAction.PlaySimilar) },
                         )
                         DropdownMenuItem(
-                            text = { Text("歌曲鉴赏") },
+                            text = { Text(stringResource(R.string.player_appreciate_song)) },
                             leadingIcon = { Icon(Icons.Filled.GraphicEq, null) },
                             onClick = { menuOpen = false; onTrackAction(track, PlayerTrackAction.Appreciate) },
                         )
@@ -802,7 +817,7 @@ private fun PlaybackControlsArea(
             TextButton(onClick = { showInfo = !showInfo }) {
                 Icon(Icons.Filled.GraphicEq, null, tint = colors.secondaryText, modifier = Modifier.size(14.dp))
                 Spacer(Modifier.width(AuralisSpacing.xSmall))
-                Text(audioTechnicalLabel(track, showInfo), style = MaterialTheme.typography.labelSmall, color = colors.secondaryText)
+                Text(audioTechnicalLabel(context, track, showInfo), style = MaterialTheme.typography.labelSmall, color = colors.secondaryText)
             }
         }
     }
@@ -814,24 +829,24 @@ private fun PlaybackControlsArea(
             onDismiss = { addToPlaylist = false },
             onAdded = { name ->
                 addToPlaylist = false
-                message = "已加入歌单「$name」"
+                message = context.getString(R.string.player_added_to_playlist, name)
             },
         )
     }
     message?.let {
         AlertDialog(
             onDismissRequest = { message = null },
-            confirmButton = { TextButton(onClick = { message = null }) { Text("知道了") } },
+            confirmButton = { TextButton(onClick = { message = null }) { Text(stringResource(R.string.player_got_it)) } },
             text = { Text(it) },
         )
     }
 }
 
-private fun audioTechnicalLabel(track: Track, detail: Boolean): String {
+private fun audioTechnicalLabel(context: Context, track: Track, detail: Boolean): String {
     val info = track.sourceInfo
-    val codec = info.normalizedCodec?.uppercase() ?: return "未知"
+    val codec = info.normalizedCodec?.uppercase() ?: return context.getString(R.string.player_unknown)
     if (!detail) return codec
-    val sampleRate = info.sampleRate?.let { "${it / 1000} kHz" } ?: "采样率未知"
+    val sampleRate = info.sampleRate?.let { "${it / 1000} kHz" } ?: context.getString(R.string.player_sample_rate_unknown)
     val bitDepth = info.bitDepth
     return if (bitDepth != null) "$bitDepth-bit · $sampleRate" else sampleRate
 }
@@ -860,11 +875,11 @@ private fun PlayMode.icon(): ImageVector = when (this) {
     PlayMode.RepeatOne -> Icons.Filled.RepeatOne
 }
 
-private fun PlayMode.modeTitleZh(): String = when (this) {
-    PlayMode.Sequential -> "顺序"
-    PlayMode.Shuffle -> "随机"
-    PlayMode.RepeatAll -> "列表循环"
-    PlayMode.RepeatOne -> "单曲循环"
+private fun PlayMode.modeTitleRes(): Int = when (this) {
+    PlayMode.Sequential -> R.string.player_mode_sequential
+    PlayMode.Shuffle -> R.string.player_mode_shuffle
+    PlayMode.RepeatAll -> R.string.player_mode_repeat_all
+    PlayMode.RepeatOne -> R.string.player_mode_repeat_one
 }
 
 // ================================================================ 添加到歌单
@@ -878,6 +893,7 @@ private fun PlayerAddToPlaylistDialog(
     onAdded: (String) -> Unit,
 ) {
     val colors = LocalAuralisTheme.current.colors
+    val context = LocalContext.current
     val serverId = track.serverId
     val flow = remember(serverId) { graph.catalogRepository.observePlaylists(serverId) }
     val playlists by flow.collectAsState(initial = emptyList())
@@ -895,28 +911,28 @@ private fun PlayerAddToPlaylistDialog(
                 .onSuccess { working = false; onAdded(name) }
                 .onFailure {
                     working = false
-                    error = "操作失败：${it.message}"
+                    error = context.getString(R.string.player_action_failed, it.message)
                 }
         }
     }
 
     AlertDialog(
         onDismissRequest = { if (!working) onDismiss() },
-        title = { Text(if (createMode) "新建歌单并加入" else "添加到歌单") },
+        title = { Text(stringResource(if (createMode) R.string.player_new_playlist_and_add else AuralisR.string.add_to_playlist)) },
         text = {
             Column {
                 if (createMode) {
                     OutlinedTextField(
                         value = newName,
                         onValueChange = { newName = it },
-                        label = { Text("歌单名称") },
+                        label = { Text(stringResource(R.string.player_playlist_name_label)) },
                         singleLine = true,
                     )
                     Spacer(Modifier.height(AuralisSpacing.small))
-                    Text("《${track.title}》将加入新歌单。", style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+                    Text(stringResource(R.string.player_new_playlist_hint, track.title), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
                 } else {
                     if (playlists.isEmpty()) {
-                        Text("还没有歌单，可以先新建一个。", color = colors.secondaryText)
+                        Text(stringResource(R.string.player_no_playlists_yet), color = colors.secondaryText)
                     }
                     playlists.forEach { playlist ->
                         Row(
@@ -940,7 +956,7 @@ private fun PlayerAddToPlaylistDialog(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 if (playlist.isReadOnly) {
-                                    Text("只读歌单，不能添加", style = MaterialTheme.typography.labelSmall, color = colors.secondaryText)
+                                    Text(stringResource(R.string.player_readonly_playlist_hint), style = MaterialTheme.typography.labelSmall, color = colors.secondaryText)
                                 }
                             }
                         }
@@ -957,17 +973,17 @@ private fun PlayerAddToPlaylistDialog(
                         val name = newName.trim()
                         submit(name) {
                             val created = graph.playlistActions.createPlaylist(name, serverId, listOf(track.id.value))
-                                ?: error("服务器未返回新歌单")
+                                ?: error(context.getString(R.string.player_server_no_new_playlist))
                         }
                     },
-                ) { Text(if (working) "创建中…" else "创建并加入") }
+                ) { Text(stringResource(if (working) R.string.player_creating else R.string.player_create_and_add)) }
             } else {
-                TextButton(onClick = { createMode = true }) { Text("新建歌单") }
+                TextButton(onClick = { createMode = true }) { Text(stringResource(R.string.player_new_playlist)) }
             }
         },
         dismissButton = {
             TextButton(onClick = { if (createMode) createMode = false else onDismiss() }) {
-                Text(if (createMode) "返回" else "取消")
+                Text(stringResource(if (createMode) AuralisR.string.back else AuralisR.string.cancel))
             }
         },
     )

@@ -1,5 +1,6 @@
 package com.auralis.feature.player
 
+import androidx.annotation.StringRes
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
@@ -26,10 +27,10 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import kotlinx.coroutines.delay
 
 /** Now Playing 顶部分段页（对齐 Swift `NowPlayingPage`：lyrics/player/queue）。 */
-internal enum class PlayerTab(val titleZh: String) {
-    Lyrics("歌词"),
-    Player("正在播放"),
-    Queue("队列"),
+internal enum class PlayerTab(@StringRes val titleRes: Int) {
+    Lyrics(R.string.player_tab_lyrics),
+    Player(R.string.player_tab_now_playing),
+    Queue(R.string.player_tab_queue),
 }
 
 /** 毫秒 → m:ss（进度两侧时间显示；对齐 Swift formatDuration）。 */

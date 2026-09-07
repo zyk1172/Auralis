@@ -18,4 +18,17 @@
     <string name="clear_search">清除搜索</string>
     <string name="delete">删除</string>
     <string name="unknown_error">未知错误</string>
+    <!-- 媒体/列表通用动作动词（跨模块同一语义；R5c feature:player 引入） -->
+    <string name="play">播放</string>
+    <string name="pause">暂停</string>
+    <string name="previous">上一首</string>
+    <string name="next">下一首</string>
+    <string name="favorite">收藏</string>
+    <string name="unfavorite">取消收藏</string>
+    <string name="dislike">不喜欢</string>
+    <string name="undislike">取消不喜欢</string>
+    <string name="edit">编辑</string>
+    <string name="done">完成</string>
+    <string name="retry">重试</string>
+    <string name="add_to_playlist">添加到歌单</string>
 </resources>

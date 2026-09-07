@@ -13,4 +13,17 @@
     <string name="clear_search">Clear search</string>
     <string name="delete">Delete</string>
     <string name="unknown_error">Unknown error</string>
+    <!-- Media/library action verbs (shared across features; added in R5c feature:player) -->
+    <string name="play">Play</string>
+    <string name="pause">Pause</string>
+    <string name="previous">Previous</string>
+    <string name="next">Next</string>
+    <string name="favorite">Favorite</string>
+    <string name="unfavorite">Remove from Favorites</string>
+    <string name="dislike">Dislike</string>
+    <string name="undislike">Remove Dislike</string>
+    <string name="edit">Edit</string>
+    <string name="done">Done</string>
+    <string name="retry">Retry</string>
+    <string name="add_to_playlist">Add to Playlist</string>
 </resources>

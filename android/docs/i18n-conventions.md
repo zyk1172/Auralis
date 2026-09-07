@@ -38,7 +38,10 @@
 ## 迁移节奏
 
 每模块：抽词 → values + values-en → 替换 → 该模块 `compileDebugKotlin` + `:app-mobile:assembleDebug`。
-已完成：`feature:search`（22 处，零插值，样板）。
-待迁移（按量）：player 61 / home 44 / library 204 / settings 97 / assistant 245（其中大量
-为工具/会话文案属边界，实际 UI 面更小）/ server 52 / app-mobile 31 / app-tv 11 /
-designsystem 12（共享层按需进 core:designsystem）。
+已完成：`feature:search`（22 处，零插值，样板）/ `feature:server`（52 处：表单/列表/删除确认/连接
+阶段 `ConnectionStage.titleRes()` + 模型层注入 Context）/ `feature:player`（61 处：播放页/歌词/
+队列/传输/菜单 + `PlayerTab.titleRes()`、`PlayMode.modeTitleRes()`、`audioTechnicalLabel(context,…)`；
+共享层新增通用动作动词 play/pause/previous/next/favorite/unfavorite/dislike/undislike/edit/done/
+retry/add_to_playlist）。
+待迁移（按量）：home 44 / library 204 / settings 97 / assistant 245（其中大量为工具/会话文案属
+边界，实际 UI 面更小）/ app-mobile 31 / app-tv 11 / designsystem 12（共享层按需进 core:designsystem）。

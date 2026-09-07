@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- R5c：feature:player 独有文案（默认=中文；英文见 values-en）。key 一律 player_ 前缀。
+     跨模块通用动作动词（播放/暂停/收藏/不喜欢/编辑/完成/重试/添加到歌单等）放 core:designsystem
+     共享层，经 AuralisR 引用；此处只放播放页/队列/歌词/下载等模块特有词。 -->
+<resources>
+    <!-- 顶部分段与标题 -->
+    <string name="player_tab_lyrics">歌词</string>
+    <string name="player_tab_now_playing">正在播放</string>
+    <string name="player_tab_queue">队列</string>
+    <string name="player_dismiss_now_playing">收起正在播放</string>
+    <string name="player_now_playing_indicator">正在播放</string>
+    <!-- 歌词页 -->
+    <string name="player_lyrics_unavailable">无法加载歌词</string>
+    <string name="player_lyrics_load_failed">歌词加载失败：%1$s</string>
+    <string name="player_lyrics_none_title">暂无歌词</string>
+    <string name="player_lyrics_none_message">服务器没有返回歌词，可稍后在本地文件或候选源中补全。</string>
+    <!-- 队列页 -->
+    <string name="player_queue_window_format">队列 %1$d–%2$d / %3$d</string>
+    <string name="player_queue_total_format">共 %1$d 首</string>
+    <string name="player_queue_empty">队列是空的</string>
+    <string name="player_move_up">上移</string>
+    <string name="player_move_down">下移</string>
+    <string name="player_remove_from_queue">从队列移除</string>
+    <!-- 固定控制区（错误/提示消息与播放模式） -->
+    <string name="player_action_failed">操作失败：%1$s</string>
+    <string name="player_favorite_failed">收藏操作失败：%1$s</string>
+    <string name="player_download_failed">下载失败：%1$s</string>
+    <string name="player_play_mode_desc">播放模式：%1$s</string>
+    <string name="player_mode_sequential">顺序</string>
+    <string name="player_mode_shuffle">随机</string>
+    <string name="player_mode_repeat_all">列表循环</string>
+    <string name="player_mode_repeat_one">单曲循环</string>
+    <!-- 三点菜单 -->
+    <string name="player_delete_download">删除下载</string>
+    <string name="player_cancel_download_progress">取消下载（%1$d%%）</string>
+    <string name="player_download_to_device">下载到本地</string>
+    <string name="player_view_album">前往专辑</string>
+    <string name="player_view_artist">前往艺术家</string>
+    <string name="player_continue_from_track">由此继续播放</string>
+    <string name="player_appreciate_song">歌曲鉴赏</string>
+    <string name="player_got_it">知道了</string>
+    <string name="player_added_to_playlist">已加入歌单「%1$s」</string>
+    <!-- 音频技术信息 -->
+    <string name="player_unknown">未知</string>
+    <string name="player_sample_rate_unknown">采样率未知</string>
+    <!-- 添加到歌单对话框 -->
+    <string name="player_new_playlist_and_add">新建歌单并加入</string>
+    <string name="player_playlist_name_label">歌单名称</string>
+    <string name="player_new_playlist_hint">《%1$s》将加入新歌单。</string>
+    <string name="player_no_playlists_yet">还没有歌单，可以先新建一个。</string>
+    <string name="player_readonly_playlist_hint">只读歌单，不能添加</string>
+    <string name="player_server_no_new_playlist">服务器未返回新歌单</string>
+    <string name="player_creating">创建中…</string>
+    <string name="player_create_and_add">创建并加入</string>
+    <string name="player_new_playlist">新建歌单</string>
+</resources>
