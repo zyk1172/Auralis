@@ -48,4 +48,36 @@
     <string name="action_failed">Action failed: %1$s</string>
     <string name="favorite_failed">Could not update favorite: %1$s</string>
     <string name="download_failed">Download failed: %1$s</string>
+    <!-- R5j: built-in theme display names (BuiltInThemes; shown in the theme picker; keys mirror theme ids) -->
+    <string name="aurora_glass">Aurora Glass</string>
+    <string name="midnight_oled">Midnight OLED</string>
+    <string name="analog_hifi">Analog Hi-Fi</string>
+    <string name="minimal_paper">Minimal Paper</string>
+    <string name="neon_city">Neon City</string>
+    <string name="zen_nature">Zen Nature</string>
+    <string name="cloud_village_red">Cloud Village Red</string>
+    <string name="vinyl_night">Vinyl Night</string>
+    <string name="peach_mist">Peach Mist</string>
+    <string name="solar_studio">Solar Studio</string>
+    <string name="polar_frost">Polar Frost</string>
+    <string name="forest_terminal">Forest Terminal</string>
+    <!-- R5k: normalization pass — same-meaning words used by home/library/mobile/tv now live here (feature-prefixed duplicates removed) -->
+    <string name="most_played">Most Played</string>
+    <string name="recently_played">Recently Played</string>
+    <string name="recently_added">Recently Added</string>
+    <string name="long_unplayed">Long Unplayed</string>
+    <string name="favorite_random">Favorites Shuffle</string>
+    <string name="never_played">Never Played</string>
+    <string name="top_artists">Top Artists</string>
+    <string name="top_albums">Top Albums</string>
+    <string name="random_music">Random Music</string>
+    <string name="downloads">Downloads</string>
+    <string name="shuffle_more">Shuffle Again</string>
+    <string name="album_count_format">%1$d albums</string>
+    <string name="settings">Settings</string>
+    <string name="ai_assistant">AI Assistant</string>
+    <string name="home_title">Home</string>
+    <string name="library_title">Library</string>
+    <string name="artwork_cover">Cover art</string>
+    <string name="playback_start_timeout">Playback service failed to start. Please try again.</string>
 </resources>

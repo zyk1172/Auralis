@@ -4,7 +4,6 @@
      AuralisR 引用；此处只放设置各页模块特有词。 -->
 <resources>
     <!-- 根页 -->
-    <string name="settings_title">设置</string>
     <string name="settings_ai_title">AI 助手</string>
     <string name="settings_ai_subtitle_default">大模型、推荐索引与隐私</string>
     <string name="settings_ai_off">已关闭</string>

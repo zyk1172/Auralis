@@ -79,7 +79,7 @@ fun MiniPlayerBar(
             AuralisArtwork(
                 serverId = track.serverId,
                 artworkKey = track.artworkKey,
-                contentDescription = stringResource(R.string.mobile_artwork_cover),
+                contentDescription = stringResource(AuralisR.string.artwork_cover),
                 titleForFallback = track.title,
                 targetSizeDp = 40,
                 modifier = Modifier.size(40.dp),

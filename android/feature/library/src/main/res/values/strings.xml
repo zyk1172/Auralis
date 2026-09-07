@@ -6,8 +6,6 @@
      此处只放资料库各 scope/浏览详情/歌单管理/常听列表等模块特有词。 -->
 <resources>
     <!-- 顶栏与 scope 分段 -->
-    <string name="library_title">音乐库</string>
-    <string name="library_settings_cd">设置</string>
     <string name="library_scope_genres">流派</string>
     <string name="library_scope_categories">分类</string>
     <!-- 加载中（LibraryLoadingBox 默认与各级占位） -->
@@ -42,7 +40,6 @@
     <string name="library_server_prompt_title">还没有连接服务器</string>
     <string name="library_server_prompt_help">请在「设置 → 服务器」中添加并同步音乐服务器后浏览资料库。</string>
     <!-- 计数/副标题格式 -->
-    <string name="library_album_count_format">%1$d 张专辑</string>
     <string name="library_track_count_format">%1$d 首歌曲</string>
     <string name="library_plays_count_format">%1$d 次播放</string>
     <string name="library_playlist_count_format">%1$d 个歌单</string>
@@ -59,19 +56,8 @@
     <string name="library_album_no_local_tracks">这张专辑暂无本地歌曲</string>
     <string name="library_artist_no_local_tracks">该艺术家暂无本地歌曲</string>
     <!-- 浏览详情目的地标题 -->
-    <string name="library_dest_most_played">最常听</string>
     <string name="library_dest_genre_format">流派：%1$s</string>
     <string name="library_dest_recommendation_category">推荐分类</string>
-    <string name="library_dest_random_music">随机音乐</string>
-    <string name="library_dest_recently_played">最近播放</string>
-    <string name="library_dest_recently_added">最近添加</string>
-    <string name="library_dest_long_unplayed">很久没听</string>
-    <string name="library_dest_favorite_random">收藏里随便听</string>
-    <string name="library_dest_never_played">从未播放</string>
-    <string name="library_dest_top_artists">常听艺术家</string>
-    <string name="library_dest_top_albums">常听专辑</string>
-    <string name="library_dest_downloads">下载</string>
-    <string name="library_shuffle_more">换一批</string>
     <!-- 浏览详情加载错误/空态文案 -->
     <string name="library_detail_not_found_album">找不到这张专辑</string>
     <string name="library_detail_not_found_artist">找不到这位艺术家</string>

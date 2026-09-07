@@ -35,7 +35,6 @@
     <string name="assistant_disabled_guide">AI 助手已关闭：到「设置 → AI 助手」开启。</string>
     <string name="assistant_input_placeholder">问点什么，或让我播放/收藏/管理歌单…</string>
     <string name="assistant_send">发送</string>
-    <string name="assistant_empty_title">AI 助手</string>
     <string name="assistant_empty_live_hint">我可以帮你搜索音乐库、播放歌曲/专辑/歌单、收藏与评分、管理歌单。首次发送内容前会先请你确认；写操作会说明后执行，删除类操作需逐次批准。</string>
     <string name="assistant_empty_offline_hint">配置模型接口后即可对话。搜索音乐库与本地播放不依赖 AI，随时可用。</string>
 

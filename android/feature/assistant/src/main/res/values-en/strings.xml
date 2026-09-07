@@ -35,7 +35,6 @@
     <string name="assistant_disabled_guide">AI Assistant is off: enable it under “Settings → AI Assistant”.</string>
     <string name="assistant_input_placeholder">Ask me something, or let me play, favorite, or manage playlists…</string>
     <string name="assistant_send">Send</string>
-    <string name="assistant_empty_title">AI Assistant</string>
     <string name="assistant_empty_live_hint">I can search your music library, play songs/albums/playlists, favorite and rate tracks, and manage playlists. Before sending content the first time, I will ask for your consent; write operations are explained before they run, and destructive operations require approval each time.</string>
     <string name="assistant_empty_offline_hint">Once the model interface is configured, you can chat. Searching the music library and local playback do not depend on AI and are always available.</string>
 

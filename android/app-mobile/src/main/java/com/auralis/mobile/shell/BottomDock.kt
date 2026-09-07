@@ -35,6 +35,7 @@ import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
 import com.auralis.mobile.R
+import com.auralis.core.designsystem.R as AuralisR
 
 /**
  * 一级图标（对齐 Apple AppSection.symbol）：
@@ -140,7 +141,7 @@ private fun AssistantDockButton(
         ) {
             Icon(
                 Icons.Filled.AutoAwesome,
-                contentDescription = stringResource(R.string.mobile_ai_assistant),
+                contentDescription = stringResource(AuralisR.string.ai_assistant),
                 tint = tint,
                 modifier = Modifier.size(22.dp),
             )

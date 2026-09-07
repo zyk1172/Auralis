@@ -3,29 +3,13 @@
     <string name="app_name">Auralis</string>
 
     <!-- ============ 一级分区（Bottom Dock / 分区标题） ============ -->
-    <string name="mobile_home">首页</string>
-    <string name="mobile_library">音乐库</string>
-    <string name="mobile_ai_assistant">AI 助手</string>
-    <string name="mobile_settings">设置</string>
 
     <!-- ============ Mini Player / Toast ============ -->
-    <string name="mobile_artwork_cover">封面</string>
-    <string name="mobile_playback_timeout">播放服务启动超时，请重试</string>
 
     <!-- ============ Library 占位页（S2/S3 遗留，未接线） ============ -->
     <string name="mobile_browse_full_list_coming">「%1$s」完整列表将在 Library 阶段接入（S4）。</string>
     <string name="mobile_library_stage_coming">音乐库（歌曲/专辑/艺人/歌单）将在 Library 阶段接入。</string>
     <string name="mobile_dest_artist">艺人</string>
-    <string name="mobile_dest_most_played">最常听</string>
     <string name="mobile_dest_genre">流派：%1$s</string>
     <string name="mobile_dest_recommendation">推荐分类</string>
-    <string name="mobile_dest_random">随机音乐</string>
-    <string name="mobile_dest_recently_played">最近播放</string>
-    <string name="mobile_dest_recently_added">最近添加</string>
-    <string name="mobile_dest_long_unplayed">很久没听</string>
-    <string name="mobile_dest_favorite_random">收藏里随便听</string>
-    <string name="mobile_dest_never_played">从未播放</string>
-    <string name="mobile_dest_top_artists">常听艺术家</string>
-    <string name="mobile_dest_top_albums">常听专辑</string>
-    <string name="mobile_dest_downloads">下载</string>
 </resources>

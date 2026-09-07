@@ -52,6 +52,7 @@ import com.auralis.feature.player.PlayerTrackAction
 import com.auralis.feature.search.SearchScreen
 import com.auralis.mobile.R
 import kotlinx.coroutines.launch
+import com.auralis.core.designsystem.R as AuralisR
 
 /**
  * 移动端 Shell（对齐 Apple IOSMusicShell）：
@@ -116,7 +117,7 @@ fun MobileShell(
             .onFailure {
                 android.widget.Toast.makeText(
                     context,
-                    context.getString(R.string.mobile_playback_timeout),
+                    context.getString(AuralisR.string.playback_start_timeout),
                     android.widget.Toast.LENGTH_SHORT,
                 ).show()
             }

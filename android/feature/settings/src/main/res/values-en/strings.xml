@@ -2,7 +2,6 @@
 <!-- R5e English overlay for feature:settings. -->
 <resources>
     <!-- Root page -->
-    <string name="settings_title">Settings</string>
     <string name="settings_ai_title">AI Assistant</string>
     <string name="settings_ai_subtitle_default">Models, recommendation index and privacy</string>
     <string name="settings_ai_off">Off</string>

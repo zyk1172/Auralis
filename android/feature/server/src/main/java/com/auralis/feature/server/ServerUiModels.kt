@@ -3,6 +3,7 @@ package com.auralis.feature.server
 import androidx.annotation.StringRes
 import com.auralis.core.data.connector.ConnectionStage
 import com.auralis.core.data.connector.TestConnectionResult
+import com.auralis.core.designsystem.R as AuralisR
 
 /** 表单「测试连接」结果 → 一行可读状态（对齐 Swift statusLabel）。 */
 sealed interface ServerTestUi {
@@ -21,7 +22,7 @@ fun ConnectionStage.titleRes(): Int = when (this) {
     ConnectionStage.DetectingCapabilities -> R.string.server_stage_capabilities
     ConnectionStage.LoadingLibrary -> R.string.server_stage_loading_library
     ConnectionStage.SavingLibrary -> R.string.server_stage_saving_library
-    ConnectionStage.Done -> R.string.server_stage_done
+    ConnectionStage.Done -> AuralisR.string.done
 }
 
 /** core 测试结果 → UI 可读分类。 */

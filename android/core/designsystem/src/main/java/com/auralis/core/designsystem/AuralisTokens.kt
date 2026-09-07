@@ -1,5 +1,6 @@
 package com.auralis.core.designsystem
 
+import androidx.annotation.StringRes
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
@@ -119,7 +120,7 @@ enum class AuralisFontWeight { Regular, Medium, SemiBold, Bold }
 @Immutable
 data class AuralisTheme(
     val id: String,
-    val name: String,
+    @StringRes val nameRes: Int,
     val colorScheme: AuralisColorScheme,
     val colors: AuralisColors,
     val typography: AuralisTypography,

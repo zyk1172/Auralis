@@ -4,23 +4,10 @@
      core:designsystem 共享层经 AuralisR 引用；此处只放首页模块/入口/空态等模块特有词。 -->
 <resources>
     <!-- 首页头 -->
-    <string name="home_title">首页</string>
     <string name="home_manage_servers">管理服务器</string>
-    <string name="home_reshuffle">换一批</string>
-    <string name="home_quick_most_played">最常听</string>
     <!-- 内容模块标题（HomeModuleId 显示名） -->
-    <string name="home_module_random_songs">随机音乐</string>
-    <string name="home_module_recently_played">最近播放</string>
-    <string name="home_module_long_unplayed">很久没听</string>
-    <string name="home_module_recently_added">最近添加</string>
-    <string name="home_module_favorite_random">收藏里随便听</string>
-    <string name="home_module_downloads">下载</string>
-    <string name="home_module_never_played">从未播放</string>
-    <string name="home_module_top_artists">常听艺术家</string>
-    <string name="home_module_top_albums">常听专辑</string>
     <!-- 货架计数与播放次数 -->
     <string name="home_count_artists">%1$d 位艺人</string>
-    <string name="home_count_albums">%1$d 张专辑</string>
     <string name="home_played_times">播放 %1$d 次</string>
     <!-- 空态与错误 -->
     <string name="home_no_server_title">尚未连接服务器</string>

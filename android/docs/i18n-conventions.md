@@ -63,32 +63,41 @@ Header/输入区/空态/运行阶段行/会话与操作日志弹窗/首次外发
 （31 项工具行标签）、模型层「新会话」fallback 上移 UI；「取消/删除/保存/未知错误」引用共享层）/
 `app-mobile`（31 处：一级分区 `AppSection.labelRes`、Dock/MiniPlayer 播放传输描述复用 AuralisR、
 Library 占位页 `BrowseDestination.titleRes()` + 标题/引导文案、播放服务启动 Toast）/
-`app-tv`（11 处：`TvSection.labelRes`、正在播放条封面/缓冲与传输描述复用 AuralisR、设置入口、Toast）。
-剩余：designsystem 12（共享层按需进 core:designsystem）+ 归一化收口轮。
+`app-tv`（11 处：`TvSection.labelRes`、正在播放条封面/缓冲与传输描述复用 AuralisR、设置入口、Toast）/
+`core:designsystem`（R5j：12 个内置主题显示名本地化——`AuralisTheme.name: String` → `@StringRes nameRes: Int`，
+`BuiltInThemes` 各 `name = "极光玻璃"…` → `R.string.<theme_id>`（aurora_glass…forest_terminal），
+设置页主题行 subtitle 与主题卡片经 `stringResource(theme.nameRes)` 解析）。
+R5k 归一化收口轮：见下表，跨模块同值词全部上移共享层并删除各处前缀重复 key。
 
-## 归一化待办（跨模块同值 key，建议全部模块迁移完后一次收口到共享层）
+## 归一化收口（R5k 已完成）
 
-| 中文值 | 现 key（重复方） | 建议共享 key |
+将下列跨模块同值 key 上移到 `core:designsystem` 共享层（引用改 `AuralisR.string.*`），
+各 feature/app 原前缀 key 已删除：
+
+| 共享 key | 中文/English | 消除的重复 key（模块） |
 |---|---|---|
-| 最常听 | home:home_quick_most_played / library:library_dest_most_played / app-mobile:mobile_dest_most_played | most_played |
-| 最近播放 | home:home_module_recently_played / library:library_dest_recently_played / app-mobile:mobile_dest_recently_played | recently_played |
-| 最近添加 | home:home_module_recently_added / library:library_dest_recently_added / app-mobile:mobile_dest_recently_added | recently_added |
-| 很久没听 | home:home_module_long_unplayed / library:library_dest_long_unplayed / app-mobile:mobile_dest_long_unplayed | long_unplayed |
-| 收藏里随便听 | home:home_module_favorite_random / library:library_dest_favorite_random / app-mobile:mobile_dest_favorite_random | favorite_random |
-| 从未播放 | home:home_module_never_played / library:library_dest_never_played / app-mobile:mobile_dest_never_played | never_played |
-| 常听艺术家 | home:home_module_top_artists / library:library_dest_top_artists / app-mobile:mobile_dest_top_artists | top_artists |
-| 常听专辑 | home:home_module_top_albums / library:library_dest_top_albums / app-mobile:mobile_dest_top_albums | top_albums |
-| 随机音乐 | home:home_module_random_songs / library:library_dest_random_music / app-mobile:mobile_dest_random | random_music |
-| 下载 | home:home_module_downloads / library:library_dest_downloads、library_download_action / app-mobile:mobile_dest_downloads | downloads |
-| 换一批 | home:home_reshuffle / library:library_shuffle_more | shuffle_more |
-| %1$d 张专辑 | home:home_count_albums / library:library_album_count_format | album_count_format |
-| 设置 | settings:settings_title / library:library_settings_cd / app-mobile:mobile_settings / app-tv:tv_settings | settings |
-| 完成 | server:server_stage_done / designsystem:done（历史遗留） | done |
-| AI 助手 | assistant:assistant_empty_title / app-mobile:mobile_ai_assistant | ai_assistant |
-| 首页 | app-mobile:mobile_home / app-tv:tv_home | home_title |
-| 音乐库 | app-mobile:mobile_library / app-tv:tv_library / feature:library 顶栏标题 | library_title |
-| 搜索 | app-tv:tv_search | search_title |
-| 封面 | app-mobile:mobile_artwork_cover / app-tv:tv_artwork_cover | artwork_cover |
-| 缓冲中 | app-tv:tv_buffering | buffering |
-| 播放服务启动超时，请重试 | app-mobile:mobile_playback_timeout / app-tv:tv_playback_timeout | playback_start_timeout |
-| 播放歌曲/播放专辑/播放歌单/加入队列/暂停/继续播放/下一首播放/收藏歌曲/评分/新建歌单/加入歌单/删除歌单…（工具行标签，31 组） | assistant:assistant_tool_*（与 AuralisR play/pause/next/previous 与歌单簇按钮同值部分收口时直换） | assistant_tool_* → 复用共享动词/按钮词 |
+| most_played | 最常听 / Most Played | home_quick_most_played、library_dest_most_played、mobile_dest_most_played |
+| recently_played | 最近播放 / Recently Played | home_module_recently_played、library_dest_recently_played、mobile_dest_recently_played |
+| recently_added | 最近添加 / Recently Added | home_module_recently_added、library_dest_recently_added、mobile_dest_recently_added |
+| long_unplayed | 很久没听 / Long Unplayed | home_module_long_unplayed、library_dest_long_unplayed、mobile_dest_long_unplayed |
+| favorite_random | 收藏里随便听 / Favorites Shuffle | home_module_favorite_random、library_dest_favorite_random、mobile_dest_favorite_random |
+| never_played | 从未播放 / Never Played | home_module_never_played、library_dest_never_played、mobile_dest_never_played |
+| top_artists | 常听艺术家 / Top Artists | home_module_top_artists、library_dest_top_artists、mobile_dest_top_artists |
+| top_albums | 常听专辑 / Top Albums | home_module_top_albums、library_dest_top_albums、mobile_dest_top_albums |
+| random_music | 随机音乐 / Random Music | home_module_random_songs、library_dest_random_music、mobile_dest_random |
+| downloads | 下载 / Downloads | home_module_downloads、library_dest_downloads、mobile_dest_downloads |
+| shuffle_more | 换一批 / Shuffle Again | home_reshuffle、library_shuffle_more |
+| album_count_format | %1$d 张专辑 / %1$d albums | home_count_albums、library_album_count_format |
+| settings | 设置 / Settings | settings_title、library_settings_cd、mobile_settings、tv_settings |
+| ai_assistant | AI 助手 / AI Assistant | assistant_empty_title、mobile_ai_assistant |
+| home_title | 首页 / Home | feature/home 顶栏、mobile_home、tv_home |
+| library_title | 音乐库 / Library | feature/library 顶栏、mobile_library、tv_library |
+| artwork_cover | 封面 / Cover art | mobile_artwork_cover、tv_artwork_cover |
+| playback_start_timeout | 播放服务启动超时，请重试 | mobile_playback_timeout、tv_playback_timeout |
+| done | 完成 / Done | server_stage_done（复用既有共享 key） |
+
+有意保留不并入：
+- `library_download_action`（下载，菜单动作动词，en=Download）与名词性「下载/Downloads」
+  en 语义不同，且无跨模块重复 → 留 feature:library；
+- `tv_search`（搜索）、`tv_buffering`（缓冲中）无跨模块重复方 → 留 app-tv；
+- `assistant_tool_*` 31 项工具行标签为 assistant 模块独有（UI 渲染层映射），无跨模块重复 → 留 feature:assistant。

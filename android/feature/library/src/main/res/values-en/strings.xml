@@ -2,8 +2,6 @@
 <!-- R5f English overlay for feature:library. -->
 <resources>
     <!-- Top bar and scope segments -->
-    <string name="library_title">Music Library</string>
-    <string name="library_settings_cd">Settings</string>
     <string name="library_scope_genres">Genres</string>
     <string name="library_scope_categories">Categories</string>
     <!-- Loading (LibraryLoadingBox default and per-scope placeholders) -->
@@ -38,7 +36,6 @@
     <string name="library_server_prompt_title">No Server Connected</string>
     <string name="library_server_prompt_help">Add and sync a music server under Settings → Servers, then browse your library.</string>
     <!-- Count / subtitle formats -->
-    <string name="library_album_count_format">%1$d albums</string>
     <string name="library_track_count_format">%1$d songs</string>
     <string name="library_plays_count_format">%1$d plays</string>
     <string name="library_playlist_count_format">%1$d playlists</string>
@@ -55,19 +52,8 @@
     <string name="library_album_no_local_tracks">This album has no local songs</string>
     <string name="library_artist_no_local_tracks">This artist has no local songs</string>
     <!-- Browse-detail destination titles -->
-    <string name="library_dest_most_played">Most Played</string>
     <string name="library_dest_genre_format">Genre: %1$s</string>
     <string name="library_dest_recommendation_category">Recommendation Categories</string>
-    <string name="library_dest_random_music">Random Music</string>
-    <string name="library_dest_recently_played">Recently Played</string>
-    <string name="library_dest_recently_added">Recently Added</string>
-    <string name="library_dest_long_unplayed">Not Played in a While</string>
-    <string name="library_dest_favorite_random">Surprise Me from Favorites</string>
-    <string name="library_dest_never_played">Never Played</string>
-    <string name="library_dest_top_artists">Top Artists</string>
-    <string name="library_dest_top_albums">Top Albums</string>
-    <string name="library_dest_downloads">Downloads</string>
-    <string name="library_shuffle_more">Shuffle Again</string>
     <!-- Browse-detail load errors / empty copy -->
     <string name="library_detail_not_found_album">Could not find this album</string>
     <string name="library_detail_not_found_artist">Could not find this artist</string>

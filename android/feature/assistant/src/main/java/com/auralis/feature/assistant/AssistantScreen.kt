@@ -44,6 +44,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.designsystem.R as AuralisR
 
 /**
  * AI 助手页（对齐 Swift `AssistantView`）。
@@ -272,7 +273,7 @@ private fun EmptyState(isLive: Boolean, modifier: Modifier = Modifier) {
     val colors = LocalAuralisTheme.current.colors
     Column(modifier = modifier.fillMaxWidth().padding(top = AuralisSpacing.huge)) {
         Text(
-            stringResource(R.string.assistant_empty_title),
+            stringResource(AuralisR.string.ai_assistant),
             style = MaterialTheme.typography.titleLarge,
             color = colors.primaryText,
         )

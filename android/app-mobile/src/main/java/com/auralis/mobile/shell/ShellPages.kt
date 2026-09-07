@@ -51,14 +51,14 @@ fun LibraryPlaceholderPage(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                stringResource(R.string.mobile_library),
+                stringResource(AuralisR.string.library_title),
                 style = MaterialTheme.typography.headlineMedium,
                 color = colors.primaryText,
                 modifier = Modifier.weight(1f),
             )
             // Settings 入口（audit 06：Library 顶栏齿轮；Settings 不做一级 Tab）。
             IconButton(onClick = onOpenSettings) {
-                Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.mobile_settings), tint = colors.primaryText)
+                Icon(Icons.Filled.Settings, contentDescription = stringResource(AuralisR.string.settings), tint = colors.primaryText)
             }
         }
         Spacer(Modifier.height(AuralisSpacing.large))
@@ -101,16 +101,16 @@ internal fun BrowseDestination.titleRes(): Int = when (this) {
     is BrowseDestination.Playlist -> AuralisR.string.playlist
     BrowseDestination.Playlists -> AuralisR.string.playlist
     BrowseDestination.Favorites -> AuralisR.string.favorite
-    BrowseDestination.MostPlayed -> R.string.mobile_dest_most_played
+    BrowseDestination.MostPlayed -> AuralisR.string.most_played
     is BrowseDestination.Genre -> R.string.mobile_dest_genre
     is BrowseDestination.RecommendationCategory -> R.string.mobile_dest_recommendation
-    BrowseDestination.Random -> R.string.mobile_dest_random
-    BrowseDestination.RecentlyPlayed -> R.string.mobile_dest_recently_played
-    BrowseDestination.RecentlyAdded -> R.string.mobile_dest_recently_added
-    BrowseDestination.LongUnplayed -> R.string.mobile_dest_long_unplayed
-    BrowseDestination.FavoriteRandom -> R.string.mobile_dest_favorite_random
-    BrowseDestination.NeverPlayed -> R.string.mobile_dest_never_played
-    BrowseDestination.TopArtists -> R.string.mobile_dest_top_artists
-    BrowseDestination.TopAlbums -> R.string.mobile_dest_top_albums
-    BrowseDestination.Downloads -> R.string.mobile_dest_downloads
+    BrowseDestination.Random -> AuralisR.string.random_music
+    BrowseDestination.RecentlyPlayed -> AuralisR.string.recently_played
+    BrowseDestination.RecentlyAdded -> AuralisR.string.recently_added
+    BrowseDestination.LongUnplayed -> AuralisR.string.long_unplayed
+    BrowseDestination.FavoriteRandom -> AuralisR.string.favorite_random
+    BrowseDestination.NeverPlayed -> AuralisR.string.never_played
+    BrowseDestination.TopArtists -> AuralisR.string.top_artists
+    BrowseDestination.TopAlbums -> AuralisR.string.top_albums
+    BrowseDestination.Downloads -> AuralisR.string.downloads
 }

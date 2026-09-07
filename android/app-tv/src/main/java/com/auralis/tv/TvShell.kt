@@ -127,7 +127,7 @@ fun TvShell(
             .onFailure {
                 android.widget.Toast.makeText(
                     context,
-                    context.getString(R.string.tv_playback_timeout),
+                    context.getString(AuralisR.string.playback_start_timeout),
                     android.widget.Toast.LENGTH_SHORT,
                 ).show()
             }
@@ -342,7 +342,7 @@ private fun TvTopBar(
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = Icons.Filled.Settings,
-                    contentDescription = stringResource(R.string.tv_settings),
+                    contentDescription = stringResource(AuralisR.string.settings),
                     tint = colors.primaryText,
                     modifier = Modifier.size(28.dp),
                 )
@@ -388,7 +388,7 @@ private fun TvNowPlayingStrip(
             AuralisArtwork(
                 serverId = track.serverId,
                 artworkKey = track.artworkKey,
-                contentDescription = stringResource(R.string.tv_artwork_cover),
+                contentDescription = stringResource(AuralisR.string.artwork_cover),
                 titleForFallback = track.title,
                 targetSizeDp = 48,
                 shape = RoundedCornerShape(AuralisRadius.small),

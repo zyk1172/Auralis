@@ -111,9 +111,9 @@ fun LibraryScreen(
                 .padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.small),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(stringResource(R.string.library_title), style = MaterialTheme.typography.headlineMedium, color = colors.primaryText, modifier = Modifier.weight(1f))
+            Text(stringResource(AuralisR.string.library_title), style = MaterialTheme.typography.headlineMedium, color = colors.primaryText, modifier = Modifier.weight(1f))
             IconButton(onClick = onOpenSettings) {
-                Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.library_settings_cd), tint = colors.primaryText)
+                Icon(Icons.Filled.Settings, contentDescription = stringResource(AuralisR.string.settings), tint = colors.primaryText)
             }
         }
         ScopeSelector(selected = scope, onSelect = { scope = it })
@@ -510,7 +510,7 @@ private fun ArtistRow(
         )
         Column(Modifier.weight(1f)) {
             Text(artist.name, style = MaterialTheme.typography.titleMedium, color = colors.primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(stringResource(R.string.library_album_count_format, artist.albumCount), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+            Text(stringResource(AuralisR.string.album_count_format, artist.albumCount), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
         }
         Box {
             IconButton(onClick = { menuOpen = true }) {

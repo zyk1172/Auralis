@@ -2,23 +2,10 @@
 <!-- R5d English overlay for feature:home. -->
 <resources>
     <!-- Home header -->
-    <string name="home_title">Home</string>
     <string name="home_manage_servers">Manage servers</string>
-    <string name="home_reshuffle">Shuffle</string>
-    <string name="home_quick_most_played">Most Played</string>
     <!-- Content module titles (HomeModuleId display names) -->
-    <string name="home_module_random_songs">Random Music</string>
-    <string name="home_module_recently_played">Recently Played</string>
-    <string name="home_module_long_unplayed">Long Unplayed</string>
-    <string name="home_module_recently_added">Recently Added</string>
-    <string name="home_module_favorite_random">Favorites Shuffle</string>
-    <string name="home_module_downloads">Downloads</string>
-    <string name="home_module_never_played">Never Played</string>
-    <string name="home_module_top_artists">Top Artists</string>
-    <string name="home_module_top_albums">Top Albums</string>
     <!-- Shelf counts and play counts -->
     <string name="home_count_artists">%1$d artists</string>
-    <string name="home_count_albums">%1$d albums</string>
     <string name="home_played_times">Played %1$d times</string>
     <!-- Empty states and errors -->
     <string name="home_no_server_title">No server connected</string>

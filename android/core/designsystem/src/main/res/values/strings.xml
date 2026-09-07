@@ -53,4 +53,36 @@
     <string name="action_failed">操作失败：%1$s</string>
     <string name="favorite_failed">收藏操作失败：%1$s</string>
     <string name="download_failed">下载失败：%1$s</string>
+    <!-- R5j：内置主题显示名（BuiltInThemes，主题选择器可见；key 与主题 id 对齐） -->
+    <string name="aurora_glass">极光玻璃</string>
+    <string name="midnight_oled">午夜 OLED</string>
+    <string name="analog_hifi">模拟 Hi-Fi</string>
+    <string name="minimal_paper">极简纸张</string>
+    <string name="neon_city">霓虹都市</string>
+    <string name="zen_nature">禅意自然</string>
+    <string name="cloud_village_red">云村红</string>
+    <string name="vinyl_night">黑胶之夜</string>
+    <string name="peach_mist">蜜桃粉雾</string>
+    <string name="solar_studio">日光唱片室</string>
+    <string name="polar_frost">冰川透镜</string>
+    <string name="forest_terminal">森林终端</string>
+    <!-- R5k：归一化收口——首页/音乐库/移动端同一语义词上移共享（各 feature 原前缀 key 已删除） -->
+    <string name="most_played">最常听</string>
+    <string name="recently_played">最近播放</string>
+    <string name="recently_added">最近添加</string>
+    <string name="long_unplayed">很久没听</string>
+    <string name="favorite_random">收藏里随便听</string>
+    <string name="never_played">从未播放</string>
+    <string name="top_artists">常听艺术家</string>
+    <string name="top_albums">常听专辑</string>
+    <string name="random_music">随机音乐</string>
+    <string name="downloads">下载</string>
+    <string name="shuffle_more">换一批</string>
+    <string name="album_count_format">%1$d 张专辑</string>
+    <string name="settings">设置</string>
+    <string name="ai_assistant">AI 助手</string>
+    <string name="home_title">首页</string>
+    <string name="library_title">音乐库</string>
+    <string name="artwork_cover">封面</string>
+    <string name="playback_start_timeout">播放服务启动超时，请重试</string>
 </resources>

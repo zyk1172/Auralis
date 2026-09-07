@@ -46,5 +46,4 @@
     <string name="server_stage_capabilities">检测能力</string>
     <string name="server_stage_loading_library">读取音乐库</string>
     <string name="server_stage_saving_library">保存资料库</string>
-    <string name="server_stage_done">完成</string>
 </resources>

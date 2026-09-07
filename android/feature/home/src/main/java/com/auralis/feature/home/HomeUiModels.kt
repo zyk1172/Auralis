@@ -30,7 +30,7 @@ val HomeQuickEntry.titleRes: Int
     get() = when (this) {
         HomeQuickEntry.Playlists -> AuralisR.string.playlist
         HomeQuickEntry.Favorites -> AuralisR.string.favorite
-        HomeQuickEntry.MostPlayed -> R.string.home_quick_most_played
+        HomeQuickEntry.MostPlayed -> AuralisR.string.most_played
     }
 
 val HomeQuickEntry.icon: ImageVector
@@ -43,15 +43,15 @@ val HomeQuickEntry.icon: ImageVector
 /** 内容模块标题资源。 */
 val HomeModuleId.titleRes: Int
     get() = when (this) {
-        HomeModuleId.RandomSongs -> R.string.home_module_random_songs
-        HomeModuleId.RecentlyPlayed -> R.string.home_module_recently_played
-        HomeModuleId.LongUnplayed -> R.string.home_module_long_unplayed
-        HomeModuleId.RecentlyAdded -> R.string.home_module_recently_added
-        HomeModuleId.FavoriteRandom -> R.string.home_module_favorite_random
-        HomeModuleId.Downloads -> R.string.home_module_downloads
-        HomeModuleId.NeverPlayed -> R.string.home_module_never_played
-        HomeModuleId.TopArtists -> R.string.home_module_top_artists
-        HomeModuleId.TopAlbums -> R.string.home_module_top_albums
+        HomeModuleId.RandomSongs -> AuralisR.string.random_music
+        HomeModuleId.RecentlyPlayed -> AuralisR.string.recently_played
+        HomeModuleId.LongUnplayed -> AuralisR.string.long_unplayed
+        HomeModuleId.RecentlyAdded -> AuralisR.string.recently_added
+        HomeModuleId.FavoriteRandom -> AuralisR.string.favorite_random
+        HomeModuleId.Downloads -> AuralisR.string.downloads
+        HomeModuleId.NeverPlayed -> AuralisR.string.never_played
+        HomeModuleId.TopArtists -> AuralisR.string.top_artists
+        HomeModuleId.TopAlbums -> AuralisR.string.top_albums
     }
 
 /** 内容模块图标（对齐 SF Symbols 语义：shuffle/clock/moon/add/heart/download/…）。 */

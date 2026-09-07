@@ -1,5 +1,6 @@
 package com.auralis.core.designsystem
 
+import androidx.annotation.StringRes
 import androidx.compose.ui.graphics.Color
 
 /**
@@ -14,7 +15,7 @@ object BuiltInThemes {
 
     val auroraGlass = theme(
         id = "aurora-glass",
-        name = "极光玻璃",
+        nameRes = R.string.aurora_glass,
         scheme = AuralisColorScheme.Dark,
         material = AuralisMaterialStyle.LuminousGlass,
         artwork = AuralisArtworkStyle.SoftShadow,
@@ -37,7 +38,7 @@ object BuiltInThemes {
 
     val midnightOled = theme(
         id = "midnight-oled",
-        name = "午夜 OLED",
+        nameRes = R.string.midnight_oled,
         scheme = AuralisColorScheme.Dark,
         material = AuralisMaterialStyle.Solid,
         artwork = AuralisArtworkStyle.Crisp,
@@ -60,7 +61,7 @@ object BuiltInThemes {
 
     val analogHifi = theme(
         id = "analog-hifi",
-        name = "模拟 Hi-Fi",
+        nameRes = R.string.analog_hifi,
         scheme = AuralisColorScheme.Dark,
         material = AuralisMaterialStyle.SubtleGlass,
         artwork = AuralisArtworkStyle.Framed,
@@ -83,7 +84,7 @@ object BuiltInThemes {
 
     val minimalPaper = theme(
         id = "minimal-paper",
-        name = "极简纸张",
+        nameRes = R.string.minimal_paper,
         scheme = AuralisColorScheme.Light,
         material = AuralisMaterialStyle.Paper,
         artwork = AuralisArtworkStyle.Crisp,
@@ -106,7 +107,7 @@ object BuiltInThemes {
 
     val neonCity = theme(
         id = "neon-city",
-        name = "霓虹都市",
+        nameRes = R.string.neon_city,
         scheme = AuralisColorScheme.Dark,
         material = AuralisMaterialStyle.LuminousGlass,
         artwork = AuralisArtworkStyle.Luminous,
@@ -129,7 +130,7 @@ object BuiltInThemes {
 
     val zenNature = theme(
         id = "zen-nature",
-        name = "禅意自然",
+        nameRes = R.string.zen_nature,
         scheme = AuralisColorScheme.Light,
         material = AuralisMaterialStyle.Paper,
         artwork = AuralisArtworkStyle.SoftShadow,
@@ -152,7 +153,7 @@ object BuiltInThemes {
 
     val cloudVillageRed = theme(
         id = "cloud-village-red",
-        name = "云村红",
+        nameRes = R.string.cloud_village_red,
         scheme = AuralisColorScheme.Light,
         material = AuralisMaterialStyle.SubtleGlass,
         artwork = AuralisArtworkStyle.Crisp,
@@ -175,7 +176,7 @@ object BuiltInThemes {
 
     val vinylNight = theme(
         id = "vinyl-night",
-        name = "黑胶之夜",
+        nameRes = R.string.vinyl_night,
         scheme = AuralisColorScheme.Dark,
         material = AuralisMaterialStyle.SubtleGlass,
         artwork = AuralisArtworkStyle.Framed,
@@ -198,7 +199,7 @@ object BuiltInThemes {
 
     val peachMist = theme(
         id = "peach-mist",
-        name = "蜜桃粉雾",
+        nameRes = R.string.peach_mist,
         scheme = AuralisColorScheme.Light,
         material = AuralisMaterialStyle.LuminousGlass,
         artwork = AuralisArtworkStyle.SoftShadow,
@@ -221,7 +222,7 @@ object BuiltInThemes {
 
     val solarStudio = theme(
         id = "solar-studio",
-        name = "日光唱片室",
+        nameRes = R.string.solar_studio,
         scheme = AuralisColorScheme.Light,
         material = AuralisMaterialStyle.Paper,
         artwork = AuralisArtworkStyle.Framed,
@@ -244,7 +245,7 @@ object BuiltInThemes {
 
     val polarFrost = theme(
         id = "polar-frost",
-        name = "冰川透镜",
+        nameRes = R.string.polar_frost,
         scheme = AuralisColorScheme.Light,
         material = AuralisMaterialStyle.LuminousGlass,
         artwork = AuralisArtworkStyle.Crisp,
@@ -267,7 +268,7 @@ object BuiltInThemes {
 
     val forestTerminal = theme(
         id = "forest-terminal",
-        name = "森林终端",
+        nameRes = R.string.forest_terminal,
         scheme = AuralisColorScheme.Dark,
         material = AuralisMaterialStyle.Solid,
         artwork = AuralisArtworkStyle.Framed,
@@ -332,7 +333,7 @@ object BuiltInThemes {
     @Suppress("LongParameterList")
     private fun theme(
         id: String,
-        name: String,
+        @StringRes nameRes: Int,
         scheme: AuralisColorScheme,
         material: AuralisMaterialStyle,
         artwork: AuralisArtworkStyle,
@@ -353,7 +354,7 @@ object BuiltInThemes {
         separator: String,
     ): AuralisTheme = AuralisTheme(
         id = id,
-        name = name,
+        nameRes = nameRes,
         colorScheme = scheme,
         colors = AuralisColors(
             background = Color.fromHex(background),

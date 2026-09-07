@@ -121,7 +121,7 @@ private fun HomeHeader(serverName: String?, onManageServers: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(stringResource(R.string.home_title), style = MaterialTheme.typography.headlineMedium, color = colors.primaryText)
+            Text(stringResource(AuralisR.string.home_title), style = MaterialTheme.typography.headlineMedium, color = colors.primaryText)
             if (serverName != null) {
                 Text(serverName, style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
             }
@@ -286,7 +286,7 @@ private fun ModuleHeader(
                 )
                 Spacer(Modifier.width(2.dp))
                 Text(
-                    stringResource(R.string.home_reshuffle),
+                    stringResource(AuralisR.string.shuffle_more),
                     style = MaterialTheme.typography.labelMedium,
                     color = colors.secondaryText,
                 )
@@ -317,7 +317,7 @@ private fun ModuleHeader(
 private fun moduleCountLabelRes(module: HomeModuleSnapshot): Int = when {
     module.tracks.isNotEmpty() -> AuralisR.string.count_songs
     module.artists.isNotEmpty() -> R.string.home_count_artists
-    else -> R.string.home_count_albums
+    else -> AuralisR.string.album_count_format
 }
 
 private fun HomeModuleId.toBrowseDestination(): BrowseDestination = when (this) {

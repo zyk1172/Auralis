@@ -168,8 +168,8 @@ private fun SettingsRootPage(
 
     SettingsPageContainer(modifier = modifier) {
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            item { SettingsDetailTopBar(title = stringResource(R.string.settings_title), onBack = onBack) }
-            item { SettingsSectionTitle(stringResource(R.string.settings_title)) }
+            item { SettingsDetailTopBar(title = stringResource(AuralisR.string.settings), onBack = onBack) }
+            item { SettingsSectionTitle(stringResource(AuralisR.string.settings)) }
             item {
                 SettingsCategoryRow(
                     title = stringResource(AuralisR.string.servers),
@@ -219,7 +219,7 @@ private fun SettingsRootPage(
             item {
                 SettingsCategoryRow(
                     title = stringResource(R.string.settings_theme_title),
-                    subtitle = theme.name,
+                    subtitle = stringResource(theme.nameRes),
                     icon = Icons.Filled.Palette,
                     onClick = onOpenTheme,
                 )
@@ -621,7 +621,7 @@ private fun ThemeSwatchCard(
         Spacer(Modifier.height(AuralisSpacing.small))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                theme.name,
+                stringResource(theme.nameRes),
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.SemiBold,
                 color = theme.colors.primaryText,

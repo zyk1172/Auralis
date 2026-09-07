@@ -130,7 +130,7 @@ fun BrowseDetailScreen(
             )
             when (current) {
                 is BrowseDestination.Random, is BrowseDestination.FavoriteRandom -> IconButton(onClick = { detailReloadKey += 1 }) {
-                    Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.library_shuffle_more), tint = colors.accent)
+                    Icon(Icons.Filled.Refresh, contentDescription = stringResource(AuralisR.string.shuffle_more), tint = colors.accent)
                 }
                 is BrowseDestination.Playlist -> PlaylistManageMenu(
                     graph,
@@ -171,18 +171,18 @@ internal fun destinationTitle(destination: BrowseDestination): String = when (de
     is BrowseDestination.Playlist -> stringResource(AuralisR.string.playlist)
     BrowseDestination.Playlists -> stringResource(AuralisR.string.playlist)
     BrowseDestination.Favorites -> stringResource(AuralisR.string.favorite)
-    BrowseDestination.MostPlayed -> stringResource(R.string.library_dest_most_played)
+    BrowseDestination.MostPlayed -> stringResource(AuralisR.string.most_played)
     is BrowseDestination.Genre -> stringResource(R.string.library_dest_genre_format, destination.name)
     is BrowseDestination.RecommendationCategory -> stringResource(R.string.library_dest_recommendation_category)
-    BrowseDestination.Random -> stringResource(R.string.library_dest_random_music)
-    BrowseDestination.RecentlyPlayed -> stringResource(R.string.library_dest_recently_played)
-    BrowseDestination.RecentlyAdded -> stringResource(R.string.library_dest_recently_added)
-    BrowseDestination.LongUnplayed -> stringResource(R.string.library_dest_long_unplayed)
-    BrowseDestination.FavoriteRandom -> stringResource(R.string.library_dest_favorite_random)
-    BrowseDestination.NeverPlayed -> stringResource(R.string.library_dest_never_played)
-    BrowseDestination.TopArtists -> stringResource(R.string.library_dest_top_artists)
-    BrowseDestination.TopAlbums -> stringResource(R.string.library_dest_top_albums)
-    BrowseDestination.Downloads -> stringResource(R.string.library_dest_downloads)
+    BrowseDestination.Random -> stringResource(AuralisR.string.random_music)
+    BrowseDestination.RecentlyPlayed -> stringResource(AuralisR.string.recently_played)
+    BrowseDestination.RecentlyAdded -> stringResource(AuralisR.string.recently_added)
+    BrowseDestination.LongUnplayed -> stringResource(AuralisR.string.long_unplayed)
+    BrowseDestination.FavoriteRandom -> stringResource(AuralisR.string.favorite_random)
+    BrowseDestination.NeverPlayed -> stringResource(AuralisR.string.never_played)
+    BrowseDestination.TopArtists -> stringResource(AuralisR.string.top_artists)
+    BrowseDestination.TopAlbums -> stringResource(AuralisR.string.top_albums)
+    BrowseDestination.Downloads -> stringResource(AuralisR.string.downloads)
 }
 
 // ================================================================ 通用列表内容
