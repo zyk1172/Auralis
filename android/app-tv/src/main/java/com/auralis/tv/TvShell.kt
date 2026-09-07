@@ -38,6 +38,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -58,6 +59,7 @@ import com.auralis.core.playback.LocalPlaybackHost
 import com.auralis.core.playback.PlaybackController
 import com.auralis.core.playback.PlaybackSnapshot
 import com.auralis.core.playback.QueueSnapshot
+import com.auralis.core.playback.awaitPlaybackController
 import com.auralis.feature.home.HomeScreen
 import com.auralis.feature.library.BrowseDetailScreen
 import com.auralis.feature.library.LibraryScreen
@@ -86,6 +88,7 @@ fun TvShell(
     var browseDestination by remember { mutableStateOf<BrowseDestination?>(null) }
     // 正在播放全屏页：覆盖整个壳。
     var nowPlayingOpen by remember { mutableStateOf(false) }
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     // ---- 播放状态（真实绑定；引擎由 AuralisPlaybackService 创建后 available=true）----
@@ -112,38 +115,44 @@ fun TvShell(
     val homeFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { homeFocus.requestFocus() } }
 
-    /** 整组作为新队列并从点中的那首开始播放（真实动作，同移动端）。 */
+    /**
+     * P0-1 统一取控制器：引擎未就绪则启动播放服务并等待就绪（最多 8s），
+     * 保证用户第一次点击一定执行原意图；超时用 Toast 如实告知失败（可重试），不静默丢弃。
+     */
+    suspend fun awaitControllerOrNotify(): PlaybackController? =
+        runCatching { awaitPlaybackController(startService = { graph.startPlaybackService() }) }
+            .onFailure {
+                android.widget.Toast.makeText(
+                    context,
+                    "播放服务启动超时，请重试",
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+            }
+            .getOrNull()
+
+    /** 整组作为新队列并从点中的那首开始播放（真实动作，P0-1：首击不丢）。 */
     fun playShelf(tracks: List<Track>, startIndex: Int) {
-        if (!engineAvailable) {
-            graph.startPlaybackService()
-            return
-        }
         scope.launch {
+            val ready = awaitControllerOrNotify() ?: return@launch
             runCatching {
-                controller.playQueue(tracks.map { QueueEntry.of(it) }, startIndex.coerceIn(0, tracks.lastIndex))
+                ready.playQueue(tracks.map { QueueEntry.of(it) }, startIndex.coerceIn(0, tracks.lastIndex))
             }
         }
     }
 
-    /** 「下一首播放」：整组插到当前曲之后。 */
+    /** 「下一首播放」：整组插到当前曲之后（P0-1：首击不丢）。 */
     fun playNextShelf(tracks: List<Track>) {
-        if (!engineAvailable) {
-            graph.startPlaybackService()
-            return
-        }
         scope.launch {
-            runCatching { controller.insertNext(tracks.map { QueueEntry.of(it) }) }
+            val ready = awaitControllerOrNotify() ?: return@launch
+            runCatching { ready.insertNext(tracks.map { QueueEntry.of(it) }) }
         }
     }
 
-    /** 「加入队列」：整组追加到队尾。 */
+    /** 「加入队列」：整组追加到队尾（P0-1：首击不丢）。 */
     fun appendQueueShelf(tracks: List<Track>) {
-        if (!engineAvailable) {
-            graph.startPlaybackService()
-            return
-        }
         scope.launch {
-            runCatching { controller.appendToQueue(tracks.map { QueueEntry.of(it) }) }
+            val ready = awaitControllerOrNotify() ?: return@launch
+            runCatching { ready.appendToQueue(tracks.map { QueueEntry.of(it) }) }
         }
     }
 

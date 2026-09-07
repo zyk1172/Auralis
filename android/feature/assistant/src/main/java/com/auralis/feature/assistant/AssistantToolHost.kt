@@ -17,9 +17,8 @@ import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
 import com.auralis.core.playback.LocalPlaybackHost
 import com.auralis.core.playback.PlaybackController
-import kotlinx.coroutines.flow.filter
+import com.auralis.core.playback.awaitPlaybackController
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -57,16 +56,12 @@ class AssistantToolHost(
             ?.let { ServerId(it) }
 
     // ------------------------------------------------------------------
-    // 引擎就绪（真实启动播放服务并等待可用；超时如实报错）
+    // 引擎就绪（统一入口 awaitPlaybackController：真实启动播放服务并等待可用；
+    // 超时抛异常由工具失败路径如实上报模型，不静默丢弃意图）
     // ------------------------------------------------------------------
 
-    private suspend fun requireEngine(): PlaybackController {
-        if (!LocalPlaybackHost.available.value) {
-            graph.startPlaybackService()
-            withTimeout(8_000) { LocalPlaybackHost.available.filter { it }.first() }
-        }
-        return LocalPlaybackHost.controller()
-    }
+    private suspend fun requireEngine(): PlaybackController =
+        awaitPlaybackController(startService = { graph.startPlaybackService() })
 
     // ------------------------------------------------------------------
     // 参数解析（对齐 Swift 形状：globalID {serverID, remoteID} 等）
