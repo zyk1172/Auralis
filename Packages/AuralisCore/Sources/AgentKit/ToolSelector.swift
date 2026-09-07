@@ -255,6 +255,7 @@ public enum ToolSelector {
         var finalNames = Set(finalSet.map(\.name))
         // 前置依赖补全：mutation 工具需要真实 TrackID / PlaylistID 时，
         // 自动把解析/查找入口放进 shortlist（模型不用自己猜工具依赖）。
+        var prerequisiteNames = Set<String>()
         let visibleByName = Dictionary(uniqueKeysWithValues: visible.map { ($0.name, $0) })
         let needsTrackResolution = ranked.contains { descriptor in
             descriptor.semanticInputs.contains("TrackID") || descriptor.semanticInputs.contains("TrackIDs")
@@ -262,6 +263,7 @@ public enum ToolSelector {
         if needsTrackResolution, !finalNames.contains("library_search"), !finalNames.contains("library_resolve_entity") {
             for name in ["library_search", "library_resolve_entity"] {
                 if let tool = visibleByName[name], tool.permission == .readOnly, finalNames.insert(name).inserted {
+                    prerequisiteNames.insert(name)
                     finalSet.append(tool)
                 }
             }
@@ -271,6 +273,7 @@ public enum ToolSelector {
         }
         if needsPlaylistResolution, !finalNames.contains("playlist_list") {
             if let tool = visibleByName["playlist_list"], tool.permission == .readOnly, finalNames.insert("playlist_list").inserted {
+                prerequisiteNames.insert("playlist_list")
                 finalSet.append(tool)
             }
         }
@@ -279,6 +282,10 @@ public enum ToolSelector {
         // 需要的真实工具不被 Top-K 误伤，同时把无关 schema 挡在首轮之外。
         // 固定 Skill 激活时（activeSkillID != nil）完全不截断：候选收集阶段模型需要
         // 完整的只读检索面，截断会破坏"搜索 → 选歌"链路。
+        if needsTrackResolution {
+            prerequisiteNames.formUnion(finalNames.intersection(["library_search", "library_resolve_entity"]))
+        }
+        if needsPlaylistResolution { prerequisiteNames.insert("playlist_list") }
         let core = finalSet.filter { $0.isCoreInfrastructure || $0.name == "result_present_tracks" }
         let rest = finalSet.filter { !($0.isCoreInfrastructure || $0.name == "result_present_tracks") }
         if activeSkillID != nil {
@@ -291,9 +298,15 @@ public enum ToolSelector {
         if allowedOperations == nil || semantics.domain == .conversation {
             return core + rest
         }
-        let relevant = rest.filter { semanticScore($0, userText: userText, semantics: semantics) > 0 }
+        // A pronoun may give an entity resolver no lexical score. Preserve
+        // execution prerequisites even when the Top-K filler budget is full.
+        let relevant = rest.filter {
+            prerequisiteNames.contains($0.name) || semanticScore($0, userText: userText, semantics: semantics) > 0
+        }
         let fillerCount = max(ToolBrokerTopK - core.count - relevant.count, 0)
-        let filler = rest.filter { semanticScore($0, userText: userText, semantics: semantics) == 0 }
+        let filler = rest.filter {
+            !prerequisiteNames.contains($0.name) && semanticScore($0, userText: userText, semantics: semantics) == 0
+        }
             .prefix(fillerCount)
         return core + relevant + filler
     }
@@ -701,3 +714,4 @@ public enum ToolSelector {
         return String(data: data, encoding: .utf8)
     }
 }
+

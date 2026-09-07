@@ -155,7 +155,8 @@ public enum AgentHistoryPolicy {
             .lowercased()
             .trimmingCharacters(in: CharacterSet(charactersIn: "，。！？!?、；;：: \t\n"))
         if [
-            "继续", "继续吧", "第一个", "第一个吧", "第二个", "第二个吧", "就这个", "就它", "好的，就这个",
+            "继续", "继续吧", "继续执行", "接着做", "繼續", "繼續吧", "繼續執行",
+            "continue", "please continue", "go on", "keep going", "resume the task", "第一个", "第一个吧", "第二个", "第二个吧", "就这个", "就它", "好的，就这个",
         ].contains(normalized) {
             return true
         }
@@ -177,3 +178,4 @@ public enum AgentHistoryPolicy {
         ].contains(normalized)
     }
 }
+

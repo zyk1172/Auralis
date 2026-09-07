@@ -336,8 +336,13 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         let centroid = spectralCentroid(spectrum: spectrum, sampleRate: sampleRate)
         let flatness = spectralFlatness(spectrum)
 
-        let fastAlpha = Float(1 - exp(-Double(hopSize) / max(1, sampleRate * 0.18)))
-        let slowAlpha = Float(1 - exp(-Double(hopSize) / max(1, sampleRate * 3.0)))
+        // Striding FFT work must not stretch a 3 s envelope/history into
+        // 6–12 s in low-power mode. Track elapsed audio time, not call count.
+        let elapsed = previousFrameTime.isFinite
+            ? max(0, time - previousFrameTime)
+            : Double(hopSize) * Double(configuration.fftFrameStride) / sampleRate
+        let fastAlpha = Float(1 - exp(-elapsed / 0.18))
+        let slowAlpha = Float(1 - exp(-elapsed / 3.0))
         previousFastEnvelope += fastAlpha * (safeRMS - previousFastEnvelope)
         slowEnvelope += slowAlpha * (safeRMS - slowEnvelope)
 
@@ -351,6 +356,11 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         let energyDB = 20 * log10(max(safeRMS, 0.00001))
         appendRolling(&energyDBHistory, value: energyDB, limit: rollingLimit)
 
+        // Reuse one ordering for all perceptual percentile queries in this
+        // frame instead of sorting the same rolling history six times.
+        let sortedEnergyDB = energyDBHistory.sorted()
+        let energyFloor = percentileOfSorted(sortedEnergyDB, percentile: 0.20)
+        let energyCeiling = percentileOfSorted(sortedEnergyDB, percentile: 0.95)
         let onsetThreshold = adaptiveThreshold(onsetHistory, multiplier: 2.8, floor: 0.0005)
         let rmsThreshold = adaptiveThreshold(rmsHistory, multiplier: 2.2, floor: 0.004)
         let isTransient = onset >= onsetThreshold && safeRMS >= rmsThreshold && safeRMS > 0.004
@@ -373,8 +383,8 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
             // the track's recent dB distribution and map the attack against
             // the amount by which it clears the onset threshold.
             let energyPosition = smoothstep(
-                edge0: percentile(energyDBHistory, percentile: 0.20),
-                edge1: percentile(energyDBHistory, percentile: 0.95),
+                edge0: energyFloor,
+                edge1: energyCeiling,
                 value: energyDB
             )
             let onsetRatio = onset / max(onsetThreshold, 0.0005)
@@ -478,14 +488,14 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         totalTransientCount += events.filter { $0.kind == .transient }.count
         totalContinuousCount += events.filter { $0.kind == .continuous }.count
         let energyLevel = smoothstep(
-            edge0: percentile(energyDBHistory, percentile: 0.20),
-            edge1: percentile(energyDBHistory, percentile: 0.95),
+            edge0: energyFloor,
+            edge1: energyCeiling,
             value: energyDB
         )
         let slowEnergyDB = 20 * log10(max(slowEnvelope, 0.00001))
         let slowEnergy = smoothstep(
-            edge0: percentile(energyDBHistory, percentile: 0.20),
-            edge1: percentile(energyDBHistory, percentile: 0.95),
+            edge0: energyFloor,
+            edge1: energyCeiling,
             value: slowEnergyDB
         )
         let isQuiet = safeRMS < max(0.003, rmsThreshold * 0.95)
@@ -732,7 +742,11 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
 
     private func percentile(_ values: [Float], percentile: Double) -> Float {
         guard !values.isEmpty else { return 0 }
-        let sorted = values.sorted()
+        return percentileOfSorted(values.sorted(), percentile: percentile)
+    }
+
+    private func percentileOfSorted(_ sorted: [Float], percentile: Double) -> Float {
+        guard !sorted.isEmpty else { return 0 }
         let index = min(sorted.count - 1, max(0, Int(Double(sorted.count - 1) * percentile)))
         return sorted[index]
     }
@@ -743,8 +757,9 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         return t * t * (3 - 2 * t)
     }
 
-    private func historyLimit(sampleRate: Double) -> Int {
-        max(32, Int(sampleRate / Double(max(1, hopSize)) * configuration.adaptiveWindowSeconds))
+    func historyLimit(sampleRate: Double) -> Int {
+        let analyzedHop = Double(hopSize) * Double(configuration.fftFrameStride)
+        return max(32, Int(sampleRate / max(1, analyzedHop) * configuration.adaptiveWindowSeconds))
     }
 
     private func appendRolling(_ values: inout [Float], value: Float, limit: Int) {
@@ -875,3 +890,4 @@ public enum MusicHapticsEventDeduplicator {
         transientScore(event)
     }
 }
+
