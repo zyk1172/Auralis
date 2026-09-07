@@ -65,17 +65,15 @@ class ServerClientRegistry(
 
     // ------------------------------------------------------- 构造（不登记）
 
-    /**
-     * 构造内网客户端。冷启动「先用内网，后台探测再切换」的默认路径；
-     * 不写入注册表，由调用方决定何时 registerResolved。
-     */
+    /** 构造内网客户端。冷启动「先用内网，后台探测再切换」的默认路径；
+     *  不写入注册表，由调用方决定何时 registerResolved。 */
     fun makeInternalEndpoint(account: ServerAccount): ResolvedServerEndpoint {
         val base = requireNotNull(account.baseUrl) { "服务器缺少内网地址" }
         return ResolvedServerEndpoint(
             serverId = account.id,
             baseUrl = base,
             kind = EndpointKind.Internal,
-            client = makeClient(base, account),
+            client = makeClient(base, account, vault),
         )
     }
 
@@ -86,11 +84,18 @@ class ServerClientRegistry(
             serverId = account.id,
             baseUrl = base,
             kind = EndpointKind.External,
-            client = makeClient(base, account),
+            client = makeClient(base, account, vault),
         )
     }
 
-    private fun makeClient(baseUrl: String, account: ServerAccount): OpenSubsonicClient {
+    /**
+     * 用显式 vault 构造客户端（连接测试用：内存凭据，不落库）。
+     * 生产路径一律走 [vault]；这里只为 `testConnection` 这类「不持久化凭据」的场景开放。
+     */
+    fun makeClientWithVault(baseUrl: String, account: ServerAccount, vault: CredentialVault): OpenSubsonicClient =
+        makeClient(baseUrl, account, vault)
+
+    private fun makeClient(baseUrl: String, account: ServerAccount, vault: CredentialVault): OpenSubsonicClient {
         val credential = requireNotNull(account.credentialReference) { "缺少凭据引用" }
         val uname = account.username
         val auth = if (uname.isNullOrBlank()) {

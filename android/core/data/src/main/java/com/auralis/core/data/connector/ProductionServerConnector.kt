@@ -67,6 +67,25 @@ sealed interface ConnectionOutcome {
 }
 
 /**
+ * 连接测试结果（对齐 Apple `testConnection` 语义：**不保存凭据、不同步、不改变当前连接**）。
+ * [Success] 只携带可安全展示的服务器信息，不含凭据。
+ */
+sealed interface TestConnectionResult {
+    data class Success(
+        val serverType: String?,
+        val serverVersion: String?,
+        val apiVersion: String?,
+        val username: String?,
+    ) : TestConnectionResult
+
+    /** 认证/授权失败：绝不降级切外网。 */
+    data object AuthenticationFailed : TestConnectionResult
+
+    /** 内外网均不可达 / 协议错误 / 地址无效。 */
+    data class Failed(val message: String) : TestConnectionResult
+}
+
+/**
  * 服务器连接编排层（对应 Apple `ProductionServerConnector`）。
  *
  * 语义对齐点：
@@ -201,6 +220,8 @@ class ProductionServerConnector(
     /**
      * 连接（新增或编辑）。
      *
+     * @param fixedServerId 编辑场景传入既有账号的 id，保持身份稳定（改地址/用户名
+     *   不新建重复服务器、凭据引用不变）；null = 新增，按地址+用户名派生稳定 id。
      * @param previousAccount 编辑场景的旧账户；null 表示全新服务器。其值仅用于失败补偿
      *   （恢复旧账户 / 判断是否需要 purge），地址/凭据总是以本次输入为准。
      */
@@ -211,15 +232,27 @@ class ProductionServerConnector(
         username: String?,
         secret: String,
         previousAccount: ServerAccount?,
+        fixedServerId: ServerId? = null,
     ): ConnectionOutcome {
         _stage.value = ConnectionStage.Validating
+        // 策略校验先于一切副作用：内嵌凭据 / http 明文连公网在写 Vault 之前就被拒。
+        ServerURLPolicy.validate(baseUrl)?.let {
+            _stage.value = ConnectionStage.Done
+            return ConnectionOutcome.Failed(it.message)
+        }
+        if (!externalBaseUrl.isNullOrBlank()) {
+            ServerURLPolicy.validate(externalBaseUrl)?.let {
+                _stage.value = ConnectionStage.Done
+                return ConnectionOutcome.Failed(it.message)
+            }
+        }
         val normalized = normalizedBaseUrl(baseUrl)
         val normalizedExternal = externalBaseUrl?.takeIf { it.isNotBlank() }?.let(::normalizedBaseUrl)
         if (normalized == null) return ConnectionOutcome.Failed("内网地址无效（需要 http/https + 主机名）")
         if (externalBaseUrl?.isNotBlank() == true && normalizedExternal == null) {
             return ConnectionOutcome.Failed("外网地址无效")
         }
-        val serverId = stableServerId(normalized, username)
+        val serverId = fixedServerId ?: stableServerId(normalized, username)
         val credentialRef = credentialReferenceFor(serverId)
 
         // R12 前置快照（严格读取）：区分「确实没有旧密码」与「读取失败」。
@@ -273,6 +306,129 @@ class ProductionServerConnector(
                 rollback(serverId, credentialRef, previousSecret, previousAccount)
                 _stage.value = ConnectionStage.Done
                 ConnectionOutcome.Failed(selection.message)
+            }
+        }
+    }
+
+    /**
+     * 编辑既有服务器（对齐 Apple `updateServerConfiguration`）：
+     * - 身份（serverId / 凭据引用）**保持不变**，改地址/用户名不会新建重复服务器，
+     *   也不会删除本机已同步的音乐库；
+     * - `secret` 为空/空白 = 沿用本机已存凭据（对应 Swift 「新密码留空则不修改」）。
+     */
+    suspend fun edit(
+        account: ServerAccount,
+        displayName: String,
+        baseUrl: String,
+        externalBaseUrl: String?,
+        username: String?,
+        secret: String?,
+    ): ConnectionOutcome {
+        val effectiveSecret = if (secret.isNullOrBlank()) {
+            vault.retrieve(credentialReferenceFor(account.id))
+        } else {
+            secret
+        }
+        if (effectiveSecret == null) {
+            return ConnectionOutcome.Failed("密码为空且本机没有已存凭据，请输入密码")
+        }
+        return connect(
+            displayName = displayName,
+            baseUrl = baseUrl,
+            externalBaseUrl = externalBaseUrl,
+            username = username,
+            secret = effectiveSecret,
+            previousAccount = account,
+            fixedServerId = account.id,
+        )
+    }
+
+    /**
+     * 连接测试（对齐 Apple `testServerConnectionWithInput`）：
+     * **不保存凭据、不同步、不改变当前连接**——用内存 Vault 构造客户端，探测后即弃。
+     * 分类：认证失败 / 不可达 / 地址或协议错误；成功只带服务器公开信息。
+     */
+    suspend fun testConnection(
+        displayName: String,
+        baseUrl: String,
+        externalBaseUrl: String?,
+        username: String?,
+        secret: String,
+    ): TestConnectionResult {
+        ServerURLPolicy.validate(baseUrl)?.let { return TestConnectionResult.Failed(it.message) }
+        if (!externalBaseUrl.isNullOrBlank()) {
+            ServerURLPolicy.validate(externalBaseUrl)?.let {
+                return TestConnectionResult.Failed(it.message)
+            }
+        }
+        val normalized = normalizedBaseUrl(baseUrl) ?: return TestConnectionResult.Failed("内网地址无效")
+        val normalizedExternal = externalBaseUrl?.takeIf { it.isNotBlank() }?.let(::normalizedBaseUrl)
+        if (externalBaseUrl?.isNotBlank() == true && normalizedExternal == null) {
+            return TestConnectionResult.Failed("外网地址无效")
+        }
+        // 临时身份 + 内存凭据：探测结束后无任何持久化残留。
+        val probeId = stableServerId(normalized, username)
+        val memVault = object : CredentialVault {
+            private val map = java.util.concurrent.ConcurrentHashMap<String, String>()
+            override suspend fun store(reference: String, secret: String) { map[reference] = secret }
+            override suspend fun retrieve(reference: String): String? = map[reference]
+            override suspend fun delete(reference: String) { map.remove(reference) }
+        }
+        val ref = "opensubsonic.test.${probeId.value}"
+        memVault.store(ref, secret)
+        val candidate = ServerAccount(
+            id = probeId,
+            displayName = displayName,
+            baseUrl = normalized,
+            externalBaseUrl = normalizedExternal,
+            username = username,
+            credentialReference = ref,
+        )
+        fun endpoint(base: String, kind: EndpointKind): ResolvedServerEndpoint = ResolvedServerEndpoint(
+            serverId = probeId,
+            baseUrl = base,
+            kind = kind,
+            client = registry.makeClientWithVault(base, candidate, memVault),
+        )
+
+        val internal = endpoint(normalized, EndpointKind.Internal)
+        val r1 = probe(internal)
+        return when (r1.kind) {
+            ProbeKind.Reachable -> {
+                val info = r1.serverInfo
+                TestConnectionResult.Success(
+                    serverType = info?.type,
+                    serverVersion = info?.serverVersion,
+                    apiVersion = info?.version,
+                    username = username,
+                )
+            }
+
+            ProbeKind.AuthenticationFailed -> TestConnectionResult.AuthenticationFailed
+
+            ProbeKind.Failed -> TestConnectionResult.Failed("服务器返回了无法识别的 OpenSubsonic 响应")
+
+            ProbeKind.Unreachable -> {
+                if (normalizedExternal == null) {
+                    TestConnectionResult.Failed("无法访问服务器，请检查地址、网络和服务状态")
+                } else {
+                    val r2 = probe(endpoint(normalizedExternal, EndpointKind.External))
+                    when (r2.kind) {
+                        ProbeKind.Reachable -> {
+                            val info = r2.serverInfo
+                            TestConnectionResult.Success(
+                                serverType = info?.type,
+                                serverVersion = info?.serverVersion,
+                                apiVersion = info?.version,
+                                username = username,
+                            )
+                        }
+
+                        ProbeKind.AuthenticationFailed -> TestConnectionResult.AuthenticationFailed
+                        ProbeKind.Failed -> TestConnectionResult.Failed("服务器返回了无法识别的 OpenSubsonic 响应")
+                        ProbeKind.Unreachable -> TestConnectionResult.Failed("无法访问服务器，请检查地址、网络和服务状态")
+                    }
+                }
             }
         }
     }
