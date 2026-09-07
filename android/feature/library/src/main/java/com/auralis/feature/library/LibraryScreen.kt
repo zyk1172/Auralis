@@ -51,6 +51,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -59,6 +61,7 @@ import com.auralis.core.designsystem.AuralisChrome
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.designsystem.R as AuralisR
 import com.auralis.core.domain.Album
 import com.auralis.core.domain.Artist
 import com.auralis.core.domain.BrowseDestination
@@ -108,9 +111,9 @@ fun LibraryScreen(
                 .padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.small),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("音乐库", style = MaterialTheme.typography.headlineMedium, color = colors.primaryText, modifier = Modifier.weight(1f))
+            Text(stringResource(R.string.library_title), style = MaterialTheme.typography.headlineMedium, color = colors.primaryText, modifier = Modifier.weight(1f))
             IconButton(onClick = onOpenSettings) {
-                Icon(Icons.Filled.Settings, contentDescription = "设置", tint = colors.primaryText)
+                Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.library_settings_cd), tint = colors.primaryText)
             }
         }
         ScopeSelector(selected = scope, onSelect = { scope = it })
@@ -148,7 +151,7 @@ private fun ScopeSelector(selected: LibraryScope, onSelect: (LibraryScope) -> Un
                 onClick = { onSelect(item) },
             ) {
                 Text(
-                    item.titleZh,
+                    stringResource(item.titleRes()),
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
                     color = if (isSelected) colors.accent else colors.primaryText,
@@ -171,8 +174,8 @@ private fun AlbumScope(
     if (serverId == null) return ServerPrompt()
     val albums by remember(serverId) { graph.catalogRepository.observeAlbums(serverId) }.collectAsState(initial = null)
     when {
-        albums == null -> LibraryLoadingBox("正在加载专辑…")
-        albums!!.isEmpty() -> LibraryEmptyState("还没有专辑", "当前资料库暂无专辑，可能需要同步或扫描音乐库。")
+        albums == null -> LibraryLoadingBox(stringResource(R.string.library_loading_albums))
+        albums!!.isEmpty() -> LibraryEmptyState(stringResource(R.string.library_empty_albums_title), stringResource(R.string.library_empty_albums_help))
         else -> AlbumGrid(graph, albums!!, onPlayTracks, onBrowse)
     }
 }
@@ -187,8 +190,8 @@ private fun ArtistScope(
     if (serverId == null) return ServerPrompt()
     val artists by remember(serverId) { graph.catalogRepository.observeArtists(serverId) }.collectAsState(initial = null)
     when {
-        artists == null -> LibraryLoadingBox("正在加载艺术家…")
-        artists!!.isEmpty() -> LibraryEmptyState("还没有艺术家", "当前资料库暂无艺术家，可能需要同步或扫描音乐库。")
+        artists == null -> LibraryLoadingBox(stringResource(R.string.library_loading_artists))
+        artists!!.isEmpty() -> LibraryEmptyState(stringResource(R.string.library_empty_artists_title), stringResource(R.string.library_empty_artists_help))
         else -> ArtistRows(graph, artists!!, onPlayTracks, onBrowse)
     }
 }
@@ -202,8 +205,8 @@ private fun PlaylistScope(
     if (serverId == null) return ServerPrompt()
     val playlists by remember(serverId) { graph.catalogRepository.observePlaylists(serverId) }.collectAsState(initial = null)
     when {
-        playlists == null -> LibraryLoadingBox("正在加载歌单…")
-        playlists!!.isEmpty() -> LibraryEmptyState("还没有歌单", "在服务器上创建歌单后，这里会列出所有歌单。")
+        playlists == null -> LibraryLoadingBox(stringResource(R.string.library_loading_playlists))
+        playlists!!.isEmpty() -> LibraryEmptyState(stringResource(R.string.library_empty_playlists_title), stringResource(R.string.library_empty_playlists_help))
         else -> PlaylistGrid(playlists!!, onBrowse)
     }
 }
@@ -225,13 +228,13 @@ private fun TracksOrFavoritesScope(
     }
     val tracks by source.collectAsState(initial = null)
     when {
-        tracks == null -> LibraryLoadingBox(if (isFavorites) "正在加载收藏…" else "正在加载歌曲…")
+        tracks == null -> LibraryLoadingBox(stringResource(if (isFavorites) R.string.library_loading_favorites else R.string.library_loading_tracks))
         tracks!!.isEmpty() -> if (isFavorites) {
-            LibraryEmptyState("还没有收藏", "在播放页或歌曲菜单中点心形收藏后，会出现在这里。")
+            LibraryEmptyState(stringResource(R.string.library_empty_favorites_title), stringResource(R.string.library_empty_favorites_help))
         } else {
             LibraryEmptyState(
-                "资料库还没有歌曲",
-                "连接服务器并同步后，这里会列出全部歌曲；也可以从「首页」先随机播放几首。",
+                stringResource(R.string.library_empty_tracks_title),
+                stringResource(R.string.library_empty_tracks_help),
             )
         }
         else -> TrackRows(
@@ -257,11 +260,11 @@ private fun GenreScope(
     val genres by remember(serverId) { repo.observeGenres(serverId) }.collectAsState(initial = null)
     val scope = rememberCoroutineScope()
     when {
-        genres == null -> LibraryLoadingBox("正在加载流派…")
+        genres == null -> LibraryLoadingBox(stringResource(R.string.library_loading_genres))
         genres!!.isEmpty() -> LibraryEmptyState(
-            "还没有流派",
-            "服务器返回的流派（来自音乐文件内嵌标签）会显示在这里；连接并同步后即可按流派浏览。",
-            actionLabel = "从服务器刷新流派",
+            stringResource(R.string.library_empty_genres_title),
+            stringResource(R.string.library_empty_genres_help),
+            actionLabel = stringResource(R.string.library_genres_refresh_action),
             onAction = {
                 scope.launch {
                     val client = graph.registry.client(serverId)
@@ -276,12 +279,12 @@ private fun GenreScope(
 
 @Composable
 private fun CategoryScope() {
-    LibraryEmptyState("分类（AI 推荐索引）", com.auralis.core.domain.Categories.NOT_PORTED_MESSAGE)
+    LibraryEmptyState(stringResource(R.string.library_categories_ai_title), com.auralis.core.domain.Categories.NOT_PORTED_MESSAGE)
 }
 
 @Composable
 private fun ServerPrompt() {
-    LibraryEmptyState("还没有连接服务器", "请在「设置 → 服务器」中添加并同步音乐服务器后浏览资料库。")
+    LibraryEmptyState(stringResource(R.string.library_server_prompt_title), stringResource(R.string.library_server_prompt_help))
 }
 
 /** 曲目行列表（歌曲 scope / 收藏 scope）。整列表为新队列，点行从该行起播。 */
@@ -345,6 +348,7 @@ private fun AlbumCard(
     onBrowse: (BrowseDestination) -> Unit,
 ) {
     val colors = LocalAuralisTheme.current.colors
+    val context = LocalContext.current
     val repo = graph.catalogRepository
     val scope = rememberCoroutineScope()
     var menuOpen by remember { mutableStateOf(false) }
@@ -391,11 +395,11 @@ private fun AlbumCard(
             )
         }
         IconButton(onClick = { menuOpen = true }, modifier = Modifier.align(Alignment.TopEnd)) {
-            Icon(Icons.Filled.MoreVert, contentDescription = "专辑操作", tint = colors.secondaryText)
+            Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.library_album_actions), tint = colors.secondaryText)
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             DropdownMenuItem(
-                text = { Text("播放全部") },
+                text = { Text(stringResource(R.string.library_play_all)) },
                 leadingIcon = { Icon(Icons.Filled.PlayArrow, null) },
                 enabled = !busy,
                 onClick = {
@@ -404,23 +408,23 @@ private fun AlbumCard(
                     scope.launch {
                         val tracks = runCatching { repo.albumTracks(album.globalId) }.getOrDefault(emptyList())
                         busy = false
-                        if (tracks.isEmpty()) message = "这张专辑暂无本地歌曲" else onPlayTracks(tracks, 0)
+                        if (tracks.isEmpty()) message = context.getString(R.string.library_album_no_local_tracks) else onPlayTracks(tracks, 0)
                     }
                 },
             )
             DropdownMenuItem(
-                text = { Text(if (isFavorite) "取消收藏" else "收藏专辑") },
+                text = { Text(if (isFavorite) stringResource(AuralisR.string.unfavorite) else stringResource(R.string.library_favorite_album)) },
                 leadingIcon = { Icon(if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, null) },
                 onClick = {
                     menuOpen = false
                     scope.launch {
                         runCatching { graph.libraryActions.toggleAlbumFavorite(album) }
-                            .onFailure { message = "收藏操作失败：${it.message}" }
+                            .onFailure { message = context.getString(AuralisR.string.favorite_failed, it.message) }
                     }
                 },
             )
             DropdownMenuItem(
-                text = { Text("下载专辑") },
+                text = { Text(stringResource(R.string.library_download_album)) },
                 leadingIcon = { Icon(Icons.Filled.ArrowDownward, null) },
                 enabled = !busy,
                 onClick = {
@@ -430,11 +434,11 @@ private fun AlbumCard(
                         val tracks = runCatching { repo.albumTracks(album.globalId) }.getOrDefault(emptyList())
                         busy = false
                         if (tracks.isEmpty()) {
-                            message = "这张专辑暂无本地歌曲"
+                            message = context.getString(R.string.library_album_no_local_tracks)
                         } else {
                             runCatching { tracks.forEach { graph.downloadManager.enqueue(it) } }
-                                .onFailure { message = "下载失败：${it.message}" }
-                                .onSuccess { message = "已开始下载 ${tracks.size} 首歌曲" }
+                                .onFailure { message = context.getString(AuralisR.string.download_failed, it.message) }
+                                .onSuccess { message = context.getString(R.string.library_download_started_format, tracks.size) }
                         }
                     }
                 },
@@ -444,7 +448,7 @@ private fun AlbumCard(
     message?.let {
         AlertDialog(
             onDismissRequest = { message = null },
-            confirmButton = { TextButton(onClick = { message = null }) { Text("知道了") } },
+            confirmButton = { TextButton(onClick = { message = null }) { Text(stringResource(AuralisR.string.got_it)) } },
             text = { Text(it) },
         )
     }
@@ -473,6 +477,7 @@ private fun ArtistRow(
     onBrowse: (BrowseDestination) -> Unit,
 ) {
     val colors = LocalAuralisTheme.current.colors
+    val context = LocalContext.current
     val repo = graph.catalogRepository
     val scope = rememberCoroutineScope()
     var menuOpen by remember { mutableStateOf(false) }
@@ -505,15 +510,15 @@ private fun ArtistRow(
         )
         Column(Modifier.weight(1f)) {
             Text(artist.name, style = MaterialTheme.typography.titleMedium, color = colors.primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("${artist.albumCount} 张专辑", style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+            Text(stringResource(R.string.library_album_count_format, artist.albumCount), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
         }
         Box {
             IconButton(onClick = { menuOpen = true }) {
-                Icon(Icons.Filled.MoreVert, contentDescription = "艺术家操作", tint = colors.secondaryText)
+                Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.library_artist_actions), tint = colors.secondaryText)
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(
-                    text = { Text("播放全部") },
+                    text = { Text(stringResource(R.string.library_play_all)) },
                     leadingIcon = { Icon(Icons.Filled.PlayArrow, null) },
                     enabled = !busy,
                     onClick = {
@@ -522,23 +527,23 @@ private fun ArtistRow(
                         scope.launch {
                             val tracks = runCatching { repo.artistTracks(artist.globalId) }.getOrDefault(emptyList())
                             busy = false
-                            if (tracks.isEmpty()) message = "该艺术家暂无本地歌曲" else onPlayTracks(tracks, 0)
+                            if (tracks.isEmpty()) message = context.getString(R.string.library_artist_no_local_tracks) else onPlayTracks(tracks, 0)
                         }
                     },
                 )
                 DropdownMenuItem(
-                    text = { Text(if (isFavorite) "取消收藏" else "收藏艺术家") },
+                    text = { Text(if (isFavorite) stringResource(AuralisR.string.unfavorite) else stringResource(R.string.library_favorite_artist)) },
                     leadingIcon = { Icon(if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, null) },
                     onClick = {
                         menuOpen = false
                         scope.launch {
                             runCatching { graph.libraryActions.toggleArtistFavorite(artist) }
-                                .onFailure { message = "收藏操作失败：${it.message}" }
+                                .onFailure { message = context.getString(AuralisR.string.favorite_failed, it.message) }
                         }
                     },
                 )
                 DropdownMenuItem(
-                    text = { Text("下载全部") },
+                    text = { Text(stringResource(R.string.library_download_all)) },
                     leadingIcon = { Icon(Icons.Filled.ArrowDownward, null) },
                     enabled = !busy,
                     onClick = {
@@ -548,11 +553,11 @@ private fun ArtistRow(
                             val tracks = runCatching { repo.artistTracks(artist.globalId) }.getOrDefault(emptyList())
                             busy = false
                             if (tracks.isEmpty()) {
-                                message = "该艺术家暂无本地歌曲"
+                                message = context.getString(R.string.library_artist_no_local_tracks)
                             } else {
                                 runCatching { tracks.forEach { graph.downloadManager.enqueue(it) } }
-                                    .onFailure { message = "下载失败：${it.message}" }
-                                    .onSuccess { message = "已开始下载 ${tracks.size} 首歌曲" }
+                                    .onFailure { message = context.getString(AuralisR.string.download_failed, it.message) }
+                                    .onSuccess { message = context.getString(R.string.library_download_started_format, tracks.size) }
                             }
                         }
                     },
@@ -563,7 +568,7 @@ private fun ArtistRow(
     message?.let {
         AlertDialog(
             onDismissRequest = { message = null },
-            confirmButton = { TextButton(onClick = { message = null }) { Text("知道了") } },
+            confirmButton = { TextButton(onClick = { message = null }) { Text(stringResource(AuralisR.string.got_it)) } },
             text = { Text(it) },
         )
     }
@@ -641,7 +646,7 @@ private fun GenreGrid(
                 }
                 Spacer(Modifier.height(AuralisSpacing.small))
                 Text(genre.name, style = MaterialTheme.typography.titleSmall, color = colors.primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${genre.songCount} 首", style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+                Text(stringResource(AuralisR.string.count_songs, genre.songCount), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
             }
         }
     }

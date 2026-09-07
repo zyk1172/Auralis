@@ -591,7 +591,7 @@ private fun PlaybackControlsArea(
                 onClick = {
                     scope.launch {
                         runCatching { graph.libraryActions.toggleDisliked(track) }
-                            .onFailure { message = context.getString(R.string.player_action_failed, it.message) }
+                            .onFailure { message = context.getString(AuralisR.string.action_failed, it.message) }
                     }
                 },
             ) {
@@ -620,7 +620,7 @@ private fun PlaybackControlsArea(
                 onClick = {
                     scope.launch {
                         runCatching { graph.libraryActions.toggleTrackFavorite(track) }
-                            .onFailure { message = context.getString(R.string.player_favorite_failed, it.message) }
+                            .onFailure { message = context.getString(AuralisR.string.favorite_failed, it.message) }
                     }
                 },
             ) {
@@ -736,13 +736,13 @@ private fun PlaybackControlsArea(
                             },
                         )
                         else -> DropdownMenuItem(
-                            text = { Text(stringResource(R.string.player_download_to_device)) },
+                            text = { Text(stringResource(AuralisR.string.download_to_local)) },
                             leadingIcon = { Icon(Icons.Filled.ArrowDownward, null) },
                             onClick = {
                                 menuOpen = false
                                 scope.launch {
                                     runCatching { graph.downloadManager.enqueue(track) }
-                                        .onFailure { message = context.getString(R.string.player_download_failed, it.message) }
+                                        .onFailure { message = context.getString(AuralisR.string.download_failed, it.message) }
                                 }
                             },
                         )
@@ -829,14 +829,14 @@ private fun PlaybackControlsArea(
             onDismiss = { addToPlaylist = false },
             onAdded = { name ->
                 addToPlaylist = false
-                message = context.getString(R.string.player_added_to_playlist, name)
+                message = context.getString(AuralisR.string.added_to_playlist, name)
             },
         )
     }
     message?.let {
         AlertDialog(
             onDismissRequest = { message = null },
-            confirmButton = { TextButton(onClick = { message = null }) { Text(stringResource(R.string.player_got_it)) } },
+            confirmButton = { TextButton(onClick = { message = null }) { Text(stringResource(AuralisR.string.got_it)) } },
             text = { Text(it) },
         )
     }
@@ -911,28 +911,28 @@ private fun PlayerAddToPlaylistDialog(
                 .onSuccess { working = false; onAdded(name) }
                 .onFailure {
                     working = false
-                    error = context.getString(R.string.player_action_failed, it.message)
+                    error = context.getString(AuralisR.string.action_failed, it.message)
                 }
         }
     }
 
     AlertDialog(
         onDismissRequest = { if (!working) onDismiss() },
-        title = { Text(stringResource(if (createMode) R.string.player_new_playlist_and_add else AuralisR.string.add_to_playlist)) },
+        title = { Text(stringResource(if (createMode) AuralisR.string.new_playlist_and_add else AuralisR.string.add_to_playlist)) },
         text = {
             Column {
                 if (createMode) {
                     OutlinedTextField(
                         value = newName,
                         onValueChange = { newName = it },
-                        label = { Text(stringResource(R.string.player_playlist_name_label)) },
+                        label = { Text(stringResource(AuralisR.string.playlist_name_label)) },
                         singleLine = true,
                     )
                     Spacer(Modifier.height(AuralisSpacing.small))
                     Text(stringResource(R.string.player_new_playlist_hint, track.title), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
                 } else {
                     if (playlists.isEmpty()) {
-                        Text(stringResource(R.string.player_no_playlists_yet), color = colors.secondaryText)
+                        Text(stringResource(AuralisR.string.no_playlists_yet), color = colors.secondaryText)
                     }
                     playlists.forEach { playlist ->
                         Row(
@@ -956,7 +956,7 @@ private fun PlayerAddToPlaylistDialog(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 if (playlist.isReadOnly) {
-                                    Text(stringResource(R.string.player_readonly_playlist_hint), style = MaterialTheme.typography.labelSmall, color = colors.secondaryText)
+                                    Text(stringResource(AuralisR.string.readonly_playlist_hint), style = MaterialTheme.typography.labelSmall, color = colors.secondaryText)
                                 }
                             }
                         }
@@ -973,12 +973,12 @@ private fun PlayerAddToPlaylistDialog(
                         val name = newName.trim()
                         submit(name) {
                             val created = graph.playlistActions.createPlaylist(name, serverId, listOf(track.id.value))
-                                ?: error(context.getString(R.string.player_server_no_new_playlist))
+                                ?: error(context.getString(AuralisR.string.server_no_new_playlist))
                         }
                     },
-                ) { Text(stringResource(if (working) R.string.player_creating else R.string.player_create_and_add)) }
+                ) { Text(stringResource(if (working) AuralisR.string.creating else AuralisR.string.create_and_add)) }
             } else {
-                TextButton(onClick = { createMode = true }) { Text(stringResource(R.string.player_new_playlist)) }
+                TextButton(onClick = { createMode = true }) { Text(stringResource(AuralisR.string.new_playlist)) }
             }
         },
         dismissButton = {

@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- R5f English overlay for feature:library. -->
+<resources>
+    <!-- Top bar and scope segments -->
+    <string name="library_title">Music Library</string>
+    <string name="library_settings_cd">Settings</string>
+    <string name="library_scope_genres">Genres</string>
+    <string name="library_scope_categories">Categories</string>
+    <!-- Loading (LibraryLoadingBox default and per-scope placeholders) -->
+    <string name="library_loading">Loading…</string>
+    <string name="library_loading_albums">Loading albums…</string>
+    <string name="library_loading_artists">Loading artists…</string>
+    <string name="library_loading_tracks">Loading songs…</string>
+    <string name="library_loading_playlists">Loading playlists…</string>
+    <string name="library_loading_favorites">Loading favorites…</string>
+    <string name="library_loading_genres">Loading genres…</string>
+    <string name="library_stats_loading_top_artists">Tallying top artists…</string>
+    <string name="library_stats_loading_top_albums">Tallying top albums…</string>
+    <!-- Generic empty/error titles -->
+    <string name="library_load_failed_title">Unable to Load</string>
+    <string name="library_no_songs_title">No Songs</string>
+    <!-- Per-scope empty states -->
+    <string name="library_empty_albums_title">No Albums Yet</string>
+    <string name="library_empty_albums_help">There are no albums in this library yet. You may need to sync or scan your music library.</string>
+    <string name="library_empty_artists_title">No Artists Yet</string>
+    <string name="library_empty_artists_help">There are no artists in this library yet. You may need to sync or scan your music library.</string>
+    <string name="library_empty_playlists_title">No Playlists Yet</string>
+    <string name="library_empty_playlists_help">After you create a playlist on the server, it will appear here.</string>
+    <string name="library_empty_tracks_title">No Songs in Library</string>
+    <string name="library_empty_tracks_help">After connecting and syncing to a server, all of your songs will be listed here. You can also play a few at random from Home first.</string>
+    <string name="library_empty_favorites_title">No Favorites Yet</string>
+    <string name="library_empty_favorites_help">Tap the heart on the Now Playing screen or in a song menu to favorite, and the song will show up here.</string>
+    <string name="library_empty_genres_title">No Genres Yet</string>
+    <string name="library_empty_genres_help">Genres returned by the server (from tags embedded in your music files) will appear here. After connecting and syncing you can browse by genre.</string>
+    <string name="library_genres_refresh_action">Refresh Genres from Server</string>
+    <string name="library_categories_ai_title">Categories (AI Recommendation Index)</string>
+    <string name="library_categories_ai_empty_title">AI Recommendation Index</string>
+    <string name="library_server_prompt_title">No Server Connected</string>
+    <string name="library_server_prompt_help">Add and sync a music server under Settings → Servers, then browse your library.</string>
+    <!-- Count / subtitle formats -->
+    <string name="library_album_count_format">%1$d albums</string>
+    <string name="library_track_count_format">%1$d songs</string>
+    <string name="library_plays_count_format">%1$d plays</string>
+    <string name="library_playlist_count_format">%1$d playlists</string>
+    <string name="library_download_started_format">Started downloading %1$d songs</string>
+    <string name="library_album_subtitle_format">%1$s · %2$d songs</string>
+    <!-- Album/artist card actions -->
+    <string name="library_album_actions">Album actions</string>
+    <string name="library_artist_actions">Artist actions</string>
+    <string name="library_favorite_album">Favorite Album</string>
+    <string name="library_favorite_artist">Favorite Artist</string>
+    <string name="library_download_album">Download Album</string>
+    <string name="library_download_all">Download All</string>
+    <string name="library_play_all">Play All</string>
+    <string name="library_album_no_local_tracks">This album has no local songs</string>
+    <string name="library_artist_no_local_tracks">This artist has no local songs</string>
+    <!-- Browse-detail destination titles -->
+    <string name="library_dest_most_played">Most Played</string>
+    <string name="library_dest_genre_format">Genre: %1$s</string>
+    <string name="library_dest_recommendation_category">Recommendation Categories</string>
+    <string name="library_dest_random_music">Random Music</string>
+    <string name="library_dest_recently_played">Recently Played</string>
+    <string name="library_dest_recently_added">Recently Added</string>
+    <string name="library_dest_long_unplayed">Not Played in a While</string>
+    <string name="library_dest_favorite_random">Surprise Me from Favorites</string>
+    <string name="library_dest_never_played">Never Played</string>
+    <string name="library_dest_top_artists">Top Artists</string>
+    <string name="library_dest_top_albums">Top Albums</string>
+    <string name="library_dest_downloads">Downloads</string>
+    <string name="library_shuffle_more">Shuffle Again</string>
+    <!-- Browse-detail load errors / empty copy -->
+    <string name="library_detail_not_found_album">Could not find this album</string>
+    <string name="library_detail_not_found_artist">Could not find this artist</string>
+    <string name="library_detail_not_found_playlist">Could not find this playlist</string>
+    <string name="library_detail_playlist_load_failed">Failed to load the playlist. Check your network and try again.</string>
+    <string name="library_load_failed_format">Load failed: %1$s</string>
+    <string name="library_empty_most_played">Songs you play are tallied here by play count.</string>
+    <string name="library_empty_long_unplayed">Played songs first appear under Recently Played. After a while without listening, they come back here.</string>
+    <string name="library_empty_never_played">Until you have some play history, this stays empty.</string>
+    <string name="library_empty_favorite_random">Favorited songs will show up here at random.</string>
+    <string name="library_empty_downloads">Songs downloaded to this device will appear here.</string>
+    <string name="library_empty_genre">There are no songs in this genre yet.</string>
+    <string name="library_empty_random">There are no songs in Random Music yet.</string>
+    <string name="library_empty_playlist_detail">This playlist has no songs on the server yet.</string>
+    <string name="library_empty_misc">There are no songs in this list yet.</string>
+    <!-- Playlist detail: download confirmation and remove-from-playlist -->
+    <string name="library_download_action">Download</string>
+    <string name="library_confirm_download_title">Download %1$d songs?</string>
+    <string name="library_confirm_download_text">Estimated at about %1$d MB. Songs can be played offline once downloaded; already-downloaded songs are skipped automatically.</string>
+    <string name="library_start_download">Start Download</string>
+    <string name="library_remove_from_playlist">Remove from Playlist</string>
+    <string name="library_remove_confirm_title">Remove this song from the playlist?</string>
+    <string name="library_remove_confirm_text">The song will be removed from the playlist. The song file will not be deleted.</string>
+    <string name="library_remove_failed_format">Remove failed: %1$s</string>
+    <string name="library_removing">Removing…</string>
+    <string name="library_remove">Remove</string>
+    <!-- Playlist overview (sorting and deletion) -->
+    <string name="library_sort_cd">Sort playlists</string>
+    <string name="library_sort_name_asc">Name (A to Z)</string>
+    <string name="library_sort_name_desc">Name (Z to A)</string>
+    <string name="library_sort_recently_modified">Recently Modified</string>
+    <string name="library_delete_playlist">Delete Playlist</string>
+    <string name="library_delete_playlist_confirm_title">Delete playlist “%1$s”?</string>
+    <string name="library_delete_playlist_confirm_text">The playlist will be removed from both the music server and the local directory. Song files will not be deleted.</string>
+    <string name="library_delete_playlist_question">Delete playlist?</string>
+    <string name="library_delete_playlist_irreversible">The playlist on the server will also be deleted. This action cannot be undone.</string>
+    <string name="library_delete_playlist_failed_format">Could not delete the playlist: %1$s</string>
+    <!-- Playlist management (rename / duplicate / dedupe) -->
+    <string name="library_playlist_actions_cd">Playlist actions</string>
+    <string name="library_rename">Rename</string>
+    <string name="library_rename_failed_format">Rename failed: %1$s</string>
+    <string name="library_rename_playlist_title">Rename Playlist</string>
+    <string name="library_rename_sync_hint">Changes will be synced to the server.</string>
+    <string name="library_copying">Copying…</string>
+    <string name="library_duplicate_playlist">Duplicate Playlist</string>
+    <string name="library_duplicate_failed_format">Duplicate failed: %1$s</string>
+    <string name="library_duplicate_server_failed">Duplicate failed: the server returned no new playlist</string>
+    <string name="library_duplicated_format">Duplicated as “%1$s”</string>
+    <string name="library_dedupe_songs">Remove Duplicate Songs</string>
+    <string name="library_dedupe_removed">Removed duplicate songs</string>
+    <string name="library_dedupe_none">No duplicate songs</string>
+    <string name="library_dedupe_failed_format">Failed to remove duplicates: %1$s</string>
+    <!-- Top lists empty states / tally errors -->
+    <string name="library_empty_top_artists_title">No Top Artists Yet</string>
+    <string name="library_empty_top_artists_help">Songs you play are tallied here by artist.</string>
+    <string name="library_empty_top_albums_title">No Top Albums Yet</string>
+    <string name="library_empty_top_albums_help">Songs you play are tallied here by album.</string>
+    <string name="library_top_artists_no_server">No server connected — cannot tally top artists</string>
+    <string name="library_top_albums_no_server">No server connected — cannot tally top albums</string>
+    <string name="library_stats_failed_format">Tally failed: %1$s</string>
+    <!-- Track row badges and actions -->
+    <string name="library_downloaded">Downloaded</string>
+    <string name="library_favorited">Favorited</string>
+    <string name="library_track_actions">Track actions</string>
+    <string name="library_play_now">Play Now</string>
+    <string name="library_play_next">Play Next</string>
+    <string name="library_add_to_queue">Add to Queue</string>
+    <string name="library_delete_local_cache">Delete Local Cache</string>
+    <string name="library_cancel_download">Cancel Download</string>
+    <!-- Batch add-to-playlist dialog (library-specific count hint) -->
+    <string name="library_add_count_hint">%1$d songs will be added to the new playlist.</string>
+</resources>

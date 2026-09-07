@@ -38,4 +38,19 @@
     <string name="save">保存</string>
     <string name="test_connection">测试连接</string>
     <string name="count_songs">%1$d 首</string>
+    <!-- R5f：歌单加入对话框/通用消息簇（player↔library 逐字共享；从 feature:player 提升） -->
+    <string name="new_playlist_and_add">新建歌单并加入</string>
+    <string name="playlist_name_label">歌单名称</string>
+    <string name="no_playlists_yet">还没有歌单，可以先新建一个。</string>
+    <string name="readonly_playlist_hint">只读歌单，不能添加</string>
+    <string name="server_no_new_playlist">服务器未返回新歌单</string>
+    <string name="creating">创建中…</string>
+    <string name="create_and_add">创建并加入</string>
+    <string name="new_playlist">新建歌单</string>
+    <string name="added_to_playlist">已加入歌单「%1$s」</string>
+    <string name="got_it">知道了</string>
+    <string name="download_to_local">下载到本地</string>
+    <string name="action_failed">操作失败：%1$s</string>
+    <string name="favorite_failed">收藏操作失败：%1$s</string>
+    <string name="download_failed">下载失败：%1$s</string>
 </resources>

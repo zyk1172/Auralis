@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- R5f：feature:library 独有文案（默认=中文；英文见 values-en）。key 一律 library_ 前缀。
+     跨模块通用词（返回/取消/删除/重试/歌曲/专辑/艺术家/歌单/收藏/添加到歌单/知道了/
+     下载到本地/操作失败/收藏操作失败/下载失败/新建歌单并加入/歌单名称/创建中…/创建并加入/
+     新建歌单/只读歌单提示/服务器未返回新歌单 等）放 core:designsystem 共享层，经 AuralisR 引用；
+     此处只放资料库各 scope/浏览详情/歌单管理/常听列表等模块特有词。 -->
+<resources>
+    <!-- 顶栏与 scope 分段 -->
+    <string name="library_title">音乐库</string>
+    <string name="library_settings_cd">设置</string>
+    <string name="library_scope_genres">流派</string>
+    <string name="library_scope_categories">分类</string>
+    <!-- 加载中（LibraryLoadingBox 默认与各级占位） -->
+    <string name="library_loading">正在加载…</string>
+    <string name="library_loading_albums">正在加载专辑…</string>
+    <string name="library_loading_artists">正在加载艺术家…</string>
+    <string name="library_loading_tracks">正在加载歌曲…</string>
+    <string name="library_loading_playlists">正在加载歌单…</string>
+    <string name="library_loading_favorites">正在加载收藏…</string>
+    <string name="library_loading_genres">正在加载流派…</string>
+    <string name="library_stats_loading_top_artists">正在统计常听艺术家…</string>
+    <string name="library_stats_loading_top_albums">正在统计常听专辑…</string>
+    <!-- 通用空态/错误标题 -->
+    <string name="library_load_failed_title">无法加载</string>
+    <string name="library_no_songs_title">暂无歌曲</string>
+    <!-- 各 scope 空态 -->
+    <string name="library_empty_albums_title">还没有专辑</string>
+    <string name="library_empty_albums_help">当前资料库暂无专辑，可能需要同步或扫描音乐库。</string>
+    <string name="library_empty_artists_title">还没有艺术家</string>
+    <string name="library_empty_artists_help">当前资料库暂无艺术家，可能需要同步或扫描音乐库。</string>
+    <string name="library_empty_playlists_title">还没有歌单</string>
+    <string name="library_empty_playlists_help">在服务器上创建歌单后，这里会列出所有歌单。</string>
+    <string name="library_empty_tracks_title">资料库还没有歌曲</string>
+    <string name="library_empty_tracks_help">连接服务器并同步后，这里会列出全部歌曲；也可以从「首页」先随机播放几首。</string>
+    <string name="library_empty_favorites_title">还没有收藏</string>
+    <string name="library_empty_favorites_help">在播放页或歌曲菜单中点心形收藏后，会出现在这里。</string>
+    <string name="library_empty_genres_title">还没有流派</string>
+    <string name="library_empty_genres_help">服务器返回的流派（来自音乐文件内嵌标签）会显示在这里；连接并同步后即可按流派浏览。</string>
+    <string name="library_genres_refresh_action">从服务器刷新流派</string>
+    <string name="library_categories_ai_title">分类（AI 推荐索引）</string>
+    <string name="library_categories_ai_empty_title">AI 推荐索引</string>
+    <string name="library_server_prompt_title">还没有连接服务器</string>
+    <string name="library_server_prompt_help">请在「设置 → 服务器」中添加并同步音乐服务器后浏览资料库。</string>
+    <!-- 计数/副标题格式 -->
+    <string name="library_album_count_format">%1$d 张专辑</string>
+    <string name="library_track_count_format">%1$d 首歌曲</string>
+    <string name="library_plays_count_format">%1$d 次播放</string>
+    <string name="library_playlist_count_format">%1$d 个歌单</string>
+    <string name="library_download_started_format">已开始下载 %1$d 首歌曲</string>
+    <string name="library_album_subtitle_format">%1$s · %2$d 首</string>
+    <!-- 专辑/艺术家卡动作 -->
+    <string name="library_album_actions">专辑操作</string>
+    <string name="library_artist_actions">艺术家操作</string>
+    <string name="library_favorite_album">收藏专辑</string>
+    <string name="library_favorite_artist">收藏艺术家</string>
+    <string name="library_download_album">下载专辑</string>
+    <string name="library_download_all">下载全部</string>
+    <string name="library_play_all">播放全部</string>
+    <string name="library_album_no_local_tracks">这张专辑暂无本地歌曲</string>
+    <string name="library_artist_no_local_tracks">该艺术家暂无本地歌曲</string>
+    <!-- 浏览详情目的地标题 -->
+    <string name="library_dest_most_played">最常听</string>
+    <string name="library_dest_genre_format">流派：%1$s</string>
+    <string name="library_dest_recommendation_category">推荐分类</string>
+    <string name="library_dest_random_music">随机音乐</string>
+    <string name="library_dest_recently_played">最近播放</string>
+    <string name="library_dest_recently_added">最近添加</string>
+    <string name="library_dest_long_unplayed">很久没听</string>
+    <string name="library_dest_favorite_random">收藏里随便听</string>
+    <string name="library_dest_never_played">从未播放</string>
+    <string name="library_dest_top_artists">常听艺术家</string>
+    <string name="library_dest_top_albums">常听专辑</string>
+    <string name="library_dest_downloads">下载</string>
+    <string name="library_shuffle_more">换一批</string>
+    <!-- 浏览详情加载错误/空态文案 -->
+    <string name="library_detail_not_found_album">找不到这张专辑</string>
+    <string name="library_detail_not_found_artist">找不到这位艺术家</string>
+    <string name="library_detail_not_found_playlist">找不到这个歌单</string>
+    <string name="library_detail_playlist_load_failed">歌单内容加载失败，请检查网络后重试</string>
+    <string name="library_load_failed_format">加载失败：%1$s</string>
+    <string name="library_empty_most_played">播放过的歌曲会按次数统计在这里。</string>
+    <string name="library_empty_long_unplayed">播放过的歌曲会先出现在「最近播放」，过一段时间没听就会回到这里。</string>
+    <string name="library_empty_never_played">还没有播放记录时，这里暂时为空。</string>
+    <string name="library_empty_favorite_random">收藏里的歌曲会随机出现在这里。</string>
+    <string name="library_empty_downloads">下载到本地的歌曲会出现在这里。</string>
+    <string name="library_empty_genre">这个流派里暂时没有歌曲。</string>
+    <string name="library_empty_random">随机音乐里暂时没有歌曲。</string>
+    <string name="library_empty_playlist_detail">服务器上这个歌单里还没有添加歌曲。</string>
+    <string name="library_empty_misc">这个清单里暂时没有歌曲。</string>
+    <!-- 歌单详情：下载确认与从歌单移除 -->
+    <string name="library_download_action">下载</string>
+    <string name="library_confirm_download_title">下载 %1$d 首歌曲？</string>
+    <string name="library_confirm_download_text">预计约 %1$d MB，下载到本地后可离线播放。已下载的歌曲会自动跳过。</string>
+    <string name="library_start_download">开始下载</string>
+    <string name="library_remove_from_playlist">从歌单移除</string>
+    <string name="library_remove_confirm_title">从歌单移除这首歌？</string>
+    <string name="library_remove_confirm_text">歌曲会从歌单中移除，歌曲文件不会被删除。</string>
+    <string name="library_remove_failed_format">移除失败：%1$s</string>
+    <string name="library_removing">移除中…</string>
+    <string name="library_remove">移除</string>
+    <!-- 歌单总览（排序与删除） -->
+    <string name="library_sort_cd">歌单排序</string>
+    <string name="library_sort_name_asc">名称（A 到 Z）</string>
+    <string name="library_sort_name_desc">名称（Z 到 A）</string>
+    <string name="library_sort_recently_modified">最近修改</string>
+    <string name="library_delete_playlist">删除歌单</string>
+    <string name="library_delete_playlist_confirm_title">删除歌单「%1$s」？</string>
+    <string name="library_delete_playlist_confirm_text">该歌单会同时从音乐服务器和本地目录删除，歌曲文件不会被删除。</string>
+    <string name="library_delete_playlist_question">删除歌单？</string>
+    <string name="library_delete_playlist_irreversible">服务器上的歌单也会被删除，此操作不可撤销。</string>
+    <string name="library_delete_playlist_failed_format">无法删除歌单：%1$s</string>
+    <!-- 歌单管理（重命名/复制/去重） -->
+    <string name="library_playlist_actions_cd">歌单操作</string>
+    <string name="library_rename">重命名</string>
+    <string name="library_rename_failed_format">重命名失败：%1$s</string>
+    <string name="library_rename_playlist_title">重命名歌单</string>
+    <string name="library_rename_sync_hint">修改将同步到服务器。</string>
+    <string name="library_copying">复制中…</string>
+    <string name="library_duplicate_playlist">复制歌单</string>
+    <string name="library_duplicate_failed_format">复制失败：%1$s</string>
+    <string name="library_duplicate_server_failed">复制失败：服务器未返回新歌单</string>
+    <string name="library_duplicated_format">已复制为「%1$s」</string>
+    <string name="library_dedupe_songs">去重歌曲</string>
+    <string name="library_dedupe_removed">已移除重复歌曲</string>
+    <string name="library_dedupe_none">没有重复歌曲</string>
+    <string name="library_dedupe_failed_format">去重失败：%1$s</string>
+    <!-- 常听列表空态/统计错误 -->
+    <string name="library_empty_top_artists_title">暂无常听艺术家</string>
+    <string name="library_empty_top_artists_help">播放过的歌曲会按艺术家统计在这里。</string>
+    <string name="library_empty_top_albums_title">暂无常听专辑</string>
+    <string name="library_empty_top_albums_help">播放过的歌曲会按专辑统计在这里。</string>
+    <string name="library_top_artists_no_server">还没有连接服务器，无法统计常听艺术家</string>
+    <string name="library_top_albums_no_server">还没有连接服务器，无法统计常听专辑</string>
+    <string name="library_stats_failed_format">统计失败：%1$s</string>
+    <!-- 曲目行徽标与动作 -->
+    <string name="library_downloaded">已下载</string>
+    <string name="library_favorited">已收藏</string>
+    <string name="library_track_actions">歌曲操作</string>
+    <string name="library_play_now">立即播放</string>
+    <string name="library_play_next">下一首播放</string>
+    <string name="library_add_to_queue">加入队列</string>
+    <string name="library_delete_local_cache">删除本地缓存</string>
+    <string name="library_cancel_download">取消下载</string>
+    <!-- 批量加入歌单对话框（library 特有计数提示） -->
+    <string name="library_add_count_hint">共 %1$d 首歌曲将加入新歌单。</string>
+</resources>

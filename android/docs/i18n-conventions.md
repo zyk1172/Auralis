@@ -47,6 +47,33 @@ retry/add_to_playlist）/ `feature:home`（44 处：模块标题 `HomeModuleId.t
 move_up/move_down/add_server，player/server 同义本地 key 一并归一化）/ `feature:settings`（97 处：
 根页/播放与音质/数据与备份/主题/AI 助手设置页，协程内提示经 LocalContext context.getString；
 保存/测试连接/服务器/歌曲计数提升共享 save/test_connection/servers/count_songs，server
-同义本地 key server_save/server_test_action/server_title、home 的 home_count_tracks 一并归一化）。
-待迁移（按量）：library 204 / assistant 245（其中大量为工具/会话文案属
-边界，实际 UI 面更小）/ app-mobile 31 / app-tv 11 / designsystem 12（共享层按需进 core:designsystem）。
+同义本地 key server_save/server_test_action/server_title、home 的 home_count_tracks 一并归一化）/
+`feature:library`（204 处：7 scope 分段 `LibraryScope.titleRes()`、浏览详情 `destinationTitle` 全量资源化、
+各 scope 加载/空态/服务器未连提示、专辑卡/艺术家行菜单动作与消息、曲目行徽标与菜单、
+歌单总览排序/删除确认、歌单管理重命名/复制/去重、常听艺术家/专辑、下载确认与从歌单移除二次确认。
+`loadDetail`/`PlaylistAddDialog`/`PlaylistManageMenu`/`TopArtist*` 等非 Composable 场景经
+`LocalContext`+`context.getString`；新建/加入歌单对话框簇 14 key 与播放页共享提升共享层
+new_playlist_and_add/playlist_name_label/no_playlists_yet/readonly_playlist_hint/server_no_new_playlist/
+creating/create_and_add/new_playlist/added_to_playlist/got_it/download_to_local/action_failed/
+favorite_failed/download_failed，feature:player 同义 player_* key 一并删除归一化）。
+待迁移（按量）：assistant 245（其中大量为工具/会话文案属边界，实际 UI 面更小）/
+app-mobile 31 / app-tv 11 / designsystem 12（共享层按需进 core:designsystem）。
+
+## 归一化待办（跨模块同值 key，建议全部模块迁移完后一次收口到共享层）
+
+| 中文值 | 现 key（重复方） | 建议共享 key |
+|---|---|---|
+| 最常听 | home:home_quick_most_played / library:library_dest_most_played | most_played |
+| 最近播放 | home:home_module_recently_played / library:library_dest_recently_played | recently_played |
+| 最近添加 | home:home_module_recently_added / library:library_dest_recently_added | recently_added |
+| 很久没听 | home:home_module_long_unplayed / library:library_dest_long_unplayed | long_unplayed |
+| 收藏里随便听 | home:home_module_favorite_random / library:library_dest_favorite_random | favorite_random |
+| 从未播放 | home:home_module_never_played / library:library_dest_never_played | never_played |
+| 常听艺术家 | home:home_module_top_artists / library:library_dest_top_artists | top_artists |
+| 常听专辑 | home:home_module_top_albums / library:library_dest_top_albums | top_albums |
+| 随机音乐 | home:home_module_random_songs / library:library_dest_random_music | random_music |
+| 下载 | home:home_module_downloads / library:library_dest_downloads、library_download_action | downloads |
+| 换一批 | home:home_reshuffle / library:library_shuffle_more | shuffle_more |
+| %1$d 张专辑 | home:home_count_albums / library:library_album_count_format | album_count_format |
+| 设置 | settings:settings_title / library:library_settings_cd | settings |
+| 完成 | server:server_stage_done / designsystem:done（历史遗留） | done |

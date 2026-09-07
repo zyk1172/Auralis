@@ -1,5 +1,6 @@
 package com.auralis.feature.library
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -37,6 +39,7 @@ import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.designsystem.R as AuralisR
 import com.auralis.core.domain.DownloadRecord
 import com.auralis.core.domain.DownloadStatus
 import com.auralis.core.domain.ServerId
@@ -53,14 +56,20 @@ fun formatDurationSeconds(seconds: Double): String {
  * Categories（AI 推荐索引分类）在 Android 第一版不提供数据源（见
  * [com.auralis.core.domain.Categories]），scope 保留但显示能力说明，不拿假数据。
  */
-enum class LibraryScope(val titleZh: String) {
-    Albums("专辑"),
-    Tracks("歌曲"),
-    Artists("艺术家"),
-    Playlists("歌单"),
-    Favorites("收藏"),
-    Genres("流派"),
-    Categories("分类"),
+enum class LibraryScope {
+    Albums, Tracks, Artists, Playlists, Favorites, Genres, Categories;
+
+    /** 分段标题资源。专辑/歌曲/艺术家/歌单/收藏 与共享层同词 → 复用 AuralisR；流派/分类为模块独有。 */
+    @StringRes
+    fun titleRes(): Int = when (this) {
+        Albums -> AuralisR.string.album
+        Tracks -> AuralisR.string.song
+        Artists -> AuralisR.string.artist
+        Playlists -> AuralisR.string.playlist
+        Favorites -> AuralisR.string.favorite
+        Genres -> R.string.library_scope_genres
+        Categories -> R.string.library_scope_categories
+    }
 }
 
 fun LibraryScope.icon(): ImageVector = when (this) {
@@ -96,15 +105,15 @@ fun rememberDownloadRecord(graph: AuralisGraph, track: Track): DownloadRecord? {
     return record
 }
 
-/** 加载中占位（资料库各级内容共用）。 */
+/** 加载中占位（资料库各级内容共用）；message == null 用默认「正在加载…」。 */
 @Composable
-fun LibraryLoadingBox(message: String = "正在加载…", modifier: Modifier = Modifier) {
+fun LibraryLoadingBox(message: String? = null, modifier: Modifier = Modifier) {
     val colors = LocalAuralisTheme.current.colors
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             androidx.compose.material3.CircularProgressIndicator(color = colors.accent)
             Text(
-                message,
+                message ?: stringResource(R.string.library_loading),
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.secondaryText,
                 modifier = Modifier.padding(top = AuralisSpacing.medium),

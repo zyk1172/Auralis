@@ -46,14 +46,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import android.content.Context
+import androidx.annotation.StringRes
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.AuralisChrome
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.designsystem.R as AuralisR
 import com.auralis.core.domain.Album
 import com.auralis.core.domain.Artist
 import com.auralis.core.domain.BrowseDestination
@@ -113,7 +118,7 @@ fun BrowseDetailScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = popOrBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = colors.primaryText)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(AuralisR.string.back), tint = colors.primaryText)
             }
             Text(
                 titleOverride ?: destinationTitle(current),
@@ -125,7 +130,7 @@ fun BrowseDetailScreen(
             )
             when (current) {
                 is BrowseDestination.Random, is BrowseDestination.FavoriteRandom -> IconButton(onClick = { detailReloadKey += 1 }) {
-                    Icon(Icons.Filled.Refresh, contentDescription = "换一批", tint = colors.accent)
+                    Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.library_shuffle_more), tint = colors.accent)
                 }
                 is BrowseDestination.Playlist -> PlaylistManageMenu(
                     graph,
@@ -159,24 +164,25 @@ fun BrowseDetailScreen(
 }
 
 /** 分派标题（对齐 Swift `BrowseDetailSheet.title`）。 */
+@Composable
 internal fun destinationTitle(destination: BrowseDestination): String = when (destination) {
-    is BrowseDestination.Album -> "专辑"
-    is BrowseDestination.Artist -> "艺术家"
-    is BrowseDestination.Playlist -> "歌单"
-    BrowseDestination.Playlists -> "歌单"
-    BrowseDestination.Favorites -> "收藏"
-    BrowseDestination.MostPlayed -> "最常听"
-    is BrowseDestination.Genre -> "流派：${destination.name}"
-    is BrowseDestination.RecommendationCategory -> "推荐分类"
-    BrowseDestination.Random -> "随机音乐"
-    BrowseDestination.RecentlyPlayed -> "最近播放"
-    BrowseDestination.RecentlyAdded -> "最近添加"
-    BrowseDestination.LongUnplayed -> "很久没听"
-    BrowseDestination.FavoriteRandom -> "收藏里随便听"
-    BrowseDestination.NeverPlayed -> "从未播放"
-    BrowseDestination.TopArtists -> "常听艺术家"
-    BrowseDestination.TopAlbums -> "常听专辑"
-    BrowseDestination.Downloads -> "下载"
+    is BrowseDestination.Album -> stringResource(AuralisR.string.album)
+    is BrowseDestination.Artist -> stringResource(AuralisR.string.artist)
+    is BrowseDestination.Playlist -> stringResource(AuralisR.string.playlist)
+    BrowseDestination.Playlists -> stringResource(AuralisR.string.playlist)
+    BrowseDestination.Favorites -> stringResource(AuralisR.string.favorite)
+    BrowseDestination.MostPlayed -> stringResource(R.string.library_dest_most_played)
+    is BrowseDestination.Genre -> stringResource(R.string.library_dest_genre_format, destination.name)
+    is BrowseDestination.RecommendationCategory -> stringResource(R.string.library_dest_recommendation_category)
+    BrowseDestination.Random -> stringResource(R.string.library_dest_random_music)
+    BrowseDestination.RecentlyPlayed -> stringResource(R.string.library_dest_recently_played)
+    BrowseDestination.RecentlyAdded -> stringResource(R.string.library_dest_recently_added)
+    BrowseDestination.LongUnplayed -> stringResource(R.string.library_dest_long_unplayed)
+    BrowseDestination.FavoriteRandom -> stringResource(R.string.library_dest_favorite_random)
+    BrowseDestination.NeverPlayed -> stringResource(R.string.library_dest_never_played)
+    BrowseDestination.TopArtists -> stringResource(R.string.library_dest_top_artists)
+    BrowseDestination.TopAlbums -> stringResource(R.string.library_dest_top_albums)
+    BrowseDestination.Downloads -> stringResource(R.string.library_dest_downloads)
 }
 
 // ================================================================ 通用列表内容
@@ -193,7 +199,7 @@ private sealed interface DetailLoad {
 }
 
 /** 按目的地加载真实数据（本地目录；Playlist 额外先服务器刷新详情）。 */
-private suspend fun loadDetail(graph: AuralisGraph, destination: BrowseDestination): DetailLoad {
+private suspend fun loadDetail(context: Context, graph: AuralisGraph, destination: BrowseDestination): DetailLoad {
     val repo = graph.catalogRepository
     // 目的地未显式带服务器时，落到当前激活服务器（多服务器隔离：绝不跨服务器合并）。
     val active = graph.preferences.activeServerIdFlow.first()?.let { ServerId(it) }
@@ -201,27 +207,27 @@ private suspend fun loadDetail(graph: AuralisGraph, destination: BrowseDestinati
     return try {
         when (destination) {
             is BrowseDestination.Album -> {
-                val album = repo.album(destination.albumId) ?: return DetailLoad.Error("找不到这张专辑")
+                val album = repo.album(destination.albumId) ?: return DetailLoad.Error(context.getString(R.string.library_detail_not_found_album))
                 DetailLoad.Ready(
                     tracks = repo.albumTracks(destination.albumId),
                     headerArtworkKey = album.artworkKey,
                     headerTitle = album.title,
-                    headerSubtitle = "${album.artistName} · ${album.songCount ?: 0} 首",
+                    headerSubtitle = context.getString(R.string.library_album_subtitle_format, album.artistName, album.songCount ?: 0),
                 )
             }
             is BrowseDestination.Artist -> {
-                val artist = repo.artist(destination.artistId) ?: return DetailLoad.Error("找不到这位艺术家")
+                val artist = repo.artist(destination.artistId) ?: return DetailLoad.Error(context.getString(R.string.library_detail_not_found_artist))
                 val tracks = repo.artistTracks(destination.artistId)
                 DetailLoad.Ready(
                     tracks = tracks,
                     headerArtworkKey = artist.artworkKey,
                     headerTitle = artist.name,
-                    headerSubtitle = "${tracks.size} 首歌曲",
+                    headerSubtitle = context.getString(R.string.library_track_count_format, tracks.size),
                 )
             }
             is BrowseDestination.Playlist -> {
                 val local = repo.playlist(destination.playlistId)
-                    ?: return DetailLoad.Error("找不到这个歌单")
+                    ?: return DetailLoad.Error(context.getString(R.string.library_detail_not_found_playlist))
                 val remote = try {
                     graph.playlistActions.refreshPlaylist(local)
                 } catch (t: Throwable) {
@@ -230,12 +236,12 @@ private suspend fun loadDetail(graph: AuralisGraph, destination: BrowseDestinati
                 val refreshed = remote ?: local
                 val tracks = repo.playlistTracks(refreshed.globalId)
                 if (tracks.isEmpty() && remote == null) {
-                    DetailLoad.Error("歌单内容加载失败，请检查网络后重试")
+                    DetailLoad.Error(context.getString(R.string.library_detail_playlist_load_failed))
                 } else {
                     DetailLoad.Ready(
                         tracks = tracks,
                         headerTitle = refreshed.name,
-                        headerSubtitle = refreshed.comment ?: "${tracks.size} 首歌曲",
+                        headerSubtitle = refreshed.comment ?: context.getString(R.string.library_track_count_format, tracks.size),
                     )
                 }
             }
@@ -260,7 +266,7 @@ private suspend fun loadDetail(graph: AuralisGraph, destination: BrowseDestinati
             -> DetailLoad.Ready(emptyList())
         }
     } catch (t: Throwable) {
-        DetailLoad.Error("加载失败：${t.message}")
+        DetailLoad.Error(context.getString(R.string.library_load_failed_format, t.message))
     }
 }
 
@@ -283,12 +289,13 @@ private fun DetailTrackContent(
     onOpenNested: (BrowseDestination) -> Unit,
 ) {
     val colors = LocalAuralisTheme.current.colors
+    val context = LocalContext.current
     var load by remember(destination) { mutableStateOf<DetailLoad>(DetailLoad.Loading) }
     var localReload by remember { mutableStateOf(0) }
     val effectiveReload = reloadKey + localReload
     LaunchedEffect(destination, effectiveReload) {
         load = DetailLoad.Loading
-        val result = loadDetail(graph, destination)
+        val result = loadDetail(context, graph, destination)
         load = result
         if (result is DetailLoad.Ready && result.headerTitle != null) {
             onTitleReady(result.headerTitle)
@@ -297,18 +304,18 @@ private fun DetailTrackContent(
     val serverId = rememberActiveServerId(graph)
 
     when (val state = load) {
-        DetailLoad.Loading -> LibraryLoadingBox("正在加载…")
+        DetailLoad.Loading -> LibraryLoadingBox()
         is DetailLoad.Error -> LibraryEmptyState(
-            "无法加载",
+            stringResource(R.string.library_load_failed_title),
             state.message,
-            actionLabel = "重试",
+            actionLabel = stringResource(AuralisR.string.retry),
             onAction = { localReload += 1 },
         )
         is DetailLoad.Ready -> when {
             // AI 推荐索引：第一版未迁移，展示能力说明（不伪造数据、不给无意义重试）。
             destination is BrowseDestination.RecommendationCategory ->
-                LibraryEmptyState("AI 推荐索引", emptyMessage(destination))
-            state.tracks.isEmpty() -> LibraryEmptyState("暂无歌曲", emptyMessage(destination))
+                LibraryEmptyState(stringResource(R.string.library_categories_ai_empty_title), emptyMessage(destination))
+            state.tracks.isEmpty() -> LibraryEmptyState(stringResource(R.string.library_no_songs_title), emptyMessage(destination))
             else -> TrackListWithHeader(
                 graph = graph,
                 serverId = serverId ?: destination.serverIdOf(),
@@ -330,17 +337,17 @@ private fun DetailTrackContent(
 
 @Composable
 private fun emptyMessage(destination: BrowseDestination): String = when (destination) {
-    BrowseDestination.Favorites -> "在播放页或歌曲菜单中点心形收藏后，会出现在这里。"
-    BrowseDestination.MostPlayed -> "播放过的歌曲会按次数统计在这里。"
-    BrowseDestination.LongUnplayed -> "播放过的歌曲会先出现在「最近播放」，过一段时间没听就会回到这里。"
-    BrowseDestination.NeverPlayed -> "还没有播放记录时，这里暂时为空。"
-    BrowseDestination.FavoriteRandom -> "收藏里的歌曲会随机出现在这里。"
-    BrowseDestination.Downloads -> "下载到本地的歌曲会出现在这里。"
-    is BrowseDestination.Genre -> "这个流派里暂时没有歌曲。"
-    BrowseDestination.Random -> "随机音乐里暂时没有歌曲。"
-    is BrowseDestination.Playlist -> "服务器上这个歌单里还没有添加歌曲。"
+    BrowseDestination.Favorites -> stringResource(R.string.library_empty_favorites_help)
+    BrowseDestination.MostPlayed -> stringResource(R.string.library_empty_most_played)
+    BrowseDestination.LongUnplayed -> stringResource(R.string.library_empty_long_unplayed)
+    BrowseDestination.NeverPlayed -> stringResource(R.string.library_empty_never_played)
+    BrowseDestination.FavoriteRandom -> stringResource(R.string.library_empty_favorite_random)
+    BrowseDestination.Downloads -> stringResource(R.string.library_empty_downloads)
+    is BrowseDestination.Genre -> stringResource(R.string.library_empty_genre)
+    BrowseDestination.Random -> stringResource(R.string.library_empty_random)
+    is BrowseDestination.Playlist -> stringResource(R.string.library_empty_playlist_detail)
     is BrowseDestination.RecommendationCategory -> com.auralis.core.domain.Categories.NOT_PORTED_MESSAGE
-    else -> "这个清单里暂时没有歌曲。"
+    else -> stringResource(R.string.library_empty_misc)
 }
 
 /** 头图 + 标题/副标题 + 播放全部 + 下载（确认弹窗）+ 曲目清单。 */
@@ -357,6 +364,7 @@ private fun TrackListWithHeader(
     onRemovedFromPlaylist: (() -> Unit)?,
 ) {
     val colors = LocalAuralisTheme.current.colors
+    val context = LocalContext.current
     var confirmingDownload by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var message by remember { mutableStateOf<String?>(null) }
@@ -403,7 +411,7 @@ private fun TrackListWithHeader(
                         ) {
                             Icon(Icons.Filled.PlayArrow, null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(AuralisSpacing.small))
-                            Text("播放全部")
+                            Text(stringResource(R.string.library_play_all))
                         }
                         OutlinedButton(
                             onClick = { confirmingDownload = true },
@@ -412,7 +420,7 @@ private fun TrackListWithHeader(
                         ) {
                             Icon(Icons.Filled.ArrowDownward, null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(AuralisSpacing.small))
-                            Text("下载")
+                            Text(stringResource(R.string.library_download_action))
                         }
                     }
                 }
@@ -420,7 +428,7 @@ private fun TrackListWithHeader(
         }
         item(key = "section") {
             Text(
-                "歌曲",
+                stringResource(AuralisR.string.song),
                 style = MaterialTheme.typography.labelLarge,
                 color = colors.secondaryText,
                 modifier = Modifier.padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.small),
@@ -439,7 +447,7 @@ private fun TrackListWithHeader(
                     { close ->
                         HorizontalDivider(color = colors.separator)
                         DropdownMenuItem(
-                            text = { Text("从歌单移除") },
+                            text = { Text(stringResource(R.string.library_remove_from_playlist)) },
                             leadingIcon = { Icon(Icons.Filled.Delete, null) },
                             enabled = removingIndex == null && !removingBusy,
                             onClick = {
@@ -460,8 +468,8 @@ private fun TrackListWithHeader(
         removingIndex?.let { index ->
             AlertDialog(
                 onDismissRequest = { if (!removingBusy) removingIndex = null },
-                title = { Text("从歌单移除这首歌？") },
-                text = { Text("歌曲会从歌单中移除，歌曲文件不会被删除。") },
+                title = { Text(stringResource(R.string.library_remove_confirm_title)) },
+                text = { Text(stringResource(R.string.library_remove_confirm_text)) },
                 confirmButton = {
                     TextButton(
                         enabled = !removingBusy,
@@ -472,17 +480,17 @@ private fun TrackListWithHeader(
                                 removingBusy = true
                                 runCatching {
                                     val p = graph.catalogRepository.playlist(playlistDestination.playlistId)
-                                    if (p == null) error("找不到歌单") else graph.playlistActions.removeAt(p, listOf(targetIndex))
+                                    if (p == null) error(context.getString(R.string.library_detail_not_found_playlist)) else graph.playlistActions.removeAt(p, listOf(targetIndex))
                                 }
                                     .onSuccess { onRemovedFromPlaylist?.invoke() }
-                                    .onFailure { message = "移除失败：${it.message}" }
+                                    .onFailure { message = context.getString(R.string.library_remove_failed_format, it.message) }
                                 removingBusy = false
                             }
                         },
-                    ) { Text(if (removingBusy) "移除中…" else "移除", color = colors.error) }
+                    ) { Text(if (removingBusy) stringResource(R.string.library_removing) else stringResource(R.string.library_remove), color = colors.error) }
                 },
                 dismissButton = {
-                    TextButton(enabled = !removingBusy, onClick = { removingIndex = null }) { Text("取消") }
+                    TextButton(enabled = !removingBusy, onClick = { removingIndex = null }) { Text(stringResource(AuralisR.string.cancel)) }
                 },
             )
         }
@@ -492,27 +500,27 @@ private fun TrackListWithHeader(
         val estimatedMb = ((load.tracks.size * 8) / 1024.0).toInt().coerceAtLeast(1)
         AlertDialog(
             onDismissRequest = { confirmingDownload = false },
-            title = { Text("下载 ${load.tracks.size} 首歌曲？") },
-            text = { Text("预计约 $estimatedMb MB，下载到本地后可离线播放。已下载的歌曲会自动跳过。") },
+            title = { Text(stringResource(R.string.library_confirm_download_title, load.tracks.size)) },
+            text = { Text(stringResource(R.string.library_confirm_download_text, estimatedMb)) },
             confirmButton = {
                 TextButton(
                     onClick = {
                         confirmingDownload = false
                         scope.launch {
                             runCatching { load.tracks.forEach { graph.downloadManager.enqueue(it) } }
-                                .onFailure { message = "下载失败：${it.message}" }
-                                .onSuccess { message = "已开始下载 ${load.tracks.size} 首歌曲" }
+                                .onFailure { message = context.getString(AuralisR.string.download_failed, it.message) }
+                                .onSuccess { message = context.getString(R.string.library_download_started_format, load.tracks.size) }
                         }
                     },
-                ) { Text("开始下载") }
+                ) { Text(stringResource(R.string.library_start_download)) }
             },
-            dismissButton = { TextButton(onClick = { confirmingDownload = false }) { Text("取消") } },
+            dismissButton = { TextButton(onClick = { confirmingDownload = false }) { Text(stringResource(AuralisR.string.cancel)) } },
         )
     }
     message?.let {
         AlertDialog(
             onDismissRequest = { message = null },
-            confirmButton = { TextButton(onClick = { message = null }) { Text("知道了") } },
+            confirmButton = { TextButton(onClick = { message = null }) { Text(stringResource(AuralisR.string.got_it)) } },
             text = { Text(it) },
         )
     }
@@ -529,6 +537,7 @@ private fun PlaylistOverview(
     val serverId = rememberActiveServerId(graph)
     val repo = graph.catalogRepository
     val colors = LocalAuralisTheme.current.colors
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var sort by remember { mutableStateOf(PlaylistSort.NameAscending) }
     var pendingDelete by remember { mutableStateOf<Playlist?>(null) }
@@ -543,16 +552,16 @@ private fun PlaylistOverview(
                 .padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.small),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("${playlists?.size ?: 0} 个歌单", style = MaterialTheme.typography.bodySmall, color = colors.secondaryText, modifier = Modifier.weight(1f))
+            Text(stringResource(R.string.library_playlist_count_format, playlists?.size ?: 0), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText, modifier = Modifier.weight(1f))
             Box {
                 var sortMenu by remember { mutableStateOf(false) }
                 IconButton(onClick = { sortMenu = true }) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "歌单排序", tint = colors.secondaryText)
+                    Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.library_sort_cd), tint = colors.secondaryText)
                 }
                 DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
                     PlaylistSort.entries.forEach { order ->
                         DropdownMenuItem(
-                            text = { Text(order.titleZh) },
+                            text = { Text(stringResource(order.titleRes())) },
                             onClick = { sort = order; sortMenu = false },
                         )
                     }
@@ -561,8 +570,8 @@ private fun PlaylistOverview(
         }
         HorizontalDivider(color = colors.separator)
         when {
-            playlists == null -> LibraryLoadingBox("正在加载歌单…")
-            playlists!!.isEmpty() -> LibraryEmptyState("还没有歌单", "在服务器上创建歌单后，这里会列出所有歌单。")
+            playlists == null -> LibraryLoadingBox(stringResource(R.string.library_loading_playlists))
+            playlists!!.isEmpty() -> LibraryEmptyState(stringResource(R.string.library_empty_playlists_title), stringResource(R.string.library_empty_playlists_help))
             else -> {
                 val sorted = sort.apply(playlists!!)
                 LazyColumn(Modifier.fillMaxSize()) {
@@ -586,7 +595,7 @@ private fun PlaylistOverview(
                                 enabled = !playlist.isReadOnly,
                                 onClick = { pendingDelete = playlist },
                             ) {
-                                Icon(Icons.Filled.Delete, contentDescription = "删除歌单", tint = if (playlist.isReadOnly) colors.secondaryText.copy(alpha = 0.4f) else colors.secondaryText)
+                                Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.library_delete_playlist), tint = if (playlist.isReadOnly) colors.secondaryText.copy(alpha = 0.4f) else colors.secondaryText)
                             }
                         }
                     }
@@ -598,8 +607,8 @@ private fun PlaylistOverview(
     pendingDelete?.let { playlist ->
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
-            title = { Text("删除歌单「${playlist.name}」？") },
-            text = { Text("该歌单会同时从音乐服务器和本地目录删除，歌曲文件不会被删除。") },
+            title = { Text(stringResource(R.string.library_delete_playlist_confirm_title, playlist.name)) },
+            text = { Text(stringResource(R.string.library_delete_playlist_confirm_text)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -607,27 +616,32 @@ private fun PlaylistOverview(
                         pendingDelete = null
                         scope.launch {
                             runCatching { graph.playlistActions.delete(target) }
-                                .onFailure { message = "无法删除歌单：${it.message}" }
+                                .onFailure { message = context.getString(R.string.library_delete_playlist_failed_format, it.message) }
                         }
                     },
-                ) { Text("删除", color = colors.error) }
+                ) { Text(stringResource(AuralisR.string.delete), color = colors.error) }
             },
-            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text(stringResource(AuralisR.string.cancel)) } },
         )
     }
     message?.let {
         AlertDialog(
             onDismissRequest = { message = null },
-            confirmButton = { TextButton(onClick = { message = null }) { Text("知道了") } },
+            confirmButton = { TextButton(onClick = { message = null }) { Text(stringResource(AuralisR.string.got_it)) } },
             text = { Text(it) },
         )
     }
 }
 
-private enum class PlaylistSort(val titleZh: String) {
-    NameAscending("名称（A 到 Z）"),
-    NameDescending("名称（Z 到 A）"),
-    RecentlyModified("最近修改"),
+private enum class PlaylistSort {
+    NameAscending, NameDescending, RecentlyModified;
+
+    @StringRes
+    fun titleRes(): Int = when (this) {
+        NameAscending -> R.string.library_sort_name_asc
+        NameDescending -> R.string.library_sort_name_desc
+        RecentlyModified -> R.string.library_sort_recently_modified
+    }
 }
 
 private fun PlaylistSort.apply(playlists: List<Playlist>): List<Playlist> = when (this) {
@@ -645,6 +659,7 @@ private fun PlaylistManageMenu(
     onDone: (Boolean) -> Unit,
 ) {
     val colors = LocalAuralisTheme.current.colors
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var menuOpen by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
@@ -656,11 +671,11 @@ private fun PlaylistManageMenu(
 
     Box {
         IconButton(onClick = { menuOpen = true }) {
-            Icon(Icons.Filled.MoreVert, contentDescription = "歌单操作", tint = colors.secondaryText)
+            Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.library_playlist_actions_cd), tint = colors.secondaryText)
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             DropdownMenuItem(
-                text = { Text("重命名") },
+                text = { Text(stringResource(R.string.library_rename)) },
                 onClick = {
                     menuOpen = false
                     scope.launch {
@@ -671,7 +686,7 @@ private fun PlaylistManageMenu(
                 },
             )
             DropdownMenuItem(
-                text = { Text(if (busy) "复制中…" else "复制歌单") },
+                text = { Text(if (busy) stringResource(R.string.library_copying) else stringResource(R.string.library_duplicate_playlist)) },
                 enabled = !busy,
                 onClick = {
                     menuOpen = false
@@ -680,18 +695,18 @@ private fun PlaylistManageMenu(
                         val p = graph.catalogRepository.playlist(destination.playlistId)
                         if (p == null) {
                             busy = false
-                            message = "找不到歌单"
+                            message = context.getString(R.string.library_detail_not_found_playlist)
                         } else {
                             runCatching { graph.playlistActions.duplicate(p) }
-                                .onFailure { message = "复制失败：${it.message}" }
-                                .onSuccess { if (it == null) message = "复制失败：服务器未返回新歌单" else message = "已复制为「${it.name}」" }
+                                .onFailure { message = context.getString(R.string.library_duplicate_failed_format, it.message) }
+                                .onSuccess { message = if (it == null) context.getString(R.string.library_duplicate_server_failed) else context.getString(R.string.library_duplicated_format, it.name) }
                             busy = false
                         }
                     }
                 },
             )
             DropdownMenuItem(
-                text = { Text("去重歌曲") },
+                text = { Text(stringResource(R.string.library_dedupe_songs)) },
                 enabled = !busy,
                 onClick = {
                     menuOpen = false
@@ -700,14 +715,14 @@ private fun PlaylistManageMenu(
                         val p = graph.catalogRepository.playlist(destination.playlistId)
                         if (p == null) {
                             busy = false
-                            message = "找不到歌单"
+                            message = context.getString(R.string.library_detail_not_found_playlist)
                         } else {
                             runCatching { graph.playlistActions.removeDuplicateSongs(p) }
                                 .onSuccess { removed ->
-                                    message = if (removed) "已移除重复歌曲" else "没有重复歌曲"
+                                    message = if (removed) context.getString(R.string.library_dedupe_removed) else context.getString(R.string.library_dedupe_none)
                                     if (removed) onChanged()
                                 }
-                                .onFailure { message = "去重失败：${it.message}" }
+                                .onFailure { message = context.getString(R.string.library_dedupe_failed_format, it.message) }
                             busy = false
                         }
                     }
@@ -715,7 +730,7 @@ private fun PlaylistManageMenu(
             )
             HorizontalDivider(color = colors.separator)
             DropdownMenuItem(
-                text = { Text("删除歌单") },
+                text = { Text(stringResource(R.string.library_delete_playlist)) },
                 leadingIcon = { Icon(Icons.Filled.Delete, null) },
                 onClick = {
                     menuOpen = false
@@ -728,16 +743,16 @@ private fun PlaylistManageMenu(
     if (renaming) {
         AlertDialog(
             onDismissRequest = { if (!busy) renaming = false },
-            title = { Text("重命名歌单") },
+            title = { Text(stringResource(R.string.library_rename_playlist_title)) },
             text = {
                 Column {
                     androidx.compose.material3.OutlinedTextField(
                         value = renameText,
                         onValueChange = { renameText = it },
-                        label = { Text("歌单名称") },
+                        label = { Text(stringResource(AuralisR.string.playlist_name_label)) },
                         singleLine = true,
                     )
-                    Text("修改将同步到服务器。", style = MaterialTheme.typography.bodySmall, color = colors.secondaryText, modifier = Modifier.padding(top = AuralisSpacing.small))
+                    Text(stringResource(R.string.library_rename_sync_hint), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText, modifier = Modifier.padding(top = AuralisSpacing.small))
                 }
             },
             confirmButton = {
@@ -751,25 +766,25 @@ private fun PlaylistManageMenu(
                             val p = graph.catalogRepository.playlist(destination.playlistId)
                             if (p == null) {
                                 busy = false
-                                message = "找不到歌单"
+                                message = context.getString(R.string.library_detail_not_found_playlist)
                             } else {
                                 runCatching { graph.playlistActions.rename(p, name) }
                                     .onSuccess { if (it) onChanged() }
-                                    .onFailure { message = "重命名失败：${it.message}" }
+                                    .onFailure { message = context.getString(R.string.library_rename_failed_format, it.message) }
                                 busy = false
                             }
                         }
                     },
-                ) { Text("保存") }
+                ) { Text(stringResource(AuralisR.string.save)) }
             },
-            dismissButton = { TextButton(onClick = { renaming = false }) { Text("取消") } },
+            dismissButton = { TextButton(onClick = { renaming = false }) { Text(stringResource(AuralisR.string.cancel)) } },
         )
     }
     if (confirmingDelete) {
         AlertDialog(
             onDismissRequest = { confirmingDelete = false },
-            title = { Text("删除歌单？") },
-            text = { Text("服务器上的歌单也会被删除，此操作不可撤销。") },
+            title = { Text(stringResource(R.string.library_delete_playlist_question)) },
+            text = { Text(stringResource(R.string.library_delete_playlist_irreversible)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -779,23 +794,23 @@ private fun PlaylistManageMenu(
                             val p = graph.catalogRepository.playlist(destination.playlistId)
                             if (p == null) {
                                 busy = false
-                                message = "找不到歌单"
+                                message = context.getString(R.string.library_detail_not_found_playlist)
                             } else {
                                 runCatching { graph.playlistActions.delete(p) }
-                                    .onFailure { busy = false; message = "无法删除歌单：${it.message}" }
+                                    .onFailure { busy = false; message = context.getString(R.string.library_delete_playlist_failed_format, it.message) }
                                     .onSuccess { busy = false; onDone(true) }
                             }
                         }
                     },
-                ) { Text("删除", color = colors.error) }
+                ) { Text(stringResource(AuralisR.string.delete), color = colors.error) }
             },
-            dismissButton = { TextButton(onClick = { confirmingDelete = false }) { Text("取消") } },
+            dismissButton = { TextButton(onClick = { confirmingDelete = false }) { Text(stringResource(AuralisR.string.cancel)) } },
         )
     }
     message?.let {
         AlertDialog(
             onDismissRequest = { message = null },
-            confirmButton = { TextButton(onClick = { message = null }) { Text("知道了") } },
+            confirmButton = { TextButton(onClick = { message = null }) { Text(stringResource(AuralisR.string.got_it)) } },
             text = { Text(it) },
         )
     }
@@ -809,6 +824,7 @@ private fun TopArtistList(
     push: (BrowseDestination) -> Unit,
 ) {
     val colors = LocalAuralisTheme.current.colors
+    val context = LocalContext.current
     val serverId = rememberActiveServerId(graph)
     var pairs by remember { mutableStateOf<List<Pair<Artist, Int>>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -817,22 +833,22 @@ private fun TopArtistList(
         pairs = null
         error = null
         if (serverId == null) {
-            error = "还没有连接服务器，无法统计常听艺术家"
+            error = context.getString(R.string.library_top_artists_no_server)
         } else {
             runCatching { graph.catalogRepository.homeTopArtists(serverId, 500) }
                 .onSuccess { pairs = it }
-                .onFailure { error = "统计失败：${it.message}" }
+                .onFailure { error = context.getString(R.string.library_stats_failed_format, it.message) }
         }
     }
     when {
         error != null -> LibraryEmptyState(
-            "无法加载",
+            stringResource(R.string.library_load_failed_title),
             error!!,
-            actionLabel = "重试",
+            actionLabel = stringResource(AuralisR.string.retry),
             onAction = { reloadKey += 1 },
         )
-        pairs == null -> LibraryLoadingBox("正在统计常听艺术家…")
-        pairs!!.isEmpty() -> LibraryEmptyState("暂无常听艺术家", "播放过的歌曲会按艺术家统计在这里。")
+        pairs == null -> LibraryLoadingBox(stringResource(R.string.library_stats_loading_top_artists))
+        pairs!!.isEmpty() -> LibraryEmptyState(stringResource(R.string.library_empty_top_artists_title), stringResource(R.string.library_empty_top_artists_help))
         else -> LazyColumn(Modifier.fillMaxSize()) {
             val sorted = pairs!!.sortedByDescending { it.second }
             items(sorted, key = { it.first.globalId.serialized }) { (artist, count) ->
@@ -855,7 +871,7 @@ private fun TopArtistList(
                     )
                     Column(Modifier.weight(1f)) {
                         Text(artist.name, style = MaterialTheme.typography.titleMedium, color = colors.primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text("$count 次播放", style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+                        Text(stringResource(R.string.library_plays_count_format, count), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
                     }
                 }
             }
@@ -869,6 +885,7 @@ private fun TopAlbumList(
     push: (BrowseDestination) -> Unit,
 ) {
     val colors = LocalAuralisTheme.current.colors
+    val context = LocalContext.current
     val serverId = rememberActiveServerId(graph)
     var pairs by remember { mutableStateOf<List<Pair<Album, Int>>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -877,22 +894,22 @@ private fun TopAlbumList(
         pairs = null
         error = null
         if (serverId == null) {
-            error = "还没有连接服务器，无法统计常听专辑"
+            error = context.getString(R.string.library_top_albums_no_server)
         } else {
             runCatching { graph.catalogRepository.homeTopAlbums(serverId, 500) }
                 .onSuccess { pairs = it }
-                .onFailure { error = "统计失败：${it.message}" }
+                .onFailure { error = context.getString(R.string.library_stats_failed_format, it.message) }
         }
     }
     when {
         error != null -> LibraryEmptyState(
-            "无法加载",
+            stringResource(R.string.library_load_failed_title),
             error!!,
-            actionLabel = "重试",
+            actionLabel = stringResource(AuralisR.string.retry),
             onAction = { reloadKey += 1 },
         )
-        pairs == null -> LibraryLoadingBox("正在统计常听专辑…")
-        pairs!!.isEmpty() -> LibraryEmptyState("暂无常听专辑", "播放过的歌曲会按专辑统计在这里。")
+        pairs == null -> LibraryLoadingBox(stringResource(R.string.library_stats_loading_top_albums))
+        pairs!!.isEmpty() -> LibraryEmptyState(stringResource(R.string.library_empty_top_albums_title), stringResource(R.string.library_empty_top_albums_help))
         else -> LazyColumn(Modifier.fillMaxSize()) {
             val sorted = pairs!!.sortedByDescending { it.second }
             items(sorted, key = { it.first.globalId.serialized }) { (album, count) ->
@@ -916,7 +933,7 @@ private fun TopAlbumList(
                     Column(Modifier.weight(1f)) {
                         Text(album.title, style = MaterialTheme.typography.titleMedium, color = colors.primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(album.artistName, style = MaterialTheme.typography.bodySmall, color = colors.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text("$count 次播放", style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+                        Text(stringResource(R.string.library_plays_count_format, count), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
                     }
                 }
             }

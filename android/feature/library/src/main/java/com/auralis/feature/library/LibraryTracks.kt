@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.Close
@@ -24,7 +25,6 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -45,6 +45,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -52,6 +54,7 @@ import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.AuralisChrome
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.designsystem.R as AuralisR
 import com.auralis.core.domain.DownloadRecord
 import com.auralis.core.domain.DownloadStatus
 import com.auralis.core.domain.GlobalId
@@ -72,6 +75,7 @@ import kotlinx.coroutines.launch
 
 /** 收藏曲目 id 集合（null = 首帧未就绪）。收藏表变化自动更新。 */
 @Composable
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 internal fun rememberFavoriteIds(graph: AuralisGraph, serverId: ServerId): androidx.compose.runtime.State<Set<GlobalId>?> {
     val flow = remember(serverId) { graph.catalogRepository.observeFavoriteTracks(serverId) }
     val tracks by flow.collectAsState(initial = null)
@@ -94,6 +98,7 @@ internal fun LibraryTrackRow(
     additionalMenuItems: (@Composable (close: () -> Unit) -> Unit)? = null,
 ) {
     val colors = LocalAuralisTheme.current.colors
+    val context = LocalContext.current
     val download by remember(track.globalId) { graph.catalogRepository.observe(track.globalId) }.collectAsState(initial = null)
     val favorites = rememberFavoriteIds(graph, serverId)
     val isFavorite = favorites.value?.contains(track.globalId) == true
@@ -136,10 +141,10 @@ internal fun LibraryTrackRow(
             )
         }
         if (showDownloadBadge && download?.status == DownloadStatus.Downloaded) {
-            Icon(Icons.Filled.Download, contentDescription = "已下载", tint = colors.success, modifier = Modifier.size(14.dp))
+            Icon(Icons.Filled.Download, contentDescription = stringResource(R.string.library_downloaded), tint = colors.success, modifier = Modifier.size(14.dp))
         }
         if (isFavorite) {
-            Icon(Icons.Filled.Favorite, contentDescription = "已收藏", tint = colors.accent, modifier = Modifier.size(14.dp))
+            Icon(Icons.Filled.Favorite, contentDescription = stringResource(R.string.library_favorited), tint = colors.accent, modifier = Modifier.size(14.dp))
         }
         Text(formatDurationSeconds(track.durationSeconds), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
         TrackRowMenu(
@@ -164,14 +169,14 @@ internal fun LibraryTrackRow(
             onDismiss = { addingToPlaylist = false },
             onAdded = { name ->
                 addingToPlaylist = false
-                message = "已加入歌单「$name」"
+                message = context.getString(AuralisR.string.added_to_playlist, name)
             },
         )
     }
     message?.let {
         AlertDialog(
             onDismissRequest = { message = null },
-            confirmButton = { TextButton(onClick = { message = null }) { Text("知道了") } },
+            confirmButton = { TextButton(onClick = { message = null }) { Text(stringResource(AuralisR.string.got_it)) } },
             text = { Text(it) },
         )
     }
@@ -191,37 +196,38 @@ private fun TrackRowMenu(
     additionalItems: (@Composable (close: () -> Unit) -> Unit)? = null,
 ) {
     val colors = LocalAuralisTheme.current.colors
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var menuOpen by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { menuOpen = true }) {
-            Icon(Icons.Filled.MoreVert, contentDescription = "歌曲操作", tint = colors.secondaryText)
+            Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.library_track_actions), tint = colors.secondaryText)
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             DropdownMenuItem(
-                text = { Text("立即播放") },
+                text = { Text(stringResource(R.string.library_play_now)) },
                 leadingIcon = { Icon(Icons.Filled.PlayArrow, null) },
                 onClick = { menuOpen = false; onPlayNow() },
             )
             DropdownMenuItem(
-                text = { Text("下一首播放") },
+                text = { Text(stringResource(R.string.library_play_next)) },
                 leadingIcon = { Icon(Icons.Filled.SkipNext, null) },
                 onClick = { menuOpen = false; onPlayNext() },
             )
             DropdownMenuItem(
-                text = { Text("加入队列") },
-                leadingIcon = { Icon(Icons.Filled.PlaylistAdd, null) },
+                text = { Text(stringResource(R.string.library_add_to_queue)) },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null) },
                 onClick = { menuOpen = false; onAppendToQueue() },
             )
             DropdownMenuItem(
-                text = { Text("添加到歌单") },
+                text = { Text(stringResource(AuralisR.string.add_to_playlist)) },
                 leadingIcon = { Icon(Icons.Filled.Add, null) },
                 onClick = { menuOpen = false; onAddToPlaylist() },
             )
             HorizontalDivider(color = colors.separator)
             when {
                 download?.status == DownloadStatus.Downloaded -> DropdownMenuItem(
-                    text = { Text("删除本地缓存") },
+                    text = { Text(stringResource(R.string.library_delete_local_cache)) },
                     leadingIcon = { Icon(Icons.Filled.Delete, null) },
                     onClick = {
                         menuOpen = false
@@ -229,7 +235,7 @@ private fun TrackRowMenu(
                     },
                 )
                 download?.status == DownloadStatus.Downloading || download?.status == DownloadStatus.Queued -> DropdownMenuItem(
-                    text = { Text("取消下载") },
+                    text = { Text(stringResource(R.string.library_cancel_download)) },
                     leadingIcon = { Icon(Icons.Filled.Close, null) },
                     onClick = {
                         menuOpen = false
@@ -237,26 +243,26 @@ private fun TrackRowMenu(
                     },
                 )
                 else -> DropdownMenuItem(
-                    text = { Text("下载到本地") },
+                    text = { Text(stringResource(AuralisR.string.download_to_local)) },
                     leadingIcon = { Icon(Icons.Filled.ArrowDownward, null) },
                     onClick = {
                         menuOpen = false
                         scope.launch {
                             runCatching { graph.downloadManager.enqueue(track) }
-                                .onFailure { onMessage("下载失败：${it.message}") }
+                                .onFailure { onMessage(context.getString(AuralisR.string.download_failed, it.message)) }
                         }
                     },
                 )
             }
             HorizontalDivider(color = colors.separator)
             DropdownMenuItem(
-                text = { Text(if (isFavorite) "取消收藏" else "收藏") },
+                text = { Text(if (isFavorite) stringResource(AuralisR.string.unfavorite) else stringResource(AuralisR.string.favorite)) },
                 leadingIcon = { Icon(if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, null) },
                 onClick = {
                     menuOpen = false
                     scope.launch {
                         runCatching { graph.libraryActions.toggleTrackFavorite(track) }
-                            .onFailure { onMessage("收藏操作失败：${it.message}") }
+                            .onFailure { onMessage(context.getString(AuralisR.string.favorite_failed, it.message)) }
                     }
                 },
             )
@@ -275,6 +281,7 @@ internal fun PlaylistAddDialog(
     onAdded: (String) -> Unit,
 ) {
     val colors = LocalAuralisTheme.current.colors
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val flow = remember(serverId) { graph.catalogRepository.observePlaylists(serverId) }
     val playlists by flow.collectAsState(initial = emptyList())
@@ -291,32 +298,32 @@ internal fun PlaylistAddDialog(
                 .onSuccess { working = false; onAdded(name) }
                 .onFailure {
                     working = false
-                    error = "操作失败：${it.message}"
+                    error = context.getString(AuralisR.string.action_failed, it.message)
                 }
         }
     }
 
     AlertDialog(
         onDismissRequest = { if (!working) onDismiss() },
-        title = { Text(if (createMode) "新建歌单并加入" else "添加到歌单") },
+        title = { Text(if (createMode) stringResource(AuralisR.string.new_playlist_and_add) else stringResource(AuralisR.string.add_to_playlist)) },
         text = {
             Column {
                 if (createMode) {
                     OutlinedTextField(
                         value = newName,
                         onValueChange = { newName = it },
-                        label = { Text("歌单名称") },
+                        label = { Text(stringResource(AuralisR.string.playlist_name_label)) },
                         singleLine = true,
                     )
                     Text(
-                        "共 ${tracks.size} 首歌曲将加入新歌单。",
+                        stringResource(R.string.library_add_count_hint, tracks.size),
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.secondaryText,
                         modifier = Modifier.padding(top = AuralisSpacing.small),
                     )
                 } else {
                     if (playlists.isEmpty()) {
-                        Text("还没有歌单，可以先新建一个。", color = colors.secondaryText)
+                        Text(stringResource(AuralisR.string.no_playlists_yet), color = colors.secondaryText)
                     }
                     playlists.forEach { playlist ->
                         Row(
@@ -330,7 +337,7 @@ internal fun PlaylistAddDialog(
                                 .padding(vertical = AuralisSpacing.small),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Icon(Icons.Filled.PlaylistAdd, null, tint = colors.accent)
+                            Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null, tint = colors.accent)
                             Column(Modifier.weight(1f).padding(start = AuralisSpacing.medium)) {
                                 Text(
                                     playlist.name,
@@ -338,7 +345,7 @@ internal fun PlaylistAddDialog(
                                     color = if (playlist.isReadOnly) colors.secondaryText else colors.primaryText,
                                 )
                                 if (playlist.isReadOnly) {
-                                    Text("只读歌单，不能添加", style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+                                    Text(stringResource(AuralisR.string.readonly_playlist_hint), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
                                 }
                             }
                         }
@@ -358,17 +365,17 @@ internal fun PlaylistAddDialog(
                         val name = newName.trim()
                         submit(name) {
                             val created = graph.playlistActions.createPlaylist(name, serverId, tracks.map { it.id.value })
-                                ?: error("服务器未返回新歌单")
+                                ?: error(context.getString(AuralisR.string.server_no_new_playlist))
                         }
                     },
-                ) { Text(if (working) "创建中…" else "创建并加入") }
+                ) { Text(if (working) stringResource(AuralisR.string.creating) else stringResource(AuralisR.string.create_and_add)) }
             } else {
-                TextButton(onClick = { createMode = true }) { Text("新建歌单") }
+                TextButton(onClick = { createMode = true }) { Text(stringResource(AuralisR.string.new_playlist)) }
             }
         },
         dismissButton = {
             TextButton(onClick = { if (createMode) createMode = false else onDismiss() }) {
-                Text(if (createMode) "返回" else "取消")
+                Text(if (createMode) stringResource(AuralisR.string.back) else stringResource(AuralisR.string.cancel))
             }
         },
     )

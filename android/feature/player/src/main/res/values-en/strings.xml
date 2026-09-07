@@ -17,10 +17,7 @@
     <string name="player_queue_total_format">%1$d songs</string>
     <string name="player_queue_empty">The queue is empty</string>
     <string name="player_remove_from_queue">Remove from queue</string>
-    <!-- Transport area (errors and play modes) -->
-    <string name="player_action_failed">Action failed: %1$s</string>
-    <string name="player_favorite_failed">Could not update favorite: %1$s</string>
-    <string name="player_download_failed">Download failed: %1$s</string>
+    <!-- Transport area (play modes) -->
     <string name="player_play_mode_desc">Play mode: %1$s</string>
     <string name="player_mode_sequential">Sequential</string>
     <string name="player_mode_shuffle">Shuffle</string>
@@ -29,24 +26,13 @@
     <!-- Overflow menu -->
     <string name="player_delete_download">Delete Download</string>
     <string name="player_cancel_download_progress">Cancel Download (%1$d%%)</string>
-    <string name="player_download_to_device">Download to Device</string>
     <string name="player_view_album">View Album</string>
     <string name="player_view_artist">View Artist</string>
     <string name="player_continue_from_track">Continue from This Track</string>
     <string name="player_appreciate_song">Appreciate Song</string>
-    <string name="player_got_it">Got It</string>
-    <string name="player_added_to_playlist">Added to playlist “%1$s”</string>
     <!-- Audio technical info -->
     <string name="player_unknown">Unknown</string>
     <string name="player_sample_rate_unknown">Unknown sample rate</string>
-    <!-- Add to playlist dialog -->
-    <string name="player_new_playlist_and_add">New Playlist &amp; Add</string>
-    <string name="player_playlist_name_label">Playlist Name</string>
+    <!-- Add to playlist dialog (shared copy lives in core:designsystem; only the player-specific hint stays here) -->
     <string name="player_new_playlist_hint">“%1$s” will be added to the new playlist.</string>
-    <string name="player_no_playlists_yet">No playlists yet. You can create one first.</string>
-    <string name="player_readonly_playlist_hint">Read-only playlist — cannot add</string>
-    <string name="player_server_no_new_playlist">The server returned no new playlist</string>
-    <string name="player_creating">Creating…</string>
-    <string name="player_create_and_add">Create &amp; Add</string>
-    <string name="player_new_playlist">New Playlist</string>
 </resources>
