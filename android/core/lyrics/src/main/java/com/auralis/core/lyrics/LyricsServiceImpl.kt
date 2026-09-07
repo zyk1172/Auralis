@@ -38,4 +38,10 @@ class LyricsServiceImpl(
         cachedMisses.remove(track.globalId.serialized)
         store.load(track) // 保持语义：至少尝试读
     }
+
+    /** 清空全部歌词缓存（Room 落盘 + 内存 miss 负缓存），对齐 Swift `clearLyricsCache`。 */
+    suspend fun clearCache() {
+        cachedMisses.clear()
+        store.clearCache()
+    }
 }

@@ -119,3 +119,16 @@ internal fun FallbackArtwork(
         )
     }
 }
+
+/**
+ * 清空封面图片磁盘缓存（coil 默认 `cacheDir/image_cache`），对齐 Swift `clearArtworkCache`。
+ * 封面只按需从服务器重新加载，不删除任何音乐库元数据；coil 下次加载时会自动重建目录。
+ */
+fun clearArtworkCaches(context: android.content.Context) {
+    runCatching {
+        val cacheDir = java.io.File(context.cacheDir, "image_cache")
+        if (cacheDir.exists()) {
+            cacheDir.listFiles()?.forEach { it.deleteRecursively() }
+        }
+    }
+}

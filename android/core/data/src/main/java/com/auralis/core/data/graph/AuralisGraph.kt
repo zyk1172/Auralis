@@ -229,6 +229,17 @@ class AuralisGraph(context: Context) {
 
     suspend fun trackFor(globalId: GlobalId): Track? = catalogRepository.track(globalId)
 
+    // ------------------------------------------------------------ 缓存管理（设置页）
+
+    /** 歌词缓存行数（设置 → 数据与备份 统计；失败按 0 处理不抛给 UI）。 */
+    suspend fun lyricCacheCount(): Int =
+        runCatching { database.annotationDao().lyricCount() }.getOrDefault(0)
+
+    /** 清空全部歌词缓存（Room lyrics 表），对齐 Swift `clearLyricsCache`。 */
+    suspend fun clearLyricCache() {
+        database.annotationDao().clearAllLyrics()
+    }
+
     // ------------------------------------------------------------ 服务器在线搜索
 
     /**

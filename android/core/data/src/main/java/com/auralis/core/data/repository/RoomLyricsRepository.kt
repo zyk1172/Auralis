@@ -35,4 +35,8 @@ class RoomLyricsRepository(
             ),
         )
     }
+
+    override suspend fun clearCache() {
+        annotationDao.clearAllLyrics()
+    }
 }

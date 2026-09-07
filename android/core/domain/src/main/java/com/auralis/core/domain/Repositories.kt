@@ -120,6 +120,12 @@ sealed interface ResolvedSource {
 interface LyricsRepository {
     suspend fun load(track: Track): LyricsDocument?
     suspend fun save(document: LyricsDocument)
+
+    /**
+     * 清空本地歌词缓存（对齐 Swift `clearLyricsCache`）。
+     * 默认空实现：仅需要真实落盘清理的仓储覆盖（RoomLyricsRepository）。
+     */
+    suspend fun clearCache() {}
 }
 
 interface DownloadRepository {

@@ -427,6 +427,14 @@ interface AnnotationDao {
 
     @Query("DELETE FROM lyrics WHERE server_id = :serverId")
     suspend fun deleteLyricsByServer(serverId: String)
+
+    /** 歌词缓存总行数（设置页「数据与备份」统计用）。 */
+    @Query("SELECT COUNT(*) FROM lyrics")
+    suspend fun lyricCount(): Int
+
+    /** 清空全部歌词缓存（对齐 Swift `clearLyricsCache`；歌词按需重新从服务器加载）。 */
+    @Query("DELETE FROM lyrics")
+    suspend fun clearAllLyrics()
 }
 
 @Dao
