@@ -21,7 +21,11 @@ class AuralisPlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         val engine = LocalPlaybackHost.engine ?: run {
-            val created = PlaybackEngineFactory.create(applicationContext, PlaybackDependencies.requireResolver())
+            val created = PlaybackEngineFactory.create(
+                applicationContext,
+                PlaybackDependencies.requireResolver(),
+                PlaybackDependencies.historySink(),
+            )
             LocalPlaybackHost.engine = created
             created
         }
@@ -52,12 +56,18 @@ object PlaybackDependencies {
     @Volatile
     private var resolver: PlaybackSourceResolver? = null
 
-    fun install(resolver: PlaybackSourceResolver) {
+    @Volatile
+    private var historySink: PlaybackHistorySink? = null
+
+    fun install(resolver: PlaybackSourceResolver, historySink: PlaybackHistorySink?) {
         this.resolver = resolver
+        this.historySink = historySink
     }
 
     internal fun requireResolver(): PlaybackSourceResolver =
         checkNotNull(resolver) { "PlaybackDependencies.install() 必须在 Application.onCreate 调用" }
+
+    internal fun historySink(): PlaybackHistorySink? = historySink
 
     internal fun context(): Context? = null
 }

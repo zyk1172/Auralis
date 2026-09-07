@@ -10,12 +10,20 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.auralis.core.domain.HomeLayoutPreference
 import com.auralis.core.domain.ReplayGainMode
 import com.auralis.core.domain.ReplayGainSettings
 import com.auralis.core.opensubsonic.StreamQualitySettings
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
 /**
  * 用户偏好（DataStore）。键名对齐 Apple UserDefaults：
@@ -52,14 +60,79 @@ class AuralisPreferences(private val context: Context) {
         store.edit { if (id == null) it.remove(activeServerId) else it[activeServerId] = id }
     }
 
+    // ---------------------------------------------------- endpoint kind (内/外网)
+
+    private val endpointKinds = stringPreferencesKey("auralis.server-endpoint-kinds.v1")
+    private val kindJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
+    /** 每服务器持久化的选中端点类型（Internal/External），冷启动恢复路由用。 */
+    suspend fun endpointKind(serverId: String): String? {
+        val raw = store.data.first()[endpointKinds] ?: return null
+        return runCatching {
+            kindJson.parseToJsonElement(raw).jsonObject[serverId]?.jsonPrimitive?.contentOrNull
+        }.getOrNull()
+    }
+
+    suspend fun setEndpointKind(serverId: String, kind: String) {
+        store.edit { prefs ->
+            val current = prefs[endpointKinds]?.let {
+                runCatching { kindJson.parseToJsonElement(it).jsonObject }.getOrNull()
+            } ?: kotlinx.serialization.json.JsonObject(emptyMap())
+            val updated = kotlinx.serialization.json.buildJsonObject {
+                current.forEach { (k, v) -> put(k, v) }
+                put(serverId, kind)
+            }
+            prefs[endpointKinds] = updated.toString()
+        }
+    }
+
+    suspend fun clearEndpointKind(serverId: String) {
+        store.edit { prefs ->
+            val current = prefs[endpointKinds]?.let {
+                runCatching { kindJson.parseToJsonElement(it).jsonObject }.getOrNull()
+            } ?: kotlinx.serialization.json.JsonObject(emptyMap())
+            if (current.isEmpty()) return@edit
+            val updated = kotlinx.serialization.json.buildJsonObject {
+                current.forEach { (k, v) -> if (k != serverId) put(k, v) }
+            }
+            if (updated.isEmpty()) prefs.remove(endpointKinds) else prefs[endpointKinds] = updated.toString()
+        }
+    }
+
     // ---------------------------------------------------------- home layout
 
-    private val homeLayout = stringSetPreferencesKey("auralis.home-layout.v1")
+    /** v1 用 Set<String>（存不了顺序）；发现旧 key 则迁移成 v2 有序 JSON。 */
+    private val homeLayoutV1 = stringSetPreferencesKey("auralis.home-layout.v1")
+    private val homeLayoutV2 = stringPreferencesKey("auralis.home-layout.v2")
+    private val layoutJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
-    val homeLayoutFlow: Flow<Set<String>> = store.data.map { it[homeLayout] ?: DEFAULT_HOME_MODULES }
+    val homeLayoutFlow: Flow<HomeLayoutPreference> = store.data.map { prefs ->
+        val v2 = prefs[homeLayoutV2]
+        if (v2 != null) {
+            runCatching { layoutJson.decodeFromString<HomeLayoutPreference>(v2) }
+                .getOrDefault(HomeLayoutPreference())
+        } else {
+            val legacy = prefs[homeLayoutV1]
+            if (legacy != null) migrateLegacySet(legacy) else HomeLayoutPreference()
+        }
+    }
 
-    suspend fun setHomeLayout(modules: Set<String>) {
-        store.edit { it[homeLayout] = modules }
+    suspend fun homeLayoutValue(): HomeLayoutPreference = homeLayoutFlow.first()
+
+    suspend fun setHomeLayout(layout: HomeLayoutPreference) {
+        store.edit {
+            it[homeLayoutV2] = layoutJson.encodeToString(layout)
+            it.remove(homeLayoutV1)
+        }
+    }
+
+    suspend fun restoreDefaultHomeLayout() = setHomeLayout(HomeLayoutPreference())
+
+    /** 旧 Set → 有序结构：顺序按默认 registry 顺序，visible 来自旧集合。 */
+    private fun migrateLegacySet(legacy: Set<String>): HomeLayoutPreference {
+        val defaults = HomeLayoutPreference()
+        val content = defaults.contentModules.map { it.copy(visible = it.id in legacy) }
+        return defaults.copy(contentModules = content)
     }
 
     // ------------------------------------------------------- recent searches
@@ -141,11 +214,6 @@ class AuralisPreferences(private val context: Context) {
     }
 
     companion object {
-        /** 首页模块默认：6 开 3 关。 */
-        const val DEFAULT_HOME_MODULES_KEY = "home-module-default"
-        val DEFAULT_HOME_MODULES: Set<String> = setOf(
-            "random", "recentlyPlayed", "longUnplayed", "recentlyAdded", "favoriteRandom", "downloads",
-        )
         private const val RECENT_SEARCH_SEPARATOR = "\u001f"
         private const val RECENT_SEARCH_LIMIT = 10
     }

@@ -1,5 +1,7 @@
 package com.auralis.core.domain
 
+import kotlinx.serialization.Serializable
+
 /**
  * 首页内容模块注册表。
  *
@@ -59,3 +61,64 @@ data class HomeSnapshot(
     val sections: List<HomeSection> = emptyList(),
     val stats: LibraryStats = LibraryStats(0, 0, 0, 0),
 )
+
+
+/**
+ * 首页布局偏好（P0 第九项）：**有序**结构。
+ *
+ * 为什么不用 Set：Set 存不了顺序。对应 Apple `quickEntries` / `contentModules`
+ * 的 `(id, isVisible, order)` 三要素，这里用列表顺序承载 order。
+ */
+@Serializable
+data class HomeEntryPreference(
+    val id: String,
+    val visible: Boolean = true,
+)
+
+@Serializable
+data class HomeLayoutPreference(
+    val quickEntries: List<HomeEntryPreference> = HomeLayoutPreference.defaultQuickEntries(),
+    val contentModules: List<HomeEntryPreference> = HomeLayoutPreference.defaultContentModules(),
+) {
+    /** 组内不可见项完全剔除。 */
+    val visibleQuickEntries: List<HomeQuickEntry>
+        get() = quickEntries.filter { it.visible }.mapNotNull { e -> runCatching { HomeQuickEntry.valueOf(e.id) }.getOrNull() }
+
+    val visibleContentModules: List<HomeModuleId>
+        get() = contentModules.filter { it.visible }.mapNotNull { e -> runCatching { HomeModuleId.valueOf(e.id) }.getOrNull() }
+
+    fun isVisible(quickId: HomeQuickEntry): Boolean =
+        quickEntries.firstOrNull { it.id == quickId.name }?.visible ?: true
+
+    fun isVisible(moduleId: HomeModuleId): Boolean =
+        contentModules.firstOrNull { it.id == moduleId.name }?.visible ?: moduleId.defaultEnabled
+
+    fun withQuickVisibility(id: HomeQuickEntry, visible: Boolean): HomeLayoutPreference =
+        copy(quickEntries = quickEntries.map { if (it.id == id.name) it.copy(visible = visible) else it })
+
+    fun withModuleVisibility(id: HomeModuleId, visible: Boolean): HomeLayoutPreference =
+        copy(contentModules = contentModules.map { if (it.id == id.name) it.copy(visible = visible) else it })
+
+    /** 组内移动：把 [from] 位置的条目移到 [to] 位置（只允许同组内）。 */
+    fun moveQuick(from: Int, to: Int): HomeLayoutPreference =
+        copy(quickEntries = quickEntries.move(from, to))
+
+    fun moveContent(from: Int, to: Int): HomeLayoutPreference =
+        copy(contentModules = contentModules.move(from, to))
+
+    private fun <T> List<T>.move(from: Int, to: Int): List<T> {
+        if (from !in indices || to !in indices || from == to) return this
+        val mutable = toMutableList()
+        val item = mutable.removeAt(from)
+        mutable.add(to, item)
+        return mutable
+    }
+
+    companion object {
+        fun defaultQuickEntries(): List<HomeEntryPreference> =
+            HomeQuickEntry.entries.map { HomeEntryPreference(it.name, visible = true) }
+
+        fun defaultContentModules(): List<HomeEntryPreference> =
+            HomeModuleId.entries.map { HomeEntryPreference(it.name, visible = it.defaultEnabled) }
+    }
+}

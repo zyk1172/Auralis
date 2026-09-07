@@ -4,14 +4,19 @@ import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import com.auralis.core.data.connector.EndpointKind
 import com.auralis.core.data.connector.ProductionServerConnector
+import com.auralis.core.data.connector.ResolvedServerEndpoint
+import com.auralis.core.data.connector.ServerClientRegistry
 import com.auralis.core.data.db.AuralisDatabase
 import com.auralis.core.data.db.AuralisDatabaseProvider
 import com.auralis.core.data.prefs.AuralisPreferences
 import com.auralis.core.data.repository.RoomCatalogRepository
+import com.auralis.core.data.repository.RoomLyricsRepository
 import com.auralis.core.domain.GlobalId
 import com.auralis.core.domain.PlaybackSourceResolver
 import com.auralis.core.domain.ServerAccount
+import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.StreamUrlProvider
 import com.auralis.core.domain.Track
 import com.auralis.core.image.ArtworkUrl
@@ -19,17 +24,18 @@ import com.auralis.core.image.ArtworkUrlProvider
 import com.auralis.core.offline.DownloadManager
 import com.auralis.core.offline.DownloadServiceHolder
 import com.auralis.core.opensubsonic.NetworkKind
-import com.auralis.core.opensubsonic.OpenSubsonicClient
 import com.auralis.core.opensubsonic.StreamQualityPolicy
-import com.auralis.core.opensubsonic.StreamQualitySettings
 import com.auralis.core.playback.DefaultPlaybackSourceResolver
 import com.auralis.core.playback.PlaybackDependencies
 import com.auralis.core.security.KeystoreCredentialVault
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
 
 /**
  * Auralis 组合根（对应 Apple `ApplicationComposition`）。
@@ -37,7 +43,10 @@ import okhttp3.OkHttpClient
  * 铁律：
  * - **数据库进程单例**：Connector / 仓储 / 搜索 / AI Tool Runtime 共用同一个
  *   [AuralisDatabaseProvider] 实例，杜绝 catalog split-brain；
- * - 播放器 / 下载器均为进程级单例；任何地方都不允许自行 `Room.databaseBuilder`。
+ * - **服务器客户端唯一来源是 [ServerClientRegistry]**（connector 持有）。Graph 不再
+ *   维护第二份易漂移的 accountCache：resolveStream / download / cover 一律
+ *   `registry.client(serverId)` 取当前真正可用的端点；
+ * - 播放器 / 下载器均为进程级单例。
  */
 class AuralisGraph(context: Context) {
 
@@ -48,6 +57,7 @@ class AuralisGraph(context: Context) {
     val vault = KeystoreCredentialVault(appContext)
 
     val catalogRepository = RoomCatalogRepository(
+        database = database,
         serverDao = database.serverDao(),
         artistDao = database.artistDao(),
         albumDao = database.albumDao(),
@@ -62,7 +72,8 @@ class AuralisGraph(context: Context) {
 
     val connector = ProductionServerConnector(vault, catalogRepository)
 
-    private val accountCache = ConcurrentHashMap<String, ServerAccount>()
+    /** 服务器客户端注册表：连接成功后登记；这是唯一真实来源。 */
+    val registry: ServerClientRegistry get() = connector.registry
 
     private val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -71,31 +82,8 @@ class AuralisGraph(context: Context) {
 
     private val streamUrlProvider = StreamUrlProvider { track, _ -> resolveStreamUrl(track) }
 
-    /** 冷启动本地优先：读已保存账号 → 填缓存，之后 resolveStreamUrl 不再碰网络探测。 */
-    fun warmServerCache() {
-        val servers = runBlocking { catalogRepository.servers() }
-        servers.forEach { accountCache[it.id.value] = it }
-        runBlocking {
-            val active = preferences.activeServerIdValue()
-            if (active == null && servers.isNotEmpty()) {
-                preferences.setActiveServerId(servers.first().id.value)
-            }
-        }
-    }
-
-    private suspend fun resolveStreamUrl(track: Track): String? {
-        val account = accountCache[track.serverId.value] ?: return null
-        val settings = preferences.streamQualityFlow.first()
-        val decision = StreamQualityPolicy.decide(settings, detectNetwork())
-        val client = connector.clientFor(account)
-        return runCatching { client.makeStreamUrl(track.id, decision) }.getOrNull()
-    }
-
-    private suspend fun resolveDownloadUrl(track: Track): String? {
-        val account = accountCache[track.serverId.value] ?: return null
-        val client = connector.clientFor(account)
-        return runCatching { client.makeDownloadUrl(track.id) }.getOrNull()
-    }
+    /** 应用级后台作用域（Room 就绪后的本地恢复等，不阻塞首屏、不做网络门槛）。 */
+    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private fun detectNetwork(): NetworkKind {
         val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return NetworkKind.Other
@@ -107,12 +95,96 @@ class AuralisGraph(context: Context) {
         }
     }
 
+    // ------------------------------------------------------ 账户管理（原子接口）
+
+    /**
+     * 冷启动本地恢复：读已保存账号 → 按上次选中的端点类型（内/外网）重建客户端并登记。
+     * 只做本地读取，不发起 ping / 不做网络门槛；随后 Shell 后台探测可再切换端点。
+     */
+    suspend fun bootstrapFromLocal() {
+        val servers = catalogRepository.servers()
+        servers.forEach { account -> registerAccount(account) }
+        if (servers.isNotEmpty()) {
+            val active = preferences.activeServerIdValue()
+            if (active == null || servers.none { it.id.value == active }) {
+                preferences.setActiveServerId(servers.first().id.value)
+            }
+        }
+    }
+
+    /** 按账户构造端点并登记（kind 依据上次持久化选择；未记录 → 内网）。 */
+    suspend fun registerAccount(account: ServerAccount): ResolvedServerEndpoint {
+        val savedKind = preferences.endpointKind(account.id.value)
+        val endpoint = when (savedKind) {
+            EndpointKind.External.name -> {
+                val ext = runCatching { registry.makeExternalEndpoint(account) }.getOrNull()
+                if (ext != null) ext else registry.makeInternalEndpoint(account)
+            }
+
+            else -> registry.makeInternalEndpoint(account)
+        }
+        registry.registerResolved(endpoint)
+        return endpoint
+    }
+
+    /** 连接/编辑成功提交后登记真实端点并持久化选中类型（重启恢复外网路由）。 */
+    suspend fun commitResolvedEndpoint(endpoint: ResolvedServerEndpoint) {
+        registry.registerResolved(endpoint)
+        preferences.setEndpointKind(endpoint.serverId.value, endpoint.kind.name)
+    }
+
+    /**
+     * 忘记服务器：删除 server-scoped 目录/凭据/客户端，并处理 active 切换。
+     * @return 切换后应激活的服务器（null = 无服务器）。
+     */
+    suspend fun forgetServer(serverId: ServerId): ServerId? {
+        val wasActive = preferences.activeServerIdValue() == serverId.value
+        connector.forgetServer(serverId)
+        preferences.clearEndpointKind(serverId.value)
+        val remaining = catalogRepository.servers()
+        val next = if (wasActive) {
+            remaining.firstOrNull { it.id.value != serverId.value }?.id
+        } else {
+            remaining.firstOrNull()?.id
+        }
+        preferences.setActiveServerId(next?.value)
+        return next
+    }
+
+    // ------------------------------------------------------ URL 解析（走注册表）
+
+    private suspend fun resolveStreamUrl(track: Track): String? {
+        val client = registry.client(track.serverId) ?: return null
+        val settings = preferences.streamQualityFlow.first()
+        val decision = StreamQualityPolicy.decide(settings, detectNetwork())
+        return runCatching { client.makeStreamUrl(track.id, decision) }.getOrNull()
+    }
+
+    private suspend fun resolveDownloadUrl(track: Track): String? {
+        val client = registry.client(track.serverId) ?: return null
+        return runCatching { client.makeDownloadUrl(track.id) }.getOrNull()
+    }
+
+    // ------------------------------------------------------ 依赖装配
+
+    /** 播放历史/scrobble 协调器：由 App 注入到播放引擎的 historySink。 */
+    val historyCoordinator: com.auralis.core.data.connector.PlaybackHistoryCoordinator =
+        com.auralis.core.data.connector.PlaybackHistoryCoordinator(registry, catalogRepository)
+
     val playbackResolver: PlaybackSourceResolver = DefaultPlaybackSourceResolver(
         downloads = catalogRepository,
         streamUrlProvider = streamUrlProvider,
     )
 
-    /** 下载器：进程级，由 [com.auralis.core.offline.DownloadService] 持有。 */
+    /** 下载器：进程级，由 DownloadService 持有。 */
+    /** 歌词：本地优先（Room），未命中才走当前服务器客户端（结构化 → 纯文本兜底）。 */
+    val lyricsService: com.auralis.core.lyrics.LyricsServiceImpl by lazy {
+        com.auralis.core.lyrics.LyricsServiceImpl(
+            store = RoomLyricsRepository(database.annotationDao()),
+            remote = { track -> registry.client(track.serverId)?.lyricsFor(track) },
+        )
+    }
+
     val downloadManager: DownloadManager by lazy {
         DownloadManager(
             context = appContext,
@@ -124,19 +196,17 @@ class AuralisGraph(context: Context) {
         }
     }
 
-    /** App 启动装配（幂等）。 */
+    /** App 启动装配（幂等、同步、不阻塞：数据库按需打开，注册表由 bootstrap 填充）。 */
     fun install() {
-        warmServerCache()
-        PlaybackDependencies.install(playbackResolver)
+        PlaybackDependencies.install(playbackResolver, historyCoordinator)
         ArtworkUrl.provider = ArtworkUrlProvider { serverId, artworkKey, size ->
-            val account = accountCache[serverId.value] ?: return@ArtworkUrlProvider null
-            val client = connector.clientFor(account)
+            val client = registry.client(serverId) ?: return@ArtworkUrlProvider null
             runBlocking { runCatching { client.coverArtUrl(artworkKey, size) }.getOrNull() }
         }
         downloadManager
     }
 
-    /** 播放服务：跨 Activity / 进程内长期持有单个 ExoPlayer。 */
+    /** 播放服务：跨 Activity 进程内长期持有单个 ExoPlayer。 */
     fun startPlaybackService() {
         val intent = Intent(appContext, com.auralis.core.playback.AuralisPlaybackService::class.java)
         appContext.startForegroundService(intent)

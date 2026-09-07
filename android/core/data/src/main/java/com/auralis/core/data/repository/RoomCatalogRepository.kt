@@ -5,6 +5,7 @@ import com.auralis.core.data.db.AlbumEntity
 import com.auralis.core.data.db.AnnotationDao
 import com.auralis.core.data.db.ArtistDao
 import com.auralis.core.data.db.ArtistEntity
+import com.auralis.core.data.db.AuralisDatabase
 import com.auralis.core.data.db.DataJson
 import com.auralis.core.data.db.DislikedTrackEntity
 import com.auralis.core.data.db.DownloadDao
@@ -15,6 +16,7 @@ import com.auralis.core.data.db.GenreEntity
 import com.auralis.core.data.db.PlayHistoryEntity
 import com.auralis.core.data.db.PlaylistDao
 import com.auralis.core.data.db.PlaylistEntity
+import com.auralis.core.data.db.PlaylistTrackEntity
 import com.auralis.core.data.db.RatingEntity
 import com.auralis.core.data.db.ServerDao
 import com.auralis.core.data.db.ServerEntity
@@ -25,6 +27,7 @@ import com.auralis.core.data.db.TrackDao
 import com.auralis.core.data.db.TrackEntity
 import com.auralis.core.data.db.TrackFtsDao
 import com.auralis.core.data.db.TrackFtsEntity
+import androidx.room.withTransaction
 import com.auralis.core.domain.Album
 import com.auralis.core.domain.Artist
 import com.auralis.core.domain.CatalogRepository
@@ -55,6 +58,7 @@ import kotlinx.serialization.json.Json
  */
 @Suppress("TooManyFunctions")
 class RoomCatalogRepository(
+    private val database: AuralisDatabase,
     private val serverDao: ServerDao,
     private val artistDao: ArtistDao,
     private val albumDao: AlbumDao,
@@ -94,14 +98,33 @@ class RoomCatalogRepository(
         )
     }
 
+    /**
+     * 忘记服务器：按 serverId 删除**该服务器**的全部本地痕迹（含收藏/评分/历史/
+     * 不喜欢/歌词/下载记录/FTS/歌单关联/同步元数据），单事务提交，绝不影响其它服务器。
+     */
     override suspend fun deleteServer(serverId: ServerId) {
-        serverDao.delete(serverId.value)
-        artistDao.deleteByServer(serverId.value)
-        albumDao.deleteByServer(serverId.value)
-        trackDao.deleteByServer(serverId.value)
-        genreDao.deleteByServer(serverId.value)
-        playlistDao.deleteByServer(serverId.value)
-        syncDao.deleteSession(serverId.value)
+        database.withTransaction {
+            val sid = serverId.value
+            val ftsIds = trackFtsDao.idsForServer(sid)
+            serverDao.delete(sid)
+            artistDao.deleteByServer(sid)
+            albumDao.deleteByServer(sid)
+            trackDao.deleteByServer(sid)
+            if (ftsIds.isNotEmpty()) trackFtsDao.delete(ftsIds)
+            genreDao.deleteByServer(sid)
+            playlistDao.deleteTracksByServer(sid)
+            playlistDao.deleteByServer(sid)
+            annotationDao.deleteFavoritesByServer(sid)
+            annotationDao.deleteRatingsByServer(sid)
+            annotationDao.deleteHistoryByServer(sid)
+            annotationDao.deleteDislikesByServer(sid)
+            annotationDao.deleteLyricsByServer(sid)
+            downloadDao.deleteByServer(sid)
+            syncDao.deleteStagedByServer(sid)
+            syncDao.deleteCheckpointsByServer(sid)
+            syncDao.deleteSession(sid)
+            syncDao.deleteMetaByServer(sid)
+        }
     }
 
     // ------------------------------------------------------------ observe
@@ -231,6 +254,10 @@ class RoomCatalogRepository(
         )
     }
 
+    override suspend fun markCompleted(globalId: GlobalId) {
+        annotationDao.markCompleted(globalId.serialized)
+    }
+
     override suspend fun setDisliked(globalId: GlobalId, disliked: Boolean) {
         if (disliked) {
             annotationDao.upsertDislike(
@@ -343,20 +370,27 @@ class RoomCatalogRepository(
         )
     }
 
+    /**
+     * 渐进同步的落盘（对齐 Apple `LibrarySync` 分段提交）。只替换该 session
+     * 对应服务器的曲目与 FTS 行——**绝不** `DELETE FROM tracks_fts` 清空别的服务器。
+     */
     suspend fun commitTracks(sessionId: String) {
         val staged = syncDao.stagedTracks(sessionId)
         if (staged.isEmpty()) return
         val sid = staged.first().serverId
-        trackDao.deleteByServer(sid)
-        trackFtsDao.clear()
-        staged.chunked(500).forEach { chunk ->
-            trackDao.upsertAll(chunk.map { it.toTrackEntity(json) })
-            trackFtsDao.insertAll(chunk.map { it.toFtsEntity() })
+        database.withTransaction {
+            val oldFtsIds = trackFtsDao.idsForServer(sid)
+            trackDao.deleteByServer(sid)
+            if (oldFtsIds.isNotEmpty()) oldFtsIds.chunked(FTS_DELETE_CHUNK).forEach { trackFtsDao.delete(it) }
+            staged.chunked(WRITE_CHUNK).forEach { chunk ->
+                trackDao.upsertAll(chunk.map { it.toTrackEntity(json) })
+                trackFtsDao.insertAll(chunk.map { it.toFtsEntity() })
+            }
+            syncDao.discardStaged(sessionId)
         }
-        syncDao.discardStaged(sessionId)
     }
 
-    /** 整目录快照提交（首连全量同步用）。 */
+    /** 整目录快照提交（首连全量同步用）。单事务：中途任何一步失败，旧目录仍完整。 */
     suspend fun commitCatalogSnapshot(
         serverId: ServerId,
         artists: List<Artist>,
@@ -367,106 +401,165 @@ class RoomCatalogRepository(
     ) {
         val now = System.currentTimeMillis()
         val sid = serverId.value
-        artistDao.deleteByServer(sid)
-        albumDao.deleteByServer(sid)
-        trackDao.deleteByServer(sid)
-        trackFtsDao.clear()
-        genreDao.deleteByServer(sid)
-        playlistDao.deleteByServer(sid)
 
-        artistDao.upsertAll(
-            artists.map {
-                ArtistEntity(
-                    globalId = it.globalId.serialized,
-                    serverId = sid,
-                    remoteId = it.id.value,
-                    name = it.name,
-                    albumCount = it.albumCount,
-                    artworkKey = it.artworkKey,
-                    payload = json.encodeToString(it),
-                    updatedAt = now,
+        database.withTransaction {
+            // 1) 先记下该服务器旧曲目的 FTS 行，删除只命中自己，绝不误删其它服务器索引。
+            val oldFtsIds = trackFtsDao.idsForServer(sid)
+
+            // 2) 删除该服务器旧目录。
+            artistDao.deleteByServer(sid)
+            albumDao.deleteByServer(sid)
+            trackDao.deleteByServer(sid)
+            if (oldFtsIds.isNotEmpty()) {
+                oldFtsIds.chunked(FTS_DELETE_CHUNK).forEach { trackFtsDao.delete(it) }
+            }
+            genreDao.deleteByServer(sid)
+            playlistDao.deleteTracksByServer(sid)
+            playlistDao.deleteByServer(sid)
+
+            // 3) 写新目录（同 server 前缀的 globalId 幂等；分批防 SQLite 参数上限）。
+            artists.chunked(WRITE_CHUNK).forEach { chunk ->
+                artistDao.upsertAll(
+                    chunk.map {
+                        ArtistEntity(
+                            globalId = it.globalId.serialized,
+                            serverId = sid,
+                            remoteId = it.id.value,
+                            name = it.name,
+                            albumCount = it.albumCount,
+                            artworkKey = it.artworkKey,
+                            payload = json.encodeToString(it),
+                            updatedAt = now,
+                        )
+                    }
                 )
             }
-        )
-        albumDao.upsertAll(
-            albums.map {
-                AlbumEntity(
-                    globalId = it.globalId.serialized,
-                    serverId = sid,
-                    remoteId = it.id.value,
-                    name = it.title,
-                    artistName = it.artistName,
-                    artistGid = if (it.artistId.value.isEmpty()) null else "${sid}:${it.artistId.value}",
-                    year = it.year,
-                    genre = it.genre,
-                    songCount = it.songCount,
-                    payload = json.encodeToString(it),
-                    updatedAt = now,
+            albums.chunked(WRITE_CHUNK).forEach { chunk ->
+                albumDao.upsertAll(
+                    chunk.map {
+                        AlbumEntity(
+                            globalId = it.globalId.serialized,
+                            serverId = sid,
+                            remoteId = it.id.value,
+                            name = it.title,
+                            artistName = it.artistName,
+                            artistGid = if (it.artistId.value.isEmpty()) null else "$sid:${it.artistId.value}",
+                            year = it.year,
+                            genre = it.genre,
+                            songCount = it.songCount,
+                            payload = json.encodeToString(it),
+                            updatedAt = now,
+                        )
+                    }
                 )
             }
-        )
-        trackDao.upsertAll(
-            tracks.map {
-                TrackEntity(
-                    globalId = it.globalId.serialized,
-                    serverId = sid,
-                    remoteId = it.id.value,
-                    title = it.title,
-                    artistName = it.artistName,
-                    albumTitle = it.albumTitle,
-                    albumGid = if (it.albumId.value.isEmpty()) null else "${sid}:${it.albumId.value}",
-                    artistGid = if (it.artistId.value.isEmpty()) null else "${sid}:${it.artistId.value}",
-                    duration = it.durationSeconds,
-                    year = it.year,
-                    payload = json.encodeToString(it),
-                    updatedAt = now,
+            tracks.chunked(WRITE_CHUNK).forEach { chunk ->
+                trackDao.upsertAll(
+                    chunk.map {
+                        TrackEntity(
+                            globalId = it.globalId.serialized,
+                            serverId = sid,
+                            remoteId = it.id.value,
+                            title = it.title,
+                            artistName = it.artistName,
+                            albumTitle = it.albumTitle,
+                            albumGid = if (it.albumId.value.isEmpty()) null else "$sid:${it.albumId.value}",
+                            artistGid = if (it.artistId.value.isEmpty()) null else "$sid:${it.artistId.value}",
+                            duration = it.durationSeconds,
+                            year = it.year,
+                            payload = json.encodeToString(it),
+                            updatedAt = now,
+                        )
+                    }
                 )
             }
-        )
-        trackFtsDao.insertAll(
-            tracks.map {
-                TrackFtsEntity(
-                    globalId = it.globalId.serialized,
-                    title = it.title,
-                    artistName = it.artistName,
-                    albumTitle = it.albumTitle,
+            tracks.chunked(WRITE_CHUNK).forEach { chunk ->
+                trackFtsDao.insertAll(
+                    chunk.map {
+                        TrackFtsEntity(
+                            globalId = it.globalId.serialized,
+                            title = it.title,
+                            artistName = it.artistName,
+                            albumTitle = it.albumTitle,
+                        )
+                    }
                 )
             }
-        )
-        genreDao.upsertAll(
-            genres.map {
-                GenreEntity(
-                    globalId = "$sid:${it.id}",
-                    serverId = sid,
-                    remoteId = it.id,
-                    name = it.name,
-                    songCount = it.songCount,
-                    payload = json.encodeToString(it),
-                    updatedAt = now,
+            genres.chunked(WRITE_CHUNK).forEach { chunk ->
+                genreDao.upsertAll(
+                    chunk.map {
+                        GenreEntity(
+                            globalId = "$sid:${it.id}",
+                            serverId = sid,
+                            remoteId = it.id,
+                            name = it.name,
+                            songCount = it.songCount,
+                            payload = json.encodeToString(it),
+                            updatedAt = now,
+                        )
+                    }
                 )
             }
-        )
-        playlistDao.upsertAll(
-            playlists.map {
-                PlaylistEntity(
-                    globalId = it.globalId.serialized,
-                    serverId = sid,
-                    remoteId = it.id.value,
-                    name = it.name,
-                    isReadOnly = it.isReadOnly,
-                    modifiedAt = it.modifiedAtMillis,
-                    payload = json.encodeToString(it),
-                    updatedAt = now,
+            playlists.chunked(WRITE_CHUNK).forEach { chunk ->
+                playlistDao.upsertAll(
+                    chunk.map {
+                        PlaylistEntity(
+                            globalId = it.globalId.serialized,
+                            serverId = sid,
+                            remoteId = it.id.value,
+                            name = it.name,
+                            isReadOnly = it.isReadOnly,
+                            modifiedAt = it.modifiedAtMillis,
+                            payload = json.encodeToString(it),
+                            updatedAt = now,
+                        )
+                    }
                 )
             }
-        )
-        playlists.forEach { playlist ->
-            val trackGids = playlist.trackIds.mapNotNull { tid ->
-                trackDao.get("${sid}:${tid.value}")?.globalId
+            // 歌单曲目关联：直接替换（在 withTransaction 内避免嵌套 @Transaction DAO 方法）。
+            playlists.forEach { playlist ->
+                val trackGids = playlist.trackIds.mapNotNull { tid ->
+                    trackDao.get("$sid:${tid.value}")?.globalId
+                }
+                playlistDao.deleteTracks(playlist.globalId.serialized)
+                if (trackGids.isNotEmpty()) {
+                    playlistDao.insertTracks(
+                        trackGids.mapIndexed { index, gid -> PlaylistTrackEntity(playlist.globalId.serialized, index, gid) },
+                    )
+                }
             }
-            playlistDao.replaceTracks(playlist.globalId.serialized, trackGids)
         }
     }
+
+    /**
+     * 服务器收藏回流（对齐 Apple connect 尾部 starred 处理）：
+     * 以 getStarred2 的完整集合为准替换该服务器 Track 收藏，本地“手动取消”之外
+     * 的漂移会被远端纠正。单事务。
+     */
+    suspend fun replaceFavoriteTracks(serverId: ServerId, remoteTrackIds: List<String>) {
+        val sid = serverId.value
+        database.withTransaction {
+            annotationDao.deleteFavoritesByServerAndKind(sid, FavoriteKind.Track.name)
+            val now = System.currentTimeMillis()
+            remoteTrackIds.chunked(WRITE_CHUNK).forEach { chunk ->
+                annotationDao.upsertFavorites(
+                    chunk.map { tid ->
+                        FavoriteEntity(
+                            globalId = "$sid:$tid",
+                            serverId = sid,
+                            kind = FavoriteKind.Track.name,
+                            value = true,
+                            updatedAt = now,
+                        )
+                    }
+                )
+            }
+        }
+    }
+
+    /** 歌单曲目关联是否仅用于已入库曲目（帮助判断 playlist 是否需要按需拉详情）。 */
+    suspend fun playlistTrackGids(playlistGlobalId: GlobalId): List<String> =
+        playlistDao.tracks(playlistGlobalId.serialized).map { it.trackGid }
 
     // ---------------------------------------------------------------- helpers
 
@@ -500,6 +593,12 @@ class RoomCatalogRepository(
         .joinToString(" AND ") { "\"${it.replace("\"", "\"\"")}\"*" }
 
     private inline fun <reified T> decode(payload: String): T = json.decodeFromString(payload)
+
+    companion object {
+        /** 单批写入行数：低于 SQLite 变量数上限(999)，避免大批量 IN/UPSERT 崩。 */
+        const val WRITE_CHUNK = 800
+        const val FTS_DELETE_CHUNK = 800
+    }
 }
 
 private fun SyncStagedTrackEntity.toTrackEntity(json: Json) = TrackEntity(

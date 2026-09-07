@@ -190,6 +190,15 @@ interface TrackFtsDao {
 
     @Query("DELETE FROM tracks_fts")
     suspend fun clear()
+
+    /** 仅取某服务器当前曲目的 FTS 行（多服务器清理用，避免 DELETE 全表）。 */
+    @Query(
+        """
+        SELECT global_id FROM tracks_fts
+        WHERE global_id IN (SELECT global_id FROM tracks WHERE server_id = :serverId)
+        """
+    )
+    suspend fun idsForServer(serverId: String): List<String>
 }
 
 @Dao
@@ -221,6 +230,15 @@ interface PlaylistDao {
     @Query("DELETE FROM playlists WHERE server_id = :serverId")
     suspend fun deleteByServer(serverId: String)
 
+    /** 删除某服务器的全部歌单曲目关联（playlist_tracks 无 server_id 列，需经 playlists 反查）。 */
+    @Query(
+        """
+        DELETE FROM playlist_tracks WHERE playlist_gid IN
+        (SELECT global_id FROM playlists WHERE server_id = :serverId)
+        """
+    )
+    suspend fun deleteTracksByServer(serverId: String)
+
     @Query("SELECT COUNT(*) FROM playlists WHERE (:serverId IS NULL OR server_id = :serverId)")
     suspend fun count(serverId: String?): Int
 
@@ -251,8 +269,17 @@ interface AnnotationDao {
     @Upsert
     suspend fun upsertFavorite(entity: FavoriteEntity)
 
+    @Upsert
+    suspend fun upsertFavorites(entities: List<FavoriteEntity>)
+
     @Query("DELETE FROM favorites WHERE global_id = :globalId AND kind = :kind")
     suspend fun deleteFavorite(globalId: String, kind: String)
+
+    @Query("DELETE FROM favorites WHERE server_id = :serverId AND kind = :kind")
+    suspend fun deleteFavoritesByServerAndKind(serverId: String, kind: String)
+
+    @Query("DELETE FROM favorites WHERE server_id = :serverId")
+    suspend fun deleteFavoritesByServer(serverId: String)
 
     @Upsert
     suspend fun upsertRating(entity: RatingEntity)
@@ -260,11 +287,21 @@ interface AnnotationDao {
     @Query("SELECT value FROM ratings WHERE global_id = :globalId")
     suspend fun rating(globalId: String): Int?
 
+    @Query("DELETE FROM ratings WHERE server_id = :serverId")
+    suspend fun deleteRatingsByServer(serverId: String)
+
     @Query("SELECT * FROM play_history WHERE global_id = :globalId")
     suspend fun history(globalId: String): PlayHistoryEntity?
 
     @Upsert
     suspend fun upsertHistory(entity: PlayHistoryEntity)
+
+    /** 自然播完：只翻 completed 标记，不再叠加 playCount（避免重复计数）。 */
+    @Query("UPDATE play_history SET completed = 1 WHERE global_id = :globalId")
+    suspend fun markCompleted(globalId: String)
+
+    @Query("DELETE FROM play_history WHERE server_id = :serverId")
+    suspend fun deleteHistoryByServer(serverId: String)
 
     @Upsert
     suspend fun upsertDislike(entity: DislikedTrackEntity)
@@ -272,11 +309,17 @@ interface AnnotationDao {
     @Query("DELETE FROM disliked_tracks WHERE global_id = :globalId")
     suspend fun deleteDislike(globalId: String)
 
+    @Query("DELETE FROM disliked_tracks WHERE server_id = :serverId")
+    suspend fun deleteDislikesByServer(serverId: String)
+
     @Query("SELECT * FROM lyrics WHERE global_id = :globalId")
     suspend fun lyric(globalId: String): LyricEntity?
 
     @Upsert
     suspend fun upsertLyric(entity: LyricEntity)
+
+    @Query("DELETE FROM lyrics WHERE server_id = :serverId")
+    suspend fun deleteLyricsByServer(serverId: String)
 }
 
 @Dao
@@ -298,6 +341,9 @@ interface DownloadDao {
 
     @Query("DELETE FROM downloads WHERE global_id = :globalId")
     suspend fun delete(globalId: String)
+
+    @Query("DELETE FROM downloads WHERE server_id = :serverId")
+    suspend fun deleteByServer(serverId: String)
 }
 
 @Dao
@@ -310,6 +356,17 @@ interface SyncDao {
 
     @Query("DELETE FROM sync_sessions WHERE server_id = :serverId")
     suspend fun deleteSession(serverId: String)
+
+    @Query("DELETE FROM sync_checkpoints WHERE server_id = :serverId")
+    suspend fun deleteCheckpointsByServer(serverId: String)
+
+    @Query(
+        """
+        DELETE FROM sync_staged_tracks WHERE session_id IN
+        (SELECT session_id FROM sync_sessions WHERE server_id = :serverId)
+        """
+    )
+    suspend fun deleteStagedByServer(serverId: String)
 
     @Upsert
     suspend fun upsertCheckpoint(entity: SyncCheckpointEntity)
@@ -331,4 +388,7 @@ interface SyncDao {
 
     @Query("SELECT * FROM sync_meta WHERE server_id = :serverId")
     suspend fun meta(serverId: String): SyncMetaEntity?
+
+    @Query("DELETE FROM sync_meta WHERE server_id = :serverId")
+    suspend fun deleteMetaByServer(serverId: String)
 }

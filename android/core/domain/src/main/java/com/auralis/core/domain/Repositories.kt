@@ -44,6 +44,9 @@ interface CatalogRepository {
     suspend fun setFavorite(globalId: GlobalId, kind: FavoriteKind, value: Boolean)
     suspend fun setRating(globalId: GlobalId, rating: Int?)
     suspend fun recordPlay(globalId: GlobalId, completed: Boolean)
+
+    /** 自然播完：completed 置位，不改变 playCount。 */
+    suspend fun markCompleted(globalId: GlobalId)
     suspend fun setDisliked(globalId: GlobalId, disliked: Boolean)
 
     suspend fun isFavorite(globalId: GlobalId): Boolean

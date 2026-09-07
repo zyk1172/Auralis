@@ -18,11 +18,14 @@ import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ConcurrentLinkedQueue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -73,11 +76,23 @@ class DownloadManager(
 
     private val activeTasks = ConcurrentHashMap<String, Job>()
     private val tombstones = ConcurrentHashMap.newKeySet<String>()
+
+    /** 全局并发闸门：最多同时下载 3 个（注释里写了就必须真的限制）。 */
+    private val semaphore = Semaphore(MAX_CONCURRENT_DOWNLOADS)
+    /** 真正在跑的任务（受闸门限制）。 */
+    private val runningKeys = ConcurrentHashMap.newKeySet<String>()
+    /** 等待闸门的任务队列（先到先服务）。 */
+    private val pendingQueue = ConcurrentLinkedQueue<Pair<String, Track>>()
+
     private val _activeCount = MutableStateFlow(0)
+    private val _runningCount = MutableStateFlow(0)
     private val _failures = MutableStateFlow<Map<String, DownloadFailure>>(emptyMap())
 
-    /** 正在下载的条目数。 */
+    /** 在办任务数（等待中 + 下载中）：服务据此起停前台。 */
     val activeCount: StateFlow<Int> = _activeCount.asStateFlow()
+
+    /** 真正并发下载中的数量（永远 ≤ [MAX_CONCURRENT_DOWNLOADS]）。 */
+    val runningCount: StateFlow<Int> = _runningCount.asStateFlow()
     val failures: StateFlow<Map<String, DownloadFailure>> = _failures.asStateFlow()
 
     suspend fun enqueue(track: Track) {
@@ -85,7 +100,7 @@ class DownloadManager(
         val key = gid.serialized
         if (activeTasks.containsKey(key)) return
         downloads.record(DownloadRecord(gid, DownloadStatus.Queued, 0f, null))
-        start(key, track)
+        submit(key, track)
     }
 
     fun cancel(gid: GlobalId) {
@@ -136,7 +151,7 @@ class DownloadManager(
                         downloads.record(
                             DownloadRecord(record.globalId, DownloadStatus.Queued, 0f, null),
                         )
-                        start(record.globalId.serialized, track)
+                        submit(record.globalId.serialized, track)
                     } else {
                         downloads.record(
                             DownloadRecord(
@@ -161,14 +176,32 @@ class DownloadManager(
 
     // ------------------------------------------------------------------
 
-    private fun start(key: String, track: Track) {
+    /**
+     * 提交任务：先入等待队列，拿到闸门许可才真正开跑。
+     * enqueue 与水合走同一条路径——**进程启动不会把 100 条恢复任务同时 launch**。
+     */
+    private fun submit(key: String, track: Track) {
         if (tombstones.contains(key)) tombstones.remove(key)
-        val job = scope.launch { runDownload(key, track) }
+        if (activeTasks.containsKey(key)) return
+        pendingQueue.add(key to track)
+        val job = scope.launch {
+            semaphore.withPermit {
+                runningKeys.add(key)
+                _runningCount.value = runningKeys.size
+                try {
+                    if (!tombstones.contains(key)) runDownload(key, track)
+                } finally {
+                    runningKeys.remove(key)
+                    _runningCount.value = runningKeys.size
+                }
+            }
+        }
         activeTasks[key] = job
         _activeCount.value = activeTasks.size
         job.invokeOnCompletion {
             activeTasks.remove(key)
             _activeCount.value = activeTasks.size
+            pendingQueue.removeAll { it.first == key }
         }
     }
 
@@ -198,6 +231,8 @@ class DownloadManager(
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                     var read: Int
                     var total = 0L
+                    var lastWrittenProgress = 0f
+                    var lastWriteAt = 0L
                     val contentLength = body.contentLength()
                     while (source.read(buffer).also { read = it } != -1) {
                         if (tombstones.contains(key)) {
@@ -207,9 +242,18 @@ class DownloadManager(
                         output.write(buffer, 0, read)
                         total += read
                         val progress = if (contentLength > 0) (total.toFloat() / contentLength) else 0f
-                        downloads.record(
-                            DownloadRecord(gid, DownloadStatus.Downloading, progress.coerceIn(0f, 1f), null),
-                        )
+                        // 节流：进度变化 ≥1% 或距上次落库 ≥250ms 才写 Room，
+                        // UI 的高频显示走内存 StateFlow，不要每几 KB 打一次数据库。
+                        val now = System.currentTimeMillis()
+                        if (progress - lastWrittenProgress >= PROGRESS_WRITE_DELTA ||
+                            now - lastWriteAt >= PROGRESS_WRITE_INTERVAL_MS
+                        ) {
+                            lastWrittenProgress = progress
+                            lastWriteAt = now
+                            downloads.record(
+                                DownloadRecord(gid, DownloadStatus.Downloading, progress.coerceIn(0f, 1f), null),
+                            )
+                        }
                     }
                 }
                 if (tombstones.contains(key)) return
@@ -261,6 +305,11 @@ class DownloadManager(
     companion object {
         private const val CACHE_DIR_NAME = "trackcache"
         private const val STAGING_DIR_NAME = "downloadstaging"
+
+        /** 全局最大并发下载数（对齐 Apple 侧限制）。 */
+        const val MAX_CONCURRENT_DOWNLOADS = 3
+        private const val PROGRESS_WRITE_DELTA = 0.01f
+        private const val PROGRESS_WRITE_INTERVAL_MS = 250L
 
         private fun defaultOkHttpClient(): OkHttpClient =
             OkHttpClient.Builder()

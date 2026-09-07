@@ -9,12 +9,16 @@ import com.auralis.core.domain.ServerAccount
 import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
 import com.auralis.core.opensubsonic.CredentialVault
-import com.auralis.core.opensubsonic.OpenSubsonicAuthentication
 import com.auralis.core.opensubsonic.OpenSubsonicClient
-import com.auralis.core.opensubsonic.OpenSubsonicConfiguration
 import com.auralis.core.opensubsonic.OpenSubsonicError
 import com.auralis.core.opensubsonic.OpenSubsonicException
+import com.auralis.core.opensubsonic.OpenSubsonicMapper
+import com.auralis.core.opensubsonic.AlbumDetail
+import com.auralis.core.opensubsonic.Child
+import com.auralis.core.domain.AlbumId
+import com.auralis.core.domain.ArtistId
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -24,32 +28,35 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
-import com.auralis.core.opensubsonic.OpenSubsonicMapper
-import com.auralis.core.opensubsonic.Child
-import com.auralis.core.opensubsonic.AlbumDetail
-import com.auralis.core.domain.ArtistId
-import com.auralis.core.domain.AlbumId
-import java.util.concurrent.TimeUnit
 
-/**
- * 端点探测结果。Apple 语义：
- * - `.Transport`/5xx → 服务器**不可达**；
- * - 认证错误（40/41/50、401/403）→ 账号/密码错误，**绝不**当成「不可达」偷偷切外网；
- * - 协议错误 → 判定失败。
- */
+/** 端点探测原始结果。Apple 语义：Transport/5xx → 不可达；认证错误绝不当作断网。 */
 enum class ProbeKind { Reachable, Unreachable, AuthenticationFailed, Failed }
 
 data class ProbeResult(val kind: ProbeKind, val serverInfo: com.auralis.core.opensubsonic.ServerInfo? = null)
 
+/**
+ * 端点选择结果：成功后携带**实际被选中**的端点（内网或外网）。
+ * 之后的一切远程操作都必须使用 `endpoint.client`，禁止再默认重建内网 client。
+ */
+sealed interface EndpointSelection {
+    data class Reachable(
+        val endpoint: ResolvedServerEndpoint,
+        val serverInfo: com.auralis.core.opensubsonic.ServerInfo? = null,
+    ) : EndpointSelection
+
+    /** 认证/授权失败：绝不降级切外网。 */
+    data object AuthenticationFailed : EndpointSelection
+
+    /** 内外网均不可达（transport/408/5xx）。 */
+    data object Unreachable : EndpointSelection
+
+    /** 协议错误 / 未知失败。 */
+    data class Failed(val message: String) : EndpointSelection
+}
+
 enum class ConnectionStage {
-    Idle,
-    Validating,
-    StoringCredential,
-    Authenticating,
-    DetectingCapabilities,
-    LoadingLibrary,
-    SavingLibrary,
-    Done,
+    Idle, Validating, StoringCredential, Authenticating,
+    DetectingCapabilities, LoadingLibrary, SavingLibrary, Done,
 }
 
 sealed interface ConnectionOutcome {
@@ -60,41 +67,39 @@ sealed interface ConnectionOutcome {
 }
 
 /**
- * 服务器连接编排层（对应 Apple `ProductionServerConnector`，业务编排而非 Retrofit Service）。
+ * 服务器连接编排层（对应 Apple `ProductionServerConnector`）。
  *
- * 职责：URL 归一化 → 凭据先落安全存储 → 双地址探测 → 认证 → capabilities →
- * 全量同步 → **全部成功才 commit**（失败保留旧本地目录）。连接失败回滚旧凭据/旧账号。
+ * 语义对齐点：
+ * 1. **凭据引用固定**为 `opensubsonic.{serverId}`（Apple credentialID），不再随机生成；
+ *    连接前读取 previousSecret，失败时 store 回旧 secret；本次全新则 delete 新凭据。
+ * 2. **端点选择**：`selectEndpoint` 只在「内网不可达」时才试外网；内网认证失败/
+ *    协议错误直接失败（不偷偷切外网）。成功路径返回选中端点并由 [registry] 登记，
+ *    之后 sync / resync / stream / download / cover / lyrics / star / rating /
+ *    playlist / search / scrobble / similar 全部从注册表取 client。
+ * 3. **失败补偿**：逆序恢复（catalog → 凭据），尽力恢复不再抛，避免掩盖原始错误。
+ * 4. **目录提交**：全量拉取完成后才 `commitCatalogSnapshot`（单事务）；失败保留旧目录。
  */
 class ProductionServerConnector(
     private val vault: CredentialVault,
     private val repository: RoomCatalogRepository,
-    private val http: OkHttpClient = defaultHttpClient(),
+    private val http: OkHttpClient = ServerClientRegistry.defaultHttpClient(),
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val _stage = MutableStateFlow(ConnectionStage.Idle)
     val stage: StateFlow<ConnectionStage> = _stage.asStateFlow()
 
+    /** 进程级客户端注册表：成功后登记端点，所有消费者只从这里取 client。 */
+    val registry = ServerClientRegistry(vault, http)
+
     // ------------------------------------------------------------------ 装配
 
-    fun clientFor(account: ServerAccount, external: Boolean = false): OpenSubsonicClient {
-        val base = if (external) {
-            requireNotNull(account.externalBaseUrl) { "服务器没有外网地址" }
-        } else {
-            requireNotNull(account.baseUrl) { "服务器没有内网地址" }
+    fun clientFor(account: ServerAccount, external: Boolean = false): OpenSubsonicClient =
+        registry.run {
+            (if (external) runCatching { makeExternalEndpoint(account) }.getOrNull()
+            else runCatching { makeInternalEndpoint(account) }.getOrNull())
+                ?.client
+                ?: registry.makeInternalEndpoint(account).client
         }
-        val uname = account.username
-        val credential = requireNotNull(account.credentialReference) { "缺少凭据引用" }
-        val auth = if (uname.isNullOrBlank()) {
-            OpenSubsonicAuthentication.ApiKey(credential)
-        } else {
-            OpenSubsonicAuthentication.Token(username = uname, credentialReference = credential)
-        }
-        return OpenSubsonicClient(
-            OpenSubsonicConfiguration(base, account.id, auth),
-            http,
-            vault,
-        )
-    }
 
     // ------------------------------------------------------------------ URL
 
@@ -124,26 +129,55 @@ class ProductionServerConnector(
     // ------------------------------------------------------------------ 探测
 
     /**
-     * 内外网选择策略：
-     * - 内网可达 → 用内网；
-     * - 内网**认证/协议错误** → 直接失败（不切外网，避免「密码错」被误判成断网）；
-     * - 内网不可达（transport/5xx）→ 才尝试外网。
+     * 端点选择（Apple `selectAuthenticatedClient`）：
+     * - 内网可达 → 内网；
+     * - 内网**认证/协议失败** → 直接失败，不切外网（避免「密码错」被当断网）；
+     * - 内网不可达（transport/5xx/超时）且配置了外网 → 试外网。
      */
-    suspend fun probeEndpoints(account: ServerAccount): ProbeResult {
-        val internalResult = probe(account, external = false)
+    suspend fun selectEndpoint(account: ServerAccount): EndpointSelection {
+        val internalEndpoint = registry.makeInternalEndpoint(account)
+        val internalResult = probe(internalEndpoint)
         when (internalResult.kind) {
-            ProbeKind.Reachable -> return internalResult
-            ProbeKind.AuthenticationFailed, ProbeKind.Failed -> return internalResult
+            ProbeKind.Reachable -> {
+                return EndpointSelection.Reachable(internalEndpoint, internalResult.serverInfo)
+            }
+
+            ProbeKind.AuthenticationFailed, ProbeKind.Failed -> {
+                return if (internalResult.kind == ProbeKind.AuthenticationFailed) {
+                    EndpointSelection.AuthenticationFailed
+                } else {
+                    EndpointSelection.Failed("内网连接失败（协议错误）")
+                }
+            }
+
             ProbeKind.Unreachable -> {
-                if (account.externalBaseUrl.isNullOrBlank()) return internalResult
-                return probe(account, external = true)
+                val external = runCatching { registry.makeExternalEndpoint(account) }.getOrNull()
+                    ?: return EndpointSelection.Unreachable
+                val externalResult = probe(external)
+                return when (externalResult.kind) {
+                    ProbeKind.Reachable -> EndpointSelection.Reachable(external, externalResult.serverInfo)
+                    ProbeKind.AuthenticationFailed, ProbeKind.Failed ->
+                        if (externalResult.kind == ProbeKind.AuthenticationFailed) {
+                            EndpointSelection.AuthenticationFailed
+                        } else {
+                            EndpointSelection.Failed("外网连接失败（协议错误）")
+                        }
+
+                    ProbeKind.Unreachable -> EndpointSelection.Unreachable
+                }
             }
         }
     }
 
-    suspend fun probe(account: ServerAccount, external: Boolean): ProbeResult = try {
-        val client = clientFor(account, external)
-        val info = client.ping()
+    suspend fun probeEndpoints(account: ServerAccount): ProbeResult = when (val s = selectEndpoint(account)) {
+        is EndpointSelection.Reachable -> ProbeResult(ProbeKind.Reachable, s.serverInfo)
+        EndpointSelection.AuthenticationFailed -> ProbeResult(ProbeKind.AuthenticationFailed)
+        EndpointSelection.Unreachable -> ProbeResult(ProbeKind.Unreachable)
+        is EndpointSelection.Failed -> ProbeResult(ProbeKind.Failed)
+    }
+
+    suspend fun probe(endpoint: ResolvedServerEndpoint): ProbeResult = try {
+        val info = endpoint.client.ping()
         ProbeResult(ProbeKind.Reachable, info)
     } catch (e: OpenSubsonicException) {
         when (e.kind) {
@@ -165,9 +199,10 @@ class ProductionServerConnector(
     // --------------------------------------------------------------- 连接主流程
 
     /**
-     * 连接 + 首次全量同步。
-     * 失败语义：先存新凭据 → 探测失败时**恢复旧凭据**；同步在内存中全量拉取，
-     * 全部成功才 commit（本地目录绝不会因网络失败变成半截）。
+     * 连接（新增或编辑）。
+     *
+     * @param previousAccount 编辑场景的旧账户；null 表示全新服务器。其值仅用于失败补偿
+     *   （恢复旧账户 / 判断是否需要 purge），地址/凭据总是以本次输入为准。
      */
     suspend fun connect(
         displayName: String,
@@ -185,74 +220,76 @@ class ProductionServerConnector(
             return ConnectionOutcome.Failed("外网地址无效")
         }
         val serverId = stableServerId(normalized, username)
+        val credentialRef = credentialReferenceFor(serverId)
+
+        // R12 前置快照（严格读取）：区分「确实没有旧密码」与「读取失败」。
+        val previousSecret = vault.retrieve(credentialRef)
         val candidate = ServerAccount(
             id = serverId,
             displayName = displayName,
             baseUrl = normalized,
             externalBaseUrl = normalizedExternal,
             username = username,
-            credentialReference = previousAccount?.credentialReference
-                ?: vault.newReferenceOrFallback(),
+            credentialReference = credentialRef,
         )
 
+        // 先写新凭据再认证（Apple 顺序：storingCredential → authenticating）。
         _stage.value = ConnectionStage.StoringCredential
-        vault.store(candidate.credentialReference!!, secret)
+        vault.store(credentialRef, secret)
 
-        val probeResult = probeEndpoints(candidate)
-        if (probeResult.kind == ProbeKind.AuthenticationFailed) {
-            rollbackCredential(previousAccount)
-            _stage.value = ConnectionStage.Done
-            return ConnectionOutcome.AuthFailed("认证失败：用户名或密码/API Key 不正确")
-        }
-        if (probeResult.kind != ProbeKind.Reachable) {
-            rollbackCredential(previousAccount)
-            _stage.value = ConnectionStage.Done
-            return ConnectionOutcome.Unreachable(
-                if (probeResult.kind == ProbeKind.Unreachable) "服务器不可达（内网与外网均无法连接）" else "服务器连接失败",
-            )
-        }
-
-        // 探测成功 → 同步
-        return try {
-            val outcome = fullSync(candidate)
-            if (outcome is ConnectionOutcome.Success) {
-                _stage.value = ConnectionStage.Done
-                outcome
-            } else {
-                rollbackCredential(previousAccount)
-                _stage.value = ConnectionStage.Done
-                outcome
+        val selection = selectEndpoint(candidate)
+        return when (selection) {
+            is EndpointSelection.Reachable -> {
+                val outcome = try {
+                    syncOnEndpoint(selection.endpoint, candidate)
+                } catch (e: Exception) {
+                    rollback(serverId, credentialRef, previousSecret, previousAccount)
+                    _stage.value = ConnectionStage.Done
+                    return ConnectionOutcome.Failed("同步失败：${e.message ?: "未知错误"}")
+                }
+                if (outcome is ConnectionOutcome.Success) {
+                    _stage.value = ConnectionStage.Done
+                    outcome
+                } else {
+                    rollback(serverId, credentialRef, previousSecret, previousAccount)
+                    _stage.value = ConnectionStage.Done
+                    outcome
+                }
             }
-        } catch (e: Exception) {
-            rollbackCredential(previousAccount)
-            _stage.value = ConnectionStage.Done
-            ConnectionOutcome.Failed("同步失败：${e.message ?: "未知错误"}")
+
+            EndpointSelection.AuthenticationFailed -> {
+                rollback(serverId, credentialRef, previousSecret, previousAccount)
+                _stage.value = ConnectionStage.Done
+                ConnectionOutcome.AuthFailed("认证失败：用户名或密码/API Key 不正确")
+            }
+
+            EndpointSelection.Unreachable -> {
+                rollback(serverId, credentialRef, previousSecret, previousAccount)
+                _stage.value = ConnectionStage.Done
+                ConnectionOutcome.Unreachable("服务器不可达（内网与外网均无法连接）")
+            }
+
+            is EndpointSelection.Failed -> {
+                rollback(serverId, credentialRef, previousSecret, previousAccount)
+                _stage.value = ConnectionStage.Done
+                ConnectionOutcome.Failed(selection.message)
+            }
         }
     }
-
-    private suspend fun rollbackCredential(previous: ServerAccount?) {
-        if (previous?.credentialReference == null) return
-        // 恢复到旧凭据引用（secret 由调用方在 UI 层重新写入或沿用 vault 里旧值）
-        repository.upsertServer(previous)
-    }
-
-    private fun CredentialVault.newReferenceOrFallback(): String {
-        @Suppress("DEPRECATION")
-        return "cred-${java.util.UUID.randomUUID()}"
-    }
-
-    // ------------------------------------------------------------ 全量同步
 
     /**
-     * 拉取（分页）+ capabilities + genres/playlists/收藏；全部成功才 commit。
-     * 首次连接 album 分页 250；曲目通过专辑详情补全（对齐 Apple 实现路径）。
+     * 全量同步 + 提交 + 登记客户端（以**已选中**端点执行）。
+     * 收藏回流：以 getStarred2 完整集合写回 favorites（对齐 Apple connect 尾部）。
      */
-    suspend fun fullSync(account: ServerAccount): ConnectionOutcome {
+    private suspend fun syncOnEndpoint(
+        endpoint: ResolvedServerEndpoint,
+        account: ServerAccount,
+    ): ConnectionOutcome {
+        val client = endpoint.client
         _stage.value = ConnectionStage.Authenticating
-        val client = clientFor(account)
-        val info = client.ping()
+        client.ping()
         _stage.value = ConnectionStage.DetectingCapabilities
-        val capabilities = client.capabilities()
+        runCatching { client.capabilities() }
         _stage.value = ConnectionStage.LoadingLibrary
 
         val artists = runCatching { client.artists() }.getOrDefault(emptyList())
@@ -260,7 +297,7 @@ class ProductionServerConnector(
         val tracks = ArrayList<Track>()
         val albumPage = ArrayList<Album>()
         albums.chunked(6).forEachIndexed { index, chunk ->
-            // Apple：专辑列表 + 6 并发专辑详情
+            // Apple：专辑列表 + 6 并发专辑详情补全曲目。
             val details = chunk.mapNotNull { album ->
                 runCatching { client.album(album.id.value) }.getOrNull()
             }
@@ -268,15 +305,15 @@ class ProductionServerConnector(
                 val albumDomain = dtoToAlbum(detail, account.id)
                 albumPage.add(albumDomain)
                 detail.song.forEach { child ->
-                    tracks.add(
-                        dtoToTrack(child, account.id),
-                    )
+                    tracks.add(dtoToTrack(child, account.id))
                 }
             }
             if (index % 10 == 9) delay(1)
         }
         val genres = runCatching { client.genres() }.getOrDefault(emptyList())
         val playlists = runCatching { client.playlists() }.getOrDefault(emptyList())
+        // 服务器收藏回流：失败不阻断主流程，保留本地现状。
+        val starredIds = runCatching { client.starred().song.mapNotNull { it.id?.value } }.getOrDefault(emptyList())
 
         _stage.value = ConnectionStage.SavingLibrary
         repository.commitCatalogSnapshot(
@@ -288,6 +325,11 @@ class ProductionServerConnector(
             playlists = playlists,
         )
         repository.upsertServer(account)
+        if (starredIds.isNotEmpty()) {
+            repository.replaceFavoriteTracks(account.id, starredIds)
+        }
+        // 登记当前真正可用的客户端 → 后续 stream/download/cover/lyrics/star 全走它。
+        registry.registerResolved(endpoint)
         return ConnectionOutcome.Success(account.id, tracks.size)
     }
 
@@ -304,29 +346,67 @@ class ProductionServerConnector(
         return result
     }
 
-    /** 后台刷新：只同步辅助数据 + 校验连接（不重建目录主体）。 */
+    /** 后台校验连接：只 ping 当前选中端点，不重建目录。 */
     suspend fun refreshAuxiliary(account: ServerAccount) {
-        runCatching {
-            val client = clientFor(account)
-            client.ping()
+        val client = registry.client(account.id) ?: runCatching {
+            registry.makeInternalEndpoint(account).also { registry.registerResolved(it) }.client
+        }.getOrNull() ?: return
+        runCatching { client.ping() }
+    }
+
+    /** 重新同步：沿用注册表中当前选中端点（外网路由同样生效）。 */
+    suspend fun resync(account: ServerAccount): ConnectionOutcome {
+        val endpoint = registry.resolve(account.id) ?: runCatching {
+            registry.makeInternalEndpoint(account).also { registry.registerResolved(it) }
+        }.getOrNull() ?: return ConnectionOutcome.Failed("服务器尚未连接")
+        return try {
+            syncOnEndpoint(endpoint, account)
+        } catch (e: Exception) {
+            ConnectionOutcome.Failed("同步失败：${e.message ?: "未知错误"}")
         }
     }
 
-    suspend fun resync(account: ServerAccount): ConnectionOutcome = fullSync(account)
-
-    /** 忘记服务器：仅清本地，不触远端（对齐 Apple forgetServer）。 */
+    /**
+     * 忘记服务器：删除本地 server-scoped 目录 + 注销客户端 + 删除安全凭据。
+     * 不触远端 Navidrome。active server 切换由调用方（UI/组合根）负责。
+     */
     suspend fun forgetServer(serverId: ServerId) {
+        registry.remove(serverId)
         repository.deleteServer(serverId)
+        runCatching { vault.delete(credentialReferenceFor(serverId)) }
+    }
+
+    // ------------------------------------------------------------------ 补偿
+
+    /**
+     * 失败补偿（尽力恢复，恢复动作失败只记日志不掩盖原始错误）：
+     * 1. 恢复 catalog：有旧账户 → 还原；无旧账户（本次新增失败）→ purge 该 server 残留，
+     *    不留 orphan server / 半同步目录；
+     * 2. 恢复凭据：有 previousSecret → 写回；全新 reference → delete。
+     */
+    private suspend fun rollback(
+        serverId: ServerId,
+        credentialRef: String,
+        previousSecret: String?,
+        previousAccount: ServerAccount?,
+    ) {
+        if (previousAccount != null) {
+            runCatching { repository.upsertServer(previousAccount) }
+        } else {
+            runCatching { repository.deleteServer(serverId) }
+        }
+        if (previousSecret != null) {
+            runCatching { vault.store(credentialRef, previousSecret) }
+        } else {
+            runCatching { vault.delete(credentialRef) }
+        }
     }
 
     companion object {
         private const val MAX_SYNC_ALBUMS = 20_000
 
-        private fun defaultHttpClient(): OkHttpClient =
-            OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(60, TimeUnit.SECONDS)
-                .build()
+        /** 凭据引用固定格式（对齐 Apple `opensubsonic.{serverID}`）。 */
+        fun credentialReferenceFor(serverId: ServerId): String = "opensubsonic.${serverId.value}"
     }
 }
 

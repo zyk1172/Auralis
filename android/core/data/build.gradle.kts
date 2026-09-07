@@ -18,6 +18,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    testOptions { unitTests.isIncludeAndroidResources = true }
 }
 
 room { schemaDirectory("$projectDir/schemas") }
@@ -37,10 +38,16 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.okhttp)
     implementation(project(":core:offline"))
+    implementation(project(":core:lyrics"))
     implementation(project(":core:playback"))
     implementation(project(":core:image"))
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     testImplementation(libs.junit)
     testImplementation(libs.truth)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.androidx.test.ext.junit)
+    testImplementation(libs.androidx.room.testing)
+    testImplementation(libs.okhttp.mockwebserver)
 }

@@ -58,6 +58,8 @@ class AuralisPlaybackEngine(
     context: Context,
     private val resolver: PlaybackSourceResolver,
     okHttpClient: OkHttpClient = defaultOkHttpClient(),
+    /** 播放历史/scrobble 下沉（core:data 实现）；null 表示不记录。 */
+    private val historySink: PlaybackHistorySink? = null,
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -99,6 +101,13 @@ class AuralisPlaybackEngine(
     private var stallTimeoutJob: Job? = null
     private var pendingHistory = HashMap<String, Boolean>()
 
+    /** 已通知过“开始播放”的 occurrence（去重）。 */
+    private var activatedEntryId: QueueEntryId? = null
+    /** 已通知过“自然播完”的 occurrence（去重，防重复 scrobble/计数）。 */
+    private val completedOccurrences = HashSet<String>()
+    /** 真实解析来源：globalTrackId → 是否本地文件（P0-9：不再恒定 false）。 */
+    private val localSourceKeys = HashMap<String, Boolean>()
+
     private val queueMutating = false
 
     init {
@@ -116,6 +125,7 @@ class AuralisPlaybackEngine(
 
                     Player.STATE_ENDED -> {
                         stallTimeoutJob?.cancel()
+                        notifyCompleted()
                         handleWindowExhausted()
                     }
 
@@ -130,6 +140,7 @@ class AuralisPlaybackEngine(
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 updateCurrentFromPlayer()
+                notifyActivated()
                 publishPlaybackState()
                 publishQueueState()
             }
@@ -312,17 +323,43 @@ class AuralisPlaybackEngine(
         }
     }
 
+    /**
+     * 起播（P0-9：音频首响优先）。
+     * 只 resolve **当前这一首** 就交给 Media3 prepare/play；窗口其余部分在后台补齐，
+     * 绝不先给 256 首逐首 resolve 认证 URL 再开始第一首。
+     */
     private suspend fun awaitPlayAt(logicalIndex: Int, startAtMs: Long, seekMode: Boolean) {
         val window = QueueWindowing.initialWindow(logicalQueue.size, logicalIndex)
         windowStart = window.first
         windowEnd = window.last + 1
-        val items = buildMediaItems(windowStart, windowEnd) ?: return
-        val currentWindowIndex = logicalIndex - windowStart
-        player.setMediaItems(items, currentWindowIndex, startAtMs)
+        val currentItem = buildMediaItemAt(logicalIndex) ?: return
+        player.setMediaItems(listOf(currentItem), 0, startAtMs)
         player.prepare()
         player.play()
         updateCurrentFromPlayer()
+        currentLogical = logicalIndex
+        notifyActivated()
         publishAll()
+        // 后台补齐窗口：先插当前之前，再追加之后（保持 current 位置 = index-windowStart）。
+        scope.launch { fillWindowAround(logicalIndex) }
+    }
+
+    private suspend fun buildMediaItemAt(index: Int): MediaItem? =
+        buildMediaItems(index, index + 1)?.firstOrNull()
+
+    private suspend fun fillWindowAround(currentIndex: Int) {
+        val before = buildMediaItems(windowStart, currentIndex).orEmpty()
+        if (before.isNotEmpty()) {
+            withContext(Dispatchers.Main) { player.addMediaItems(0, before) }
+        }
+        val after = buildMediaItems(currentIndex + 1, windowEnd).orEmpty()
+        if (after.isNotEmpty()) {
+            withContext(Dispatchers.Main) { player.addMediaItems(after) }
+        }
+        withContext(Dispatchers.Main) {
+            currentLogical = currentIndex
+            publishAll()
+        }
     }
 
     /** 生成窗口 MediaItems；任何一条无法 resolve 会被替换为占位（防止窗口整体失败）。 */
@@ -339,6 +376,9 @@ class AuralisPlaybackEngine(
                 is com.auralis.core.domain.ResolvedSource.Remote -> Uri.parse(resolved.url)
                 else -> null
             }
+            // 真实解析结果：本地/远端。以后歌曲信息页的“播放来源”取自这里。
+            localSourceKeys[entry.track.globalId.serialized] =
+                resolved is com.auralis.core.domain.ResolvedSource.Local
             val builder = MediaItem.Builder()
                 .setMediaId(entry.id.value)
                 .setMediaMetadata(
@@ -375,6 +415,26 @@ class AuralisPlaybackEngine(
         }
     }
 
+    /** 通知历史协调器：新 occurrence 开始播放（同 occurrence 只通知一次）。 */
+    private fun notifyActivated() {
+        val entry = currentQueueEntry() ?: return
+        if (activatedEntryId == entry.id) return
+        activatedEntryId = entry.id
+        val sink = historySink ?: return
+        scope.launch { runCatching { sink.onOccurrenceActivated(entry, entry.track) } }
+    }
+
+    /** 通知历史协调器：occurrence 自然播完（同 occurrence 只通知一次）。 */
+    private fun notifyCompleted() {
+        val entry = currentQueueEntry() ?: return
+        if (!completedOccurrences.add(entry.id.value)) return
+        val sink = historySink ?: return
+        val playedMs = player.duration.coerceAtLeast(0)
+        scope.launch { runCatching { sink.onOccurrenceCompleted(entry, entry.track, playedMs) } }
+    }
+
+    private fun currentQueueEntry(): QueueEntry? = logicalQueue.getOrNull(currentLogical)
+
     private fun publishAll() {
         publishPlaybackState()
         publishQueueState()
@@ -410,11 +470,9 @@ class AuralisPlaybackEngine(
         )
     }
 
-    private fun isDownloaded(track: Track): Boolean {
-        // 实际下载状态由 offline 模块维护；播放源是否本地以快照为准：
-        // 引擎只知道 URI，此处保留 false 由播放器 source 决定。
-        return false
-    }
+    /** 当前 occurrence 是否真的在用本地文件播放（来自 resolver 的真实解析结果）。 */
+    private fun isDownloaded(track: Track): Boolean =
+        localSourceKeys[track.globalId.serialized] == true
 
     private fun publishQueueState() {
         val windowIndex = player.currentMediaItemIndex

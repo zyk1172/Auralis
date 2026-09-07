@@ -121,12 +121,16 @@ private class EnginePlaybackController(
 
 /** 供服务在 `onCreate` 时装配引擎。 */
 internal object PlaybackEngineFactory {
-    fun create(context: Context, resolver: com.auralis.core.domain.PlaybackSourceResolver): AuralisPlaybackEngine {
+    fun create(
+        context: Context,
+        resolver: com.auralis.core.domain.PlaybackSourceResolver,
+        historySink: PlaybackHistorySink?,
+    ): AuralisPlaybackEngine {
         val appContext = context.applicationContext
         val okHttp = okhttp3.OkHttpClient.Builder()
             .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
             .build()
-        return AuralisPlaybackEngine(appContext, resolver, okHttp)
+        return AuralisPlaybackEngine(appContext, resolver, okHttp, historySink)
     }
 }

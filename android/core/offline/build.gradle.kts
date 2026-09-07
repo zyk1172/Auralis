@@ -16,6 +16,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    testOptions { unitTests.isIncludeAndroidResources = true }
 }
 
 dependencies {
@@ -36,4 +37,9 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     implementation(libs.okhttp)
     implementation(libs.androidx.core.ktx)
+    testImplementation(libs.junit)
+    testImplementation(libs.truth)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.okhttp.mockwebserver)
 }
