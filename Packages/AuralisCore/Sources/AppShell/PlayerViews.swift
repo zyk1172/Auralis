@@ -314,10 +314,13 @@ struct NowPlayingView: View {
         }
     }
 
-    /// 三点菜单直接使用系统 Menu；Music Haptics 在这里是一个单层即时开关。
+    /// 三点菜单保持系统 Menu 的原生 Button 语义：不能从传输控制父层继承自定义 ButtonStyle。
+    /// 会继续呈现 sheet 的动作等待系统 Menu 完成收起，避免 UIKit 同时 presentation 竞争。
     private var moreMenu: some View {
         Menu {
-            Button(String(localized: "添加到歌单", bundle: .module)) { isPlaylistSheetPresented = true }
+            Button(String(localized: "添加到歌单", bundle: .module)) {
+                performAfterSystemMenuDismissal { isPlaylistSheetPresented = true }
+            }
             if model.isDownloading(model.currentTrack) {
                 let progress = model.downloadingProgress[model.currentTrack.id] ?? 0
                 Button(
@@ -337,7 +340,9 @@ struct NowPlayingView: View {
                 .disabled(currentArtist == nil)
             Button(String(localized: "由此继续播放", bundle: .module)) { continueWithSimilarQueue() }
             Button(String(localized: "歌曲鉴赏", bundle: .module)) { appreciateCurrentSong() }
-            Button(String(localized: "歌曲信息", bundle: .module)) { showsTrackInformation = true }
+            Button(String(localized: "歌曲信息", bundle: .module)) {
+                performAfterSystemMenuDismissal { showsTrackInformation = true }
+            }
 #if os(iOS)
             if MusicHapticsPlatformPolicy.isFeatureAvailable {
                 Toggle(isOn: Binding(
@@ -354,7 +359,10 @@ struct NowPlayingView: View {
                 .frame(minWidth: 44, minHeight: 44)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(HapticBorderedButtonStyle())
+        // `buttonStyle` is an environment value for descendant buttons.  The
+        // former HapticBordered style therefore also reached the Menu actions
+        // themselves.  Keep this system-composed control on native semantics.
+        .buttonStyle(.automatic)
         .accessibilityLabel(String(localized: "更多操作", bundle: .module))
         .accessibilityIdentifier(Self.moreActionsButtonIdentifier)
     }
@@ -544,6 +552,7 @@ struct NowPlayingView: View {
                         .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
                 }
+                .buttonStyle(HapticPlainButtonStyle())
                 .accessibilityLabel(String(localized: "播放模式：\(model.playMode.title)", bundle: .module))
             }
             transportItem {
@@ -553,6 +562,7 @@ struct NowPlayingView: View {
                         .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
                 }
+                .buttonStyle(HapticPlainButtonStyle())
                 .disabled(!model.canGoPrevious)
                 .accessibilityLabel(String(localized: "上一首", bundle: .module))
             }
@@ -565,6 +575,7 @@ struct NowPlayingView: View {
                         .foregroundStyle(theme.colorTokens.background.color)
                         .clipShape(Circle())
                 }
+                .buttonStyle(HapticPlainButtonStyle())
                 .accessibilityLabel(model.playbackState == .playing ? String(localized: "暂停", bundle: .module) : String(localized: "播放", bundle: .module))
             }
             transportItem {
@@ -574,6 +585,7 @@ struct NowPlayingView: View {
                         .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
                 }
+                .buttonStyle(HapticPlainButtonStyle())
                 .disabled(!model.canGoNext)
                 .accessibilityLabel(String(localized: "下一首", bundle: .module))
             }
@@ -581,7 +593,6 @@ struct NowPlayingView: View {
                 moreMenu
             }
         }
-        .buttonStyle(HapticPlainButtonStyle())
     }
 
     private var volumeControl: some View {
@@ -635,7 +646,6 @@ struct NowPlayingView: View {
         return sampleRate
     }
 
-
     /// 传输区按钮的等宽容器，保证五键严格对称。
     private func transportItem<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         content()
@@ -662,6 +672,17 @@ struct NowPlayingView: View {
     private var currentArtist: Artist? {
         model.catalog.artists.first {
             $0.id == model.currentTrack.artistID && $0.serverID == model.currentTrack.serverID
+        }
+    }
+
+    private func performAfterSystemMenuDismissal(_ action: @escaping @MainActor () -> Void) {
+        Task { @MainActor in
+            // SwiftUI Menu 在 iOS 上由临时 presentation controller 承载。
+            // 菜单 action 同一 turn 立即再呈现 sheet 会和它的 dismiss 竞争，
+            // 表现为第一次点击被吃掉、需要重新打开菜单重复点击。
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled else { return }
+            action()
         }
     }
 
@@ -707,6 +728,9 @@ struct NowPlayingView: View {
         dismiss()
         model.isNowPlayingPresented = false
         Task { @MainActor in
+            // 与“前往专辑/艺术家”一致，先完成 Now Playing/Menu 的退出，
+            // 再切换 Assistant，避免 presentation tree 在同一帧竞争。
+            try? await Task.sleep(for: .milliseconds(180))
             if model.assistantIsRunning { model.cancelAssistant() }
             _ = await model.agentCoordinator.newSession()
             model.selectTopLevelSection(.assistant)
