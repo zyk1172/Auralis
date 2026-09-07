@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- R5 English overlay for feature:search. -->
+<resources>
+    <string name="search_library_title">Search Library</string>
+    <string name="search_field_placeholder">Songs, albums, artists or playlists</string>
+    <string name="search_error_local">Local search failed</string>
+    <string name="search_error_server">Online search failed</string>
+    <string name="search_error_no_server">No server connected — cannot search online</string>
+    <string name="search_server_progress">Searching server…</string>
+    <string name="search_local_empty_title">No local matches</string>
+    <string name="search_local_empty_message">Nothing in the local library matches songs, albums, artists or playlists. Try searching the server online instead.</string>
+    <string name="search_server_button">Search server online</string>
+    <string name="search_server_section">Server results</string>
+    <string name="search_empty_title">Search your library</string>
+    <string name="search_empty_message">Type a song, album, artist or playlist name — Auralis matches against the local library (works offline).</string>
+    <string name="search_recent_title">Recent searches</string>
+</resources>

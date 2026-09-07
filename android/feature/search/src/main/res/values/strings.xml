@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- R5：feature:search 独有文案（默认=中文；英文见 values-en）。key 一律 search_ 前缀。 -->
+<resources>
+    <string name="search_library_title">搜索音乐库</string>
+    <string name="search_field_placeholder">歌曲、专辑、艺术家或歌单</string>
+    <string name="search_error_local">本地搜索失败</string>
+    <string name="search_error_server">在线搜索失败</string>
+    <string name="search_error_no_server">尚未连接服务器，无法在线搜索</string>
+    <string name="search_server_progress">正在服务器搜索…</string>
+    <string name="search_local_empty_title">本地没有匹配结果</string>
+    <string name="search_local_empty_message">本地持久化资料库中没有同时匹配歌曲、专辑、艺术家或歌单的内容。可以尝试在服务器上在线搜索。</string>
+    <string name="search_server_button">在线搜索服务器</string>
+    <string name="search_server_section">服务器在线结果</string>
+    <string name="search_empty_title">搜索你的音乐库</string>
+    <string name="search_empty_message">输入歌曲、专辑、艺术家或歌单名称，Auralis 会在本地持久化资料库中匹配（离线可用）。</string>
+    <string name="search_recent_title">最近搜索</string>
+</resources>

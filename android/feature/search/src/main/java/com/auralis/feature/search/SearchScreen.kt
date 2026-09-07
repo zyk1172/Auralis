@@ -50,6 +50,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -59,6 +61,7 @@ import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.designsystem.R as AuralisR
 import com.auralis.core.domain.BrowseDestination
 import com.auralis.core.domain.SearchResults
 import com.auralis.core.domain.ServerId
@@ -85,6 +88,7 @@ fun SearchScreen(
 ) {
     val colors = LocalAuralisTheme.current.colors
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     var query by rememberSaveable { mutableStateOf("") }
     /** 防抖后的查询词：输入停顿约 150ms 后才真正查询，避免逐键全量扫描。 */
@@ -139,7 +143,7 @@ fun SearchScreen(
         }
         result.onSuccess { local = it }
         result.onFailure { e ->
-            localError = e.message ?: "本地搜索失败"
+            localError = e.message ?: context.getString(R.string.search_error_local)
             local = SearchResults()
         }
     }
@@ -152,7 +156,7 @@ fun SearchScreen(
         if (server == null) {
             serverQuery = term
             serverSongs = emptyList()
-            serverError = "尚未连接服务器，无法在线搜索"
+            serverError = context.getString(R.string.search_error_no_server)
             return
         }
         scope.launch {
@@ -164,7 +168,7 @@ fun SearchScreen(
                 .onSuccess { if (serverQuery == term) serverSongs = it }
                 .onFailure { e ->
                     // R15：网络失败如实呈现（可重试），不伪装成「无结果」。
-                    if (serverQuery == term) serverError = e.message ?: "在线搜索失败"
+                    if (serverQuery == term) serverError = e.message ?: context.getString(R.string.search_error_server)
                 }
             if (serverQuery == term) serverSearching = false
         }
@@ -196,10 +200,10 @@ fun SearchScreen(
                 .height(48.dp),
         ) {
             IconButton(onClick = onBack, modifier = Modifier.align(Alignment.CenterStart)) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = colors.primaryText)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(AuralisR.string.back), tint = colors.primaryText)
             }
             Text(
-                "搜索音乐库",
+                stringResource(R.string.search_library_title),
                 style = MaterialTheme.typography.titleMedium,
                 color = colors.primaryText,
                 modifier = Modifier.align(Alignment.Center),
@@ -237,7 +241,7 @@ fun SearchScreen(
             localError != null -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 SearchMessageCard(
                     icon = { Icon(Icons.Filled.Clear, contentDescription = null, tint = colors.secondaryText) },
-                    title = "本地搜索失败",
+                    title = stringResource(R.string.search_error_local),
                     message = localError.orEmpty(),
                 )
             }
@@ -251,15 +255,15 @@ fun SearchScreen(
                         serverSearching -> {
                             CircularProgressIndicator(color = colors.accent)
                             Spacer(Modifier.height(AuralisSpacing.medium))
-                            Text("正在服务器搜索…", style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText)
+                            Text(stringResource(R.string.search_server_progress), style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText)
                         }
 
                         !hasServerSongs -> {
                             SearchMessageCard(
                                 icon = { Icon(Icons.Filled.Search, contentDescription = null, tint = colors.secondaryText) },
-                                title = "本地没有匹配结果",
-                                message = "本地持久化资料库中没有同时匹配歌曲、专辑、艺术家或歌单的内容。可以尝试在服务器上在线搜索。",
-                                actionLabel = "清除搜索",
+                                title = stringResource(R.string.search_local_empty_title),
+                                message = stringResource(R.string.search_local_empty_message),
+                                actionLabel = stringResource(AuralisR.string.clear_search),
                                 onAction = { query = "" },
                             )
                             if (serverError != null) {
@@ -278,13 +282,13 @@ fun SearchScreen(
                             ) {
                                 Icon(Icons.Filled.Wifi, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(AuralisSpacing.small))
-                                Text("在线搜索服务器")
+                                Text(stringResource(R.string.search_server_button))
                             }
                         }
 
                         else -> LocalResultList(
                             results = SearchResults(songs = serverSongs),
-                            serverSectionTitle = "服务器在线结果",
+                            serverSectionTitle = stringResource(R.string.search_server_section),
                             onPlayTracks = { tracks, index ->
                                 recordSearch(trimmedQuery)
                                 onPlayTracks(tracks, index)
@@ -340,7 +344,7 @@ private fun SearchField(
         Box(Modifier.weight(1f).padding(horizontal = AuralisSpacing.medium)) {
             if (query.isEmpty()) {
                 Text(
-                    "歌曲、专辑、艺术家或歌单",
+                    stringResource(R.string.search_field_placeholder),
                     style = MaterialTheme.typography.bodyLarge,
                     color = colors.secondaryText,
                     maxLines = 1,
@@ -360,7 +364,7 @@ private fun SearchField(
         }
         if (query.isNotEmpty()) {
             IconButton(onClick = onClear, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Filled.Clear, contentDescription = "清除搜索", tint = colors.secondaryText)
+                Icon(Icons.Filled.Clear, contentDescription = stringResource(AuralisR.string.clear_search), tint = colors.secondaryText)
             }
         }
     }
@@ -388,8 +392,8 @@ private fun RecentSearchesContent(
                         modifier = Modifier.size(44.dp),
                     )
                 },
-                title = "搜索你的音乐库",
-                message = "输入歌曲、专辑、艺术家或歌单名称，Auralis 会在本地持久化资料库中匹配（离线可用）。",
+                title = stringResource(R.string.search_empty_title),
+                message = stringResource(R.string.search_empty_message),
             )
         }
         return
@@ -403,14 +407,14 @@ private fun RecentSearchesContent(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "最近搜索",
+                    stringResource(R.string.search_recent_title),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = colors.primaryText,
                     modifier = Modifier.weight(1f),
                 )
                 TextButton(onClick = onClear) {
-                    Text("清除", style = MaterialTheme.typography.labelMedium, color = colors.accent)
+                    Text(stringResource(AuralisR.string.clear), style = MaterialTheme.typography.labelMedium, color = colors.accent)
                 }
             }
             HorizontalDivider(color = colors.separator)
@@ -464,7 +468,7 @@ private fun LocalResultList(
     LazyColumn(modifier = modifier.fillMaxWidth()) {
         if (results.songs.isNotEmpty()) {
             item(key = "header-songs") {
-                SearchSectionHeader(serverSectionTitle ?: "歌曲")
+                SearchSectionHeader(serverSectionTitle ?: stringResource(AuralisR.string.song))
             }
             items(count = results.songs.size, key = { index -> "song-${results.songs[index].globalId.serialized}" }) { index ->
                 val track = results.songs[index]
@@ -478,7 +482,7 @@ private fun LocalResultList(
         }
         if (results.albums.isNotEmpty()) {
             item(key = "header-albums") {
-                SearchSectionHeader("专辑")
+                SearchSectionHeader(stringResource(AuralisR.string.album))
             }
             items(count = results.albums.size, key = { index -> "album-${results.albums[index].globalId.serialized}" }) { index ->
                 val album = results.albums[index]
@@ -487,7 +491,7 @@ private fun LocalResultList(
         }
         if (results.artists.isNotEmpty()) {
             item(key = "header-artists") {
-                SearchSectionHeader("艺术家")
+                SearchSectionHeader(stringResource(AuralisR.string.artist))
             }
             items(count = results.artists.size, key = { index -> "artist-${results.artists[index].globalId.serialized}" }) { index ->
                 val artist = results.artists[index]
@@ -496,7 +500,7 @@ private fun LocalResultList(
         }
         if (results.playlists.isNotEmpty()) {
             item(key = "header-playlists") {
-                SearchSectionHeader("歌单")
+                SearchSectionHeader(stringResource(AuralisR.string.playlist))
             }
             items(count = results.playlists.size, key = { index -> "playlist-${results.playlists[index].globalId.serialized}" }) { index ->
                 val playlist = results.playlists[index]

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  R5：跨模块共享 UI 文案（默认=中文，开发语言与 Swift String(localized:) 一致）。
+  任何模块不得重复定义同名 key（Android 资源合并冲突）；跨模块共享一律放这里，
+  各 feature 通过 `import com.auralis.core.designsystem.R as AuralisR` 引用。
+  仅 module 独有文案放各 feature 自己的 values/strings.xml（key 带模块前缀）。
+-->
+<resources>
+    <string name="back">返回</string>
+    <string name="clear">清除</string>
+    <string name="cancel">取消</string>
+    <string name="confirm">确认</string>
+    <string name="song">歌曲</string>
+    <string name="album">专辑</string>
+    <string name="artist">艺术家</string>
+    <string name="playlist">歌单</string>
+    <string name="more_actions">更多操作</string>
+    <string name="clear_search">清除搜索</string>
+</resources>
