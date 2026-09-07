@@ -20,6 +20,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
@@ -71,6 +72,7 @@ fun ServerListScreen(
     onAdd: () -> Unit,
     onEdit: (ServerAccount) -> Unit,
     onEnter: () -> Unit,
+    onBack: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
@@ -88,6 +90,7 @@ fun ServerListScreen(
     ) {
         HeaderRow(
             title = "服务器",
+            onBack = onBack,
             action = {
                 Button(onClick = { state.add() }) {
                     Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -129,16 +132,33 @@ fun ServerListScreen(
 }
 
 @Composable
-private fun HeaderRow(title: String, action: @Composable () -> Unit) {
+private fun HeaderRow(
+    title: String,
+    onBack: (() -> Unit)? = null,
+    action: @Composable () -> Unit,
+) {
     val colors = LocalAuralisTheme.current.colors
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.medium),
+            .padding(horizontal = AuralisSpacing.medium, vertical = AuralisSpacing.small),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(title, style = MaterialTheme.typography.titleLarge, color = colors.primaryText)
-        Spacer(Modifier.weight(1f))
+        if (onBack != null) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "返回",
+                    tint = colors.primaryText,
+                )
+            }
+        }
+        Text(
+            title,
+            style = MaterialTheme.typography.titleLarge,
+            color = colors.primaryText,
+            modifier = Modifier.weight(1f),
+        )
         action()
     }
 }
