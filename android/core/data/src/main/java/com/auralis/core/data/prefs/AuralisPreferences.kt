@@ -24,6 +24,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import okhttp3.HttpUrl.Companion.toHttpUrl
 
 /**
  * 用户偏好（DataStore）。键名对齐 Apple UserDefaults：
@@ -214,8 +215,112 @@ class AuralisPreferences(private val context: Context) {
         store.edit { it[playbackRate] = rate.coerceIn(0.5f, 2f) }
     }
 
+    // ------------------------------------------------------------ AI 助手（S8）
+    // 对齐 Swift AISettings（@AppStorage keys auralis.ai.*）+ AIConnectionSettings。
+    // API Key 不落 DataStore：走 KeystoreCredentialVault，reference 固定
+    // "ai.provider.api-key"（对齐 Swift Keychain credentialID）。
+
+    private val aiEnabled = booleanPreferencesKey("auralis.ai.enabled")
+    private val aiConsentGiven = booleanPreferencesKey("auralis.ai.consentGiven")
+    private val aiBaseUrl = stringPreferencesKey("auralis.ai.base-url")
+    private val aiApiPath = stringPreferencesKey("auralis.ai.api-path")
+    private val aiModel = stringPreferencesKey("auralis.ai.model")
+    private val aiMaxContextTokens = intPreferencesKey("auralis.ai.max-context-tokens")
+    private val aiMaxOutputTokens = intPreferencesKey("auralis.ai.max-output-tokens")
+    private val aiSupportsToolCalling = booleanPreferencesKey("auralis.ai.supports-tool-calling")
+
+    val aiEnabledFlow: Flow<Boolean> = store.data.map { it[aiEnabled] ?: true }
+
+    suspend fun aiEnabledValue(): Boolean = aiEnabledFlow.first()
+
+    suspend fun setAiEnabled(value: Boolean) {
+        store.edit { it[aiEnabled] = value }
+    }
+
+    val aiConsentGivenFlow: Flow<Boolean> = store.data.map { it[aiConsentGiven] ?: false }
+
+    suspend fun aiConsentGivenValue(): Boolean = aiConsentGivenFlow.first()
+
+    suspend fun setAiConsentGiven(value: Boolean) {
+        store.edit { it[aiConsentGiven] = value }
+    }
+
+    val aiConnectionFlow: Flow<AiConnectionSettings> = store.data.map {
+        AiConnectionSettings(
+            baseUrl = it[aiBaseUrl] ?: AiConnectionSettings.DEFAULT_BASE_URL,
+            apiPath = it[aiApiPath] ?: AiConnectionSettings.DEFAULT_API_PATH,
+            model = it[aiModel] ?: AiConnectionSettings.DEFAULT_MODEL,
+            maxContextTokens = it[aiMaxContextTokens] ?: AiConnectionSettings.DEFAULT_MAX_CONTEXT_TOKENS,
+            maxOutputTokens = it[aiMaxOutputTokens] ?: AiConnectionSettings.DEFAULT_MAX_OUTPUT_TOKENS,
+            supportsToolCalling = it[aiSupportsToolCalling] ?: true,
+        )
+    }
+
+    suspend fun aiConnectionValue(): AiConnectionSettings = aiConnectionFlow.first()
+
+    suspend fun setAiBaseUrl(value: String) {
+        store.edit { it[aiBaseUrl] = value.trim() }
+    }
+
+    suspend fun setAiApiPath(value: String) {
+        store.edit { it[aiApiPath] = value.trim() }
+    }
+
+    suspend fun setAiModel(value: String) {
+        store.edit { it[aiModel] = value.trim() }
+    }
+
+    suspend fun setAiMaxContextTokens(value: Int) {
+        store.edit { it[aiMaxContextTokens] = value.coerceIn(4_000, 2_000_000) }
+    }
+
+    suspend fun setAiMaxOutputTokens(value: Int) {
+        store.edit { it[aiMaxOutputTokens] = value.coerceIn(256, 128_000) }
+    }
+
+    suspend fun setAiSupportsToolCalling(value: Boolean) {
+        store.edit { it[aiSupportsToolCalling] = value }
+    }
+
     companion object {
         private const val RECENT_SEARCH_SEPARATOR = "\u001f"
         private const val RECENT_SEARCH_LIMIT = 10
+    }
+}
+
+/**
+ * AI 连接设置（对应 Swift `AIConnectionSettings`）。isComplete 语义一致：
+ * baseURL 是合法 http(s)、apiPath 非空、model 非空。
+ * API Key 不在此结构内 —— 见 [AuralisPreferences] AI 段注释。
+ */
+data class AiConnectionSettings(
+    val baseUrl: String,
+    val apiPath: String,
+    val model: String,
+    val maxContextTokens: Int,
+    val maxOutputTokens: Int,
+    val supportsToolCalling: Boolean,
+) {
+    val isComplete: Boolean
+        get() {
+            val trimmed = baseUrl.trim()
+            val hasScheme = trimmed.startsWith("http://") || trimmed.startsWith("https://")
+            val hostOk = runCatching { trimmed.toHttpUrl() }
+                .getOrNull()?.host?.isNotBlank() == true
+            return hasScheme && hostOk && apiPath.isNotBlank() && model.isNotBlank()
+        }
+
+    /** API Key 安全存储引用（对齐 Swift credentialID = "ai.provider.api-key"）。 */
+    val apiKeyReference: String get() = API_KEY_REFERENCE
+
+    companion object {
+        const val DEFAULT_BASE_URL = "https://api.openai.com"
+        const val DEFAULT_API_PATH = "/v1/chat/completions"
+        const val DEFAULT_MODEL = "gpt-4o-mini"
+        const val DEFAULT_MAX_CONTEXT_TOKENS = 256_000
+        const val DEFAULT_MAX_OUTPUT_TOKENS = 16_000
+
+        /** 与 Swift Keychain credentialID 对齐；KeystoreCredentialVault 的条目 id。 */
+        const val API_KEY_REFERENCE = "ai.provider.api-key"
     }
 }
