@@ -58,11 +58,12 @@
 
 | 能力 | Android 实现 | 状态 |
 |---|---|---|
-| 服务器列表/添加/编辑/删除/切换（UI） | feature:server（已接入 app-mobile 路由） | Done（S1） |
+| 服务器列表/添加/编辑/删除/切换（UI） | feature:server（已接入 Shell 覆盖路由） | Done（S1） |
 | 连接测试（不落库）+ URL 策略前置 | ProductionServerConnector.testConnection + ServerURLPolicy | Done |
-| 三 Tab 导航（Home/Library/Assistant） | feature/*（app-mobile 壳） | Not Started（S2） |
-| Bottom Dock / Mini Player | feature/player | Not Started |
-| Settings 齿轮入口（Library 顶栏） | feature/settings | Not Started |
+| Bottom Dock（3 分区：Home/Library/Assistant 圆钮） | app-mobile/shell（≤760dp 居中 overlay） | Done（S2） |
+| 分区根切换 + 顶栏大标题结构 | MobileShell / ShellPages 占位 | Partial（页面实体待 S3/S4/S8） |
+| Mini Player（真实绑定 playback） | app-mobile/shell MiniPlayerBar | Partial（展开/进度待 S5） |
+| Settings 齿轮入口 → 设置占位（服务器行可用） | LibraryPlaceholderPage 齿轮 | Partial（S7 完善） |
 
 ## 6. 离线 / 歌词 / 封面（audit 07）
 
@@ -86,8 +87,8 @@
 ## 8. 当前缺口（按用户强制顺序排队）
 
 1. ~~Server 添加/恢复 UI（feature:server）~~ ✅ S1 完成
-2. Mobile Shell + Bottom Dock（feature:home/library shell）← 当前阶段
-3. Home 页
+2. ~~Mobile Shell + Bottom Dock~~ ✅ S2 完成（Dock/分区根/MiniPlayer 绑定/设置入口占位）
+3. Home 页 ← 当前阶段
 4. Library + Browse Detail
 5. Mini Player / Now Playing / Queue / Lyrics
 6. Search
@@ -95,4 +96,4 @@
 8. Assistant
 9. Android TV（app-tv）
 
-> 最后更新：2026-09-07（P0 Core 九项 + S1 服务器链路完成，S2 Shell 进行中）
+> 最后更新：2026-09-07（P0 Core 九项 + S1 服务器链路 + S2 Mobile Shell 完成，S3 Home 进行中）

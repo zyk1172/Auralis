@@ -10,10 +10,11 @@
 
 | 页面 | Swift 基准 | Android 目标 | 状态 |
 |---|---|---|---|
-| Bottom Dock（3 Tab：Home/Library/Assistant 圆钮） | AppShell/*.swift | feature:home/library/assistant | Not Started |
-| Mini Player（Dock 上方胶囊） | AppShell/MiniPlayer*.swift | feature:player | Not Started |
-| 服务器选择/切换（Dock 左侧） | AppShell/ServerPicker*.swift | feature:server | Not Started |
-| 设置齿轮入口（Library 顶栏） | AppShell/*.swift | feature:settings | Not Started |
+| Bottom Dock（3 Tab：Home/Library/Assistant 圆钮） | AuralisRootView.swift BottomDock | app-mobile/shell | Done（S2：宽屏居中 ≤760dp、图标对齐 house/square.stack/sparkles、悬浮 overlay） |
+| Mini Player（Dock 上方胶囊） | AuralisRootView MiniPlayerContent | app-mobile/shell | Partial（S2：真实绑定 playback StateFlow；封面/标题/艺人/播放暂停；展开 Now Playing 待 S5） |
+| 分区内容根 + 切换回根 | IOSMusicShell / SectionContent | MobileShell | Done（占位页；S3/S4/S8 逐个替换真实页面） |
+| 服务器选择/切换入口 | SettingsView「服务器」行 | SettingsPlaceholderPage → ServerList | Partial（S2 起真实可用；完整设置页待 S7） |
+| 设置齿轮入口（Library 顶栏） | AppShell Library 顶栏 | LibraryPlaceholderPage 齿轮 | Partial（打开设置占位；S4/S7 完善） |
 
 ## 服务器
 

@@ -174,3 +174,16 @@ Android `AgentToolLoop` 保留了审计 §5.2/5.3 的**三条不变式**：
   密码留空 = 沿用本机已存凭据；失败走同一 rollback 恢复旧账户+旧凭据。
 - **UI 规则**：保存按钮 canSave（必填齐全 + 非 busy）；连接中显示 stage 标题
   （检查地址/保护凭据/验证服务器/…）；失败折叠详情；删除服务器二次确认（只删本地）。
+
+## 2g. Mobile Shell（S2，2026-09-07）
+
+- **Shell 在 app-mobile**（跨分区的 Dock/Mini Player 属应用级，不做成 feature 模块）；
+  分区占位页先放 app-mobile/shell，真实页面（feature:home/library/assistant）后续按
+  S3/S4/S8 逐个替换接线。
+- **Dock 语义对齐 iOS**：一级分区只有 Home/Library/Assistant（Search/Settings 不进
+  Dock）；Assistant 为圆形 accent 钮（sparkles）；宽屏最大约 760dp 居中，悬浮 overlay
+  + 系统导航条安全区。
+- **Mini Player 真绑定**：订阅 `LocalPlaybackHost` → `PlaybackSnapshot`（封面/标题/
+  艺人/播放暂停），仅 Home/Library 分区显示，无播放内容时隐藏；展开 Now Playing 属 S5。
+- **服务器/设置入口**：服务器管理按 iOS 语义放在 **Settings**（Library 顶栏齿轮 →
+  设置占位，含真实「服务器」行 → feature:server 列表）；首页摘要卡也提供真实入口。
