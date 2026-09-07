@@ -19,8 +19,12 @@
 
 | 页面 | Swift 基准 | 状态 | 按钮级核对 |
 |---|---|---|---|
-| 添加服务器（内网/外网双地址 + 用户名/口令 + 探测） | ProductionServerConnector.swift + ServerOnboarding | Not Started | ☐ 连接按钮 action/loading/disabled ☐ 成功→注册表登记 ☐ 失败→回滚 + 错误显示 ☐ 编辑/恢复 ☐ 忘记服务器二次确认 |
-| 恢复服务器（扫描历史/凭据已存） | — | Not Started | ☐ |
+| 服务器列表（已存服务器/切换/编辑/删除） | MacServerPage.swift | Partial（feature:server 已建，壳期占位入口） | ☑ 点行切换当前服务器 ☑ 编辑入口 ☑ 删除二次确认（只删本地，文案对齐） ☑ 空状态引导添加 |
+| 添加服务器（显示名/内网地址/用户名/密码/外网地址） | ServerConnectionSheet.swift | Partial | ☑ 保存 action/loading/阶段进度 ☑ canSave（必填齐全才可点） ☑ 成功→登记注册表+目录同步 ☑ 失败→回滚+分类错误可折叠详情 |
+| 编辑服务器（密码留空沿用旧凭据、身份稳定） | SettingsView 编辑页 | Partial | ☑ 保存走 core edit()（不新建重复服务器/不删已同步目录） ☑ 密码留空沿用已存凭据 ☑ 失败恢复旧账户+旧凭据 |
+| 测试连接（不保存凭据、不同步） | ServerConnectionSheet.runTest | Partial | ☑ 测试中 loading ☑ 成功/用户名或密码错误/无法连接 状态行 ☑ 地址策略前置（http 公网/内嵌凭据被拒） |
+| 恢复链路（冷启动已存服务器不联网出界面） | restoreLastConnection | Partial | ☑ bootstrapFromLocal 恢复账户+端点登记 ☑ 无服务器→空状态引导；有→进主界面 |
+| URL 策略（embedded creds / http 公网拒绝） | ServerURLPolicy | Done（core:data 层，UI 复用） | ☑ 单测覆盖（IPv4/IPv6/公网/内嵌凭据） |
 
 ## Home
 
@@ -75,6 +79,7 @@
 |---|---|---|---|
 | TV 壳（Leanback，无 Assistant） | — | Not Started | ☐ |
 
-> 当前状态：**P0 Core 九项（数据/播放/下载/歌词链路）已 Done**；所有页面 UI 尚未开始，
-> 按序先做 Server 添加/恢复链路（feature:server）。
+> 当前状态：**P0 Core 九项（数据/播放/下载/歌词链路）已 Done**；S1 服务器添加/恢复链路
+> （feature:server）已落地并接入 app-mobile 路由（Boot→列表/添加→主界面占位）；
+> 待 Mobile Shell（S2）接入后替换占位主界面。
 > 最后更新：2026-09-07

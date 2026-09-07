@@ -160,3 +160,17 @@ Android `AgentToolLoop` 保留了审计 §5.2/5.3 的**三条不变式**：
   LyricsService 组合（P0-8）、首响优先 + HomeLayoutPreference v2 + 主题 DataStore
   闭环（P0-9）。
 - feature/* 七个模块为空壳，待填充页面（下一步：Server 添加/恢复链路）。
+
+## 2f. 服务器 UI 链路（S1，2026-09-07）
+
+- **URL 策略前置**：`connect()`/`edit()`/`testConnection()` 先过 `ServerURLPolicy`
+  （拒绝内嵌 `user:pass@`；公网必须 HTTPS），校验在写 Vault 之前，失败零副作用。
+  主机分类镜像 Swift `NetworkHostClassifier`（localhost/.local/IPv4 私网/回环、
+  IPv6 ::1/ULA/link-local/IPv4-mapped/zone id），测试覆盖见 ServerURLPolicyTest。
+- **`testConnection`（对齐 testServerConnectionWithInput）**：用**内存 Vault** 构造
+  客户端探测，不保存凭据、不同步、不改变当前连接；成功只回服务器公开信息。
+- **编辑身份稳定（对齐 updateServerConfiguration）**：新增 `edit()`，沿用既有
+  serverId/凭据引用——改地址/用户名不新建重复服务器、不删已同步目录；
+  密码留空 = 沿用本机已存凭据；失败走同一 rollback 恢复旧账户+旧凭据。
+- **UI 规则**：保存按钮 canSave（必填齐全 + 非 busy）；连接中显示 stage 标题
+  （检查地址/保护凭据/验证服务器/…）；失败折叠详情；删除服务器二次确认（只删本地）。
