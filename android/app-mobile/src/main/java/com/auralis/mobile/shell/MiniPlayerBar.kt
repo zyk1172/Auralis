@@ -1,6 +1,7 @@
 package com.auralis.mobile.shell
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,11 +17,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -35,16 +37,23 @@ import com.auralis.core.domain.Track
 import com.auralis.core.image.AuralisArtwork
 
 /**
- * 迷你播放条（对齐 Apple 的 Mini Player：Dock 上方 56dp 胶囊）。
- * 展示**真实**当前曲目（封面/标题/艺人）+ 播放暂停；点击区行为（展开 Now Playing）
- * 在播放器阶段（S5）接入。
+ * 迷你播放条（对齐 Apple MiniPlayerContent：56dp 胶囊，封面 + 曲目信息 + 上一首/
+ * 播放暂停/下一首）。
+ * - 点封面/曲目信息区 = 展开正在播放全屏页（Shell 注入）；
+ * - 上一首/下一首 = 真实 engine.previous/next（canPrev/canNext 控制可用）；
+ * - 缓冲中在播放键位显示 spinner，切歌按钮保持可用。
  */
 @Composable
 fun MiniPlayerBar(
     track: Track,
     isPlaying: Boolean,
     isBuffering: Boolean,
+    canGoPrevious: Boolean,
+    canGoNext: Boolean,
+    onOpen: () -> Unit,
+    onPrevious: () -> Unit,
     onTogglePlayPause: () -> Unit,
+    onNext: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
@@ -52,38 +61,56 @@ fun MiniPlayerBar(
         modifier = modifier
             .height(AuralisChrome.miniPlayerHeight)
             .background(colors.elevated, RoundedCornerShape(AuralisRadius.large))
-            .padding(start = AuralisSpacing.medium, end = AuralisSpacing.small),
+            .padding(start = AuralisSpacing.small),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        AuralisArtwork(
-            serverId = track.serverId,
-            artworkKey = track.artworkKey,
-            contentDescription = "封面",
-            titleForFallback = track.title,
-            targetSizeDp = 40,
-            modifier = Modifier.size(40.dp),
-            shape = RoundedCornerShape(AuralisRadius.small),
-        )
-        Spacer(Modifier.width(AuralisSpacing.medium))
-        Column(
+        // 封面 + 标题区：点击展开正在播放。
+        Row(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxHeight(),
-            verticalArrangement = Arrangement.Center,
+                .fillMaxHeight()
+                .clickable(onClick = onOpen)
+                .padding(start = AuralisSpacing.small, end = AuralisSpacing.small),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = track.title,
-                style = MaterialTheme.typography.bodyMedium,
-                color = colors.primaryText,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+            AuralisArtwork(
+                serverId = track.serverId,
+                artworkKey = track.artworkKey,
+                contentDescription = "封面",
+                titleForFallback = track.title,
+                targetSizeDp = 40,
+                modifier = Modifier.size(40.dp),
+                shape = RoundedCornerShape(AuralisRadius.small),
             )
-            Text(
-                text = track.artistName,
-                style = MaterialTheme.typography.bodySmall,
-                color = colors.secondaryText,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+            Spacer(Modifier.width(AuralisSpacing.medium))
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(
+                    text = track.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.primaryText,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = track.artistName,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.secondaryText,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        IconButton(onClick = onPrevious, enabled = canGoPrevious) {
+            Icon(
+                Icons.Filled.SkipPrevious,
+                contentDescription = "上一首",
+                tint = if (canGoPrevious) colors.primaryText else colors.secondaryText.copy(alpha = 0.35f),
+                modifier = Modifier.size(22.dp),
             )
         }
         if (isBuffering) {
@@ -103,6 +130,14 @@ fun MiniPlayerBar(
                     modifier = Modifier.size(26.dp),
                 )
             }
+        }
+        IconButton(onClick = onNext, enabled = canGoNext) {
+            Icon(
+                Icons.Filled.SkipNext,
+                contentDescription = "下一首",
+                tint = if (canGoNext) colors.primaryText else colors.secondaryText.copy(alpha = 0.35f),
+                modifier = Modifier.size(22.dp),
+            )
         }
     }
 }

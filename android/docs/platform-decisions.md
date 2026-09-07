@@ -253,3 +253,29 @@ Android `AgentToolLoop` 保留了审计 §5.2/5.3 的**三条不变式**：
 - **行徽标实时驱动**：行内已下载/已收藏徽标分别由 downloads 表行级 observe 与
   favorites 计数信号（`observeFavoriteTracks` flatMapLatest 重查）驱动，非静态快照。
 
+## 2j. 播放器 UI（S5，2026-09-07）
+
+- **位置节拍（engine.position）**：快照只在播放器事件时发布，长时播放会“静止”；
+  S5 在引擎新增 250ms `position` StateFlow（值不变不发布），进度条与同步歌词都订阅它，
+  不抬高整体快照的重组频率（Shell 仍订阅低频 snapshot）。
+- **Mini Player = 展开入口**：点封面/标题区打开 Now Playing 全屏页（覆盖 Dock）；胶囊内
+  上一首/下一首真实绑定 engine.previous/next，canPrev/canNext 由队列游标决定（当前项
+  logicalIndex>0 / < totalCount-1），缓冲中播放键位显示 spinner 而切歌保持可用。
+- **Now Playing 覆盖路由**：Shell 层 `nowPlayingOpen` 单处理器 BackHandler（NP 优先于
+  Browse 覆盖页）；页面内三页共用同一套固定控制区（标题/进度/五键/音量/音频信息），
+  切页不跳布局——对齐 Swift “controls pinned below TabView”。
+- **进度拖动 = 松手 seek**：拖动只更新本地 fraction 显示，`onValueChangeFinished` 才
+  `seekTo(fraction×duration)`（对齐 pendingSeek）；显示剩余时间为负值格式。
+- **五键等宽传输区**：播放模式循环为引擎真实状态（Sequential→Shuffle→RepeatAll→
+  RepeatOne，顺序与 Swift cyclePlayMode 一致），非本地假切换。
+- **队列页**：展示引擎真实窗口 entries（>500 窗口化时给“N–M / 总数”计数提示与队尾
+  “已到末尾”不伪造）；点行 = playOccurrence(entryId) 精确播放该 occurrence；编辑模式
+  提供移除/上移/下移（removeOccurrence/moveOccurrence 逻辑下标，窗口内行号映射
+  windowStart+i）。
+- **同步歌词**：LyricsServiceImpl 本地缓存→远端→miss 负缓存；页面按 positionMs 求
+  当前行并 animateScrollToItem 居中；空态与错误重试文案对齐 Swift。纯文本歌词只平铺
+  不高亮。
+- **本阶段裁剪**（文档记录，不作假按钮）：不喜欢（heart.slash）、歌曲鉴赏、由此继续
+  播放（AI 工具链，S8 Assistant 接）、Music Haptics（平台特性）、AirPlay 输出选择
+  （Android 无对应）；播放模式/音量/下载/加歌单/收藏全部真实。
+

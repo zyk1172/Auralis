@@ -55,10 +55,10 @@
 
 | 页面 | Swift 基准 | 状态 | 按钮级核对 |
 |---|---|---|---|
-| Mini Player | MiniPlayer*.swift | Not Started | ☐ 播放/暂停 ☐ 进度 ☐ 点击展开 |
-| Now Playing | NowPlayingView.swift | Not Started | ☐ 播放/暂停/上一首/下一首 ☐ 进度拖动 ☐ 收藏 ☐ 歌词入口 |
-| Queue | QueueView.swift | Not Started | ☐ 移除/清空/重排（若 Swift 有） |
-| Lyrics（逐行高亮/纯文本降级） | LyricsView.swift | Not Started | ☐ |
+| Mini Player（Dock 上方 56 胶囊） | MiniPlayerContent | Done（S5） | ☑ 封面/标题/艺人 ☑ 上一首/播放暂停/下一首真实绑定 ☑ 缓冲 spinner ☑ 点击展开 Now Playing |
+| Now Playing | NowPlayingView | Done（S5） | ☑ 渐变背景 ☑ 分段：歌词/正在播放/队列 ☑ hero 封面 ☑ 跑马灯标题/艺人 ☑ 进度拖动→松手 seek ☑ 五键传输区（播放模式循环/上一首/播放/下一首/⋯）☑ 收藏 ☑ 下载三态 ☑ 添加到歌单 ☑ 前往专辑/艺术家 ☑ 音量 ☑ 音频信息 |
+| Queue | QueueView + PlaybackQueuePresentationStore | Done（S5） | ☑ 点行播放该 occurrence ☑ 编辑：移除/上移/下移 ☑ 大队列窗口计数 ☑ 当前行高亮 |
+| Lyrics（同步歌词按位置高亮自动滚动/纯文本降级/空态） | NowPlaying lyrics | Done（S5） | ☑ 位置高亮+滚动 ☑ 无歌词空态 ☑ 加载失败重试 |
 
 ## Search
 
@@ -94,5 +94,7 @@
 > Home 分区已是真实页，播放/浏览动作真实；app-mobile-debug.apk 已打包）。
 > **S4 Library + Browse Detail 完成**（feature:library：7 scope 音乐库 + 17 目的地
 > BrowseDetail 覆盖路由 + 歌单远端先行管理 + insertNext/appendToQueue 接线；APK 已打包）。
-> 下一步：S5 Mini Player / Now Playing / Queue / Lyrics。
+> **S5 播放器 UI 完成**（feature:player NowPlaying 三页：hero/同步歌词/队列编辑 + Mini
+> Player 展开/切歌 + engine 250ms 位置节拍 + 音量/收藏/下载/加歌单真实动作；APK 已打包）。
+> 下一步：S6 Search。
 > 最后更新：2026-09-07

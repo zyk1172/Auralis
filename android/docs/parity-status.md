@@ -44,7 +44,8 @@
 | 播放历史/scrobble 防重复计数 | — | notifyActivated/notifyCompleted + sink | Done |
 | Local/Remote 来源识别 | — | DefaultPlaybackSourceResolver + localSourceKeys | Done |
 | PlaybackService 进程级单例 | — | AuralisPlaybackService | Partial（MediaSession/通知待 UI 阶段） |
-| 队列窗口化（>500） | — | QueueWindowing | Partial（UI 阶段验证） |
+| 队列窗口化（>500） | — | QueueWindowing | Partial（S5 队列页消费） |
+| 位置节拍（进度条/歌词高亮用） | PlaybackStore.position | engine.position（250ms StateFlow） | Done（S5） |
 
 ## 4. 主题（audit 05）
 
@@ -62,7 +63,7 @@
 | 连接测试（不落库）+ URL 策略前置 | ProductionServerConnector.testConnection + ServerURLPolicy | Done |
 | Bottom Dock（3 分区：Home/Library/Assistant 圆钮） | app-mobile/shell（≤760dp 居中 overlay） | Done（S2） |
 | 分区根切换 + 顶栏大标题结构 | MobileShell / ShellPages | Partial（Home/Library 已真实页，Assistant 待 S8） |
-| Mini Player（真实绑定 playback） | app-mobile/shell MiniPlayerBar | Partial（展开/进度待 S5） |
+| Mini Player（真实绑定 playback） | app-mobile/shell MiniPlayerBar | Done（S5：上一首/下一首/缓冲/点开 Now Playing） |
 | Settings 齿轮入口 → 设置占位（服务器行可用） | LibraryScreen 顶栏齿轮 | Partial（S7 完善） |
 
 ## 5b. Home 首页（audit 06 首页规格）
@@ -97,6 +98,26 @@
 | 常听艺术家/专辑（按真实播放次数降序，点行推详情） | BrowseDetailSheet topArtists/topAlbums | TopArtistList/TopAlbumList（homeTopArtists/homeTopAlbums） | Done（S4） |
 | 播放动作全接线：playQueue / insertNext（下一首）/ appendToQueue（加队列） | selectAndPlay/playNext/appendToQueue | MobileShell playShelf/playNextShelf/appendQueueShelf | Done（S4） |
 
+## 5d. 播放器 UI（audit 04 + PlayerViews 规格；S5）
+
+| 能力 | Swift 基准 | Android 实现 | 状态 |
+|---|---|---|---|
+| Mini Player 展开为 Now Playing（56 胶囊：封面/标题/上一首/播放/下一首） | MiniPlayerContent / CompactMiniPlayerContent | app-mobile MiniPlayerBar（S5 扩展） | Done（S5） |
+| 正在播放全屏页（渐变背景 + 顶栏「正在播放/专辑」+ 分段：歌词/正在播放/队列） | NowPlayingView | feature:player NowPlayingScreen | Done（S5） |
+| 海报 hero（封面主体） | artworkHero + NowPlayingArtworkGlow | AuralisArtwork 大封面（glow 以阴影+渐变近似） | Done（S5） |
+| 标题/艺人跑马灯（超长单向滚动一次） | OneShotMarqueeText | PlayerUi AutoMarqueeText | Done（S5） |
+| 进度滑块拖动暂存、松手 seek（显示位置/剩余时间） | pendingSeek + displayedPlaybackPosition | dragFraction + onDragEnd seekTo | Done（S5） |
+| 五键传输区：播放模式循环（顺序/随机/列表循环/单曲循环）/上一首/大播放键/下一首/⋯ | transportControls + cyclePlayMode | PlaybackControlsArea + engine.cyclePlayMode | Done（S5） |
+| 收藏（当前曲实时状态 + 切换动作） | favoriteButton + toggleFavorite | observeFavoriteTracks + libraryActions | Done（S5） |
+| 下载管理（下载到本地/取消 xx%/删除下载） | moreMenu download/cancel/remove | graph.downloadManager 三态菜单 | Done（S5） |
+| 添加到歌单（选已有只读禁用/新建并加入，远端先行） | AddToPlaylistSheet | PlayerAddToPlaylistDialog | Done（S5） |
+| 前往专辑/艺术家（真实目录存在才可用 → Library Browse） | openCurrentAlbum/openCurrentArtist | menu → Shell openBrowse | Done（S5） |
+| 音量（真实 engine.setVolume） | volumeControl + setVolume | Slider + controller.setVolume | Done（S5） |
+| 音频信息切换（codec ⇄ 位深·采样率） | bottomInfo + TrackInformation 精简 | audioTechnicalLabel toggle | Done（S5） |
+| 队列页：点行播放 occurrence、编辑模式移除/上移/下移、窗口计数提示 | queue + playQueueEntry + removeFromQueue + moveQueue | QueueContent + controller.* | Done（S5） |
+| 歌词页：同步歌词按位置高亮自动滚动、空态、加载失败重试 | NowPlaying lyrics + LyricsIndexResolver | LyricsContent + lyricsService.lyricsFor | Done（S5） |
+| Android 裁剪（非本阶段）：不喜欢/歌曲鉴赏/由此继续播放（AI，S8）、Music Haptics、AirPlay 输出选择 | — | 未移植（文档记录） | N/A |
+
 ## 6. 离线 / 歌词 / 封面（audit 07）
 
 | 能力 | Android 实现 | 状态 |
@@ -122,10 +143,10 @@
 2. ~~Mobile Shell + Bottom Dock~~ ✅ S2 完成（Dock/分区根/MiniPlayer 绑定/设置入口占位）
 3. ~~Home 页~~ ✅ S3 完成（模块注册表 + 布局编辑 + 真实数据 + 播放/浏览接线；APK 已打包）
 4. ~~Library + Browse Detail~~ ✅ S4 完成（Library 7 scope + BrowseDetail 17 目的地 + 歌单远端先行管理 + 播放动作接线；APK 已打包）
-5. Mini Player / Now Playing / Queue / Lyrics ← 当前阶段
-6. Search
+5. ~~Mini Player / Now Playing / Queue / Lyrics~~ ✅ S5 完成（Mini 展开 + NowPlaying 三页 + 队列编辑 + 同步歌词高亮 + 位置节拍；APK 已打包）
+6. Search ← 当前阶段
 7. Settings
 8. Assistant
 9. Android TV（app-tv）
 
-> 最后更新：2026-09-07（P0 Core 九项 + S1 + S2 + S3 + S4 完成，S5 待开始）
+> 最后更新：2026-09-07（P0 Core 九项 + S1 + S2 + S3 + S4 + S5 完成，S6 待开始）

@@ -38,9 +38,11 @@ import com.auralis.core.domain.Track
 import com.auralis.core.playback.LocalPlaybackHost
 import com.auralis.core.playback.PlaybackController
 import com.auralis.core.playback.PlaybackSnapshot
+import com.auralis.core.playback.QueueSnapshot
 import com.auralis.feature.home.HomeScreen
 import com.auralis.feature.library.BrowseDetailScreen
 import com.auralis.feature.library.LibraryScreen
+import com.auralis.feature.player.NowPlayingScreen
 import kotlinx.coroutines.launch
 
 /**
@@ -67,17 +69,27 @@ fun MobileShell(
     var section by rememberSaveable { mutableStateOf(AppSection.Home) }
     // 浏览详情（S4）：非 null 时在 Library 分区内容上方覆盖真实浏览页。
     var browseDestination by remember { mutableStateOf<BrowseDestination?>(null) }
+    // 正在播放全屏页（S5）：点 Mini Player 打开，覆盖整个 Shell（含 Dock）。
+    var nowPlayingOpen by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     // ---- 播放状态（真实绑定；引擎由 AuralisPlaybackService 创建后 available=true）----
     val engineAvailable by LocalPlaybackHost.available.collectAsState()
     val controller = remember { LocalPlaybackHost.controller() }
     var playback by remember { mutableStateOf(PlaybackSnapshot.Empty) }
+    var queue by remember { mutableStateOf(QueueSnapshot.Empty) }
     LaunchedEffect(controller, engineAvailable) {
         if (engineAvailable) {
             controller.playback.collect { playback = it }
         } else {
             playback = PlaybackSnapshot.Empty
+        }
+    }
+    LaunchedEffect(controller, engineAvailable) {
+        if (engineAvailable) {
+            controller.queue.collect { queue = it }
+        } else {
+            queue = QueueSnapshot.Empty
         }
     }
 
@@ -119,12 +131,18 @@ fun MobileShell(
 
     /** 浏览请求 → 切 Library 分区并打开覆盖浏览页。 */
     fun openBrowse(destination: BrowseDestination) {
+        nowPlayingOpen = false
         browseDestination = destination
         section = AppSection.Library
     }
 
-    // 覆盖浏览页时系统返回键回到库根（返回栈内部页面由 BrowseDetailScreen 自管）。
-    BackHandler(enabled = browseDestination != null) { browseDestination = null }
+    // 系统返回：正在播放全屏页优先于覆盖浏览页关闭（单处理器保证正确优先级）。
+    BackHandler(enabled = nowPlayingOpen || browseDestination != null) {
+        when {
+            nowPlayingOpen -> nowPlayingOpen = false
+            browseDestination != null -> browseDestination = null
+        }
+    }
 
     Box(modifier = modifier.fillMaxSize().background(colors.background)) {
         // 一级分区内容。
@@ -174,6 +192,7 @@ fun MobileShell(
                 section != AppSection.Assistant &&
                 playback.entry != null && playback.track != null
             if (showMini && playback.track != null) {
+                val currentLogical = queue.currentLogicalIndex
                 Row(
                     modifier = Modifier
                         .widthIn(max = 760.dp)
@@ -186,6 +205,10 @@ fun MobileShell(
                         isBuffering = playback.state is PlaybackState.Buffering ||
                             playback.state is PlaybackState.Stalled ||
                             playback.state is PlaybackState.Preparing,
+                        canGoPrevious = (currentLogical ?: 0) > 0,
+                        canGoNext = queue.totalCount > (currentLogical ?: -1) + 1,
+                        onOpen = { nowPlayingOpen = true },
+                        onPrevious = { controller.previous() },
                         onTogglePlayPause = {
                             if (playback.state is PlaybackState.Playing ||
                                 playback.state is PlaybackState.Paused
@@ -193,6 +216,7 @@ fun MobileShell(
                                 controller.togglePlayPause()
                             }
                         },
+                        onNext = { controller.next() },
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -207,6 +231,7 @@ fun MobileShell(
                 BottomDock(
                     selected = section,
                     onSelect = { sel ->
+                        nowPlayingOpen = false
                         if (sel == AppSection.Library) {
                             if (section == AppSection.Library && browseDestination != null) {
                                 browseDestination = null // 再点 Library：回到库根
@@ -221,6 +246,17 @@ fun MobileShell(
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
+        }
+
+        // 正在播放全屏页：覆盖整个 Shell（含 Dock/Mini Player）。
+        if (nowPlayingOpen && playback.track != null) {
+            NowPlayingScreen(
+                graph = graph,
+                controller = controller,
+                onClose = { nowPlayingOpen = false },
+                onOpenBrowse = ::openBrowse,
+                modifier = Modifier.fillMaxSize().background(colors.background),
+            )
         }
     }
 }
