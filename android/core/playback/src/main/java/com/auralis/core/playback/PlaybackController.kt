@@ -19,6 +19,9 @@ interface PlaybackController {
     val playback: StateFlow<PlaybackSnapshot>
     val queue: StateFlow<QueueSnapshot>
 
+    /** 约 250ms 一拍的**真实**播放位置（Now Playing 进度条 / 歌词高亮专用）。 */
+    val position: StateFlow<Long>
+
     suspend fun playQueue(entries: List<QueueEntry>, startLogicalIndex: Int = 0, startAtMs: Long = 0)
     suspend fun playOccurrence(entryId: QueueEntryId)
     suspend fun playAtLogicalIndex(index: Int)
@@ -84,6 +87,8 @@ private class EnginePlaybackController(
         get() = requireEngine().playback
     override val queue: StateFlow<QueueSnapshot>
         get() = requireEngine().queue
+    override val position: StateFlow<Long>
+        get() = requireEngine().position
 
     override suspend fun playQueue(entries: List<QueueEntry>, startLogicalIndex: Int, startAtMs: Long) =
         requireEngine().playQueue(entries, startLogicalIndex, startAtMs)

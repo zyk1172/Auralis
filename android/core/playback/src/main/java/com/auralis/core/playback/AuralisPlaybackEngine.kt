@@ -36,6 +36,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -85,6 +86,13 @@ class AuralisPlaybackEngine(
 
     val playback: StateFlow<PlaybackSnapshot> = playbackState.asStateFlow()
     val queue: StateFlow<QueueSnapshot> = queueState.asStateFlow()
+
+    // ------------------------------------------------------- 位置节拍（S5）
+    private val positionTicker = MutableStateFlow(0L)
+
+    /** 约 250ms 一拍的**真实**播放位置（进度条拖动/歌词高亮用）。
+     * 快照只在播放器事件时发布，长时播放时位置会“静止”，UI 进度与同步歌词不能等事件。 */
+    val position: StateFlow<Long> = positionTicker.asStateFlow()
 
     // -------------------------------------------------------------- 逻辑队列
     private val logicalQueue = ArrayList<QueueEntry>()
@@ -158,6 +166,15 @@ class AuralisPlaybackEngine(
                 publishPlaybackState()
             }
         })
+
+        // S5：位置节拍（250ms）。值与上次相同不发布，避免无谓重组。
+        scope.launch {
+            while (isActive) {
+                val pos = player.currentPosition.coerceAtLeast(0)
+                if (pos != positionTicker.value) positionTicker.value = pos
+                delay(250L)
+            }
+        }
     }
 
     // --------------------------------------------------------------- 公开命令
