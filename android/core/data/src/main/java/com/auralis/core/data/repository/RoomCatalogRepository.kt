@@ -44,6 +44,8 @@ import com.auralis.core.domain.ServerAccount
 import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import com.auralis.core.domain.SearchResults
 import kotlinx.coroutines.flow.map
@@ -294,14 +296,73 @@ class RoomCatalogRepository(
     override suspend fun favoriteRandom(serverId: ServerId?, limit: Int) =
         trackDao.favoriteRandom(serverId?.value, limit).map { decode<Track>(it.payload) }
 
-    override suspend fun topArtists(serverId: ServerId?, limit: Int): List<Artist> {
-        val gids = trackDao.mostPlayed(serverId?.value, limit * 4)
-            .mapNotNull { it.artistGid }.distinct().take(limit)
-        return gids.mapNotNull { artistDao.get(it)?.let { e -> decode<Artist>(e.payload) } }
+    override suspend fun topArtists(serverId: ServerId?, limit: Int): List<Artist> =
+        homeTopArtists(serverId, limit).map { it.first }
+
+    override suspend fun topAlbums(serverId: ServerId?, limit: Int): List<Album> =
+        homeTopAlbums(serverId, limit).map { it.first }
+
+    // -------------------------------------------------------------- home 聚合
+
+    /** 收藏歌曲总数（首页「收藏」快捷入口徽标）。 */
+    override suspend fun favoriteCount(serverId: ServerId?): Int =
+        annotationDao.favoriteTrackCount(serverId?.value)
+
+    /** 播放过的曲目总数（首页「最常听」快捷入口徽标）。 */
+    override suspend fun playedTrackCount(serverId: ServerId?): Int =
+        annotationDao.playedTrackCount(serverId?.value)
+
+    /** 已下载曲目（下载完整文件，首页「下载」模块）。 */
+    override suspend fun downloadedTracks(serverId: ServerId?, limit: Int): List<Track> =
+        trackDao.downloadedTracks(serverId?.value, limit).map { decode<Track>(it.payload) }
+
+    /** 近 [days] 天内同步入库的曲目（首页「最近添加」30 天窗口）。 */
+    override suspend fun recentlyAddedWithin(
+        serverId: ServerId?,
+        days: Int,
+        limit: Int,
+    ): List<Track> = trackDao.recentlyAddedSince(
+        serverId?.value,
+        sinceMillis = System.currentTimeMillis() - days * 86_400_000L,
+        limit = limit,
+    ).map { decode<Track>(it.payload) }
+
+    /**
+     * 常听艺术家：按艺人名下全部曲目播放量真实聚合降序（对齐 Apple
+     * `HomeSnapshotBuilder` 的 artistTotals），返回 (艺人, 播放量) 对。
+     */
+    override suspend fun homeTopArtists(serverId: ServerId?, limit: Int): List<Pair<Artist, Int>> {
+        val rows = trackDao.artistPlayTotals(serverId?.value, limit)
+        if (rows.isEmpty()) return emptyList()
+        val byGid = rows.mapNotNull { row ->
+            artistDao.get(row.ownerId)?.let { decode<Artist>(it.payload) to row.total }
+        }
+        return byGid
     }
 
-    override suspend fun topAlbums(serverId: ServerId?, limit: Int) =
-        albumDao.topAlbums(serverId?.value, limit).map { decode<Album>(it.payload) }
+    /** 常听专辑：语义同上，返回 (专辑, 播放量) 对。 */
+    override suspend fun homeTopAlbums(serverId: ServerId?, limit: Int): List<Pair<Album, Int>> {
+        val rows = trackDao.albumPlayTotals(serverId?.value, limit)
+        if (rows.isEmpty()) return emptyList()
+        return rows.mapNotNull { row ->
+            albumDao.get(row.ownerId)?.let { decode<Album>(it.payload) to row.total }
+        }
+    }
+
+    /**
+     * 首页自动刷新信号：目录 / 歌单 / 收藏 / 播放记录 / 下载完成任一变化即发射。
+     * 轻量（只数 COUNT，不解码 payload），供 Home 页在数据变化时重建快照。
+     */
+    fun homeChangeSignals(serverId: ServerId?): Flow<Unit> {
+        val sid = serverId?.value
+        return kotlinx.coroutines.flow.combine(
+            trackDao.observeCount(sid),
+            playlistDao.observeCount(sid),
+            annotationDao.observeFavoriteTrackCount(sid),
+            annotationDao.observePlayedTrackCount(sid),
+            downloadDao.observeDownloadedCount(sid),
+        ) { _, _, _, _, _ -> Unit }.distinctUntilChanged()
+    }
 
     // -------------------------------------------------------------- downloads
 

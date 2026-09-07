@@ -8,6 +8,9 @@ import androidx.room.Transaction
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
+/** 播放量合计行（ownerId = artist_gid / album_gid；total = 该艺人/专辑全部曲目 play_count 之和）。 */
+data class PlayTotalRow(val ownerId: String, val total: Int)
+
 @Dao
 interface ServerDao {
     @Query("SELECT * FROM servers ORDER BY name")
@@ -166,6 +169,65 @@ interface TrackDao {
     @Query("SELECT COUNT(*) FROM tracks WHERE (:serverId IS NULL OR server_id = :serverId)")
     suspend fun count(serverId: String?): Int
 
+    /** 目录版本信号：曲目行变化（同步入库/删除）即发射（Room Flow 语义）。 */
+    @Query("SELECT COUNT(*) FROM tracks WHERE (:serverId IS NULL OR server_id = :serverId)")
+    fun observeCount(serverId: String?): Flow<Int>
+
+    /** 已下载曲目（downloads.state = 'Downloaded' 的本地完整文件），按下载完成先后倒序。 */
+    @Query(
+        """
+        SELECT t.* FROM tracks t
+        JOIN downloads d ON d.global_id = t.global_id
+        WHERE (:serverId IS NULL OR d.server_id = :serverId)
+          AND d.state = 'Downloaded'
+        ORDER BY d.updated_at DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun downloadedTracks(serverId: String?, limit: Int): List<TrackEntity>
+
+    /** 近 N 毫秒内同步入库的曲目（首页「最近添加」30 天窗口用；updated_at ≈ 入库时间）。 */
+    @Query(
+        """
+        SELECT * FROM tracks
+        WHERE (:serverId IS NULL OR server_id = :serverId)
+          AND updated_at >= :sinceMillis
+        ORDER BY updated_at DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun recentlyAddedSince(serverId: String?, sinceMillis: Long, limit: Int): List<TrackEntity>
+
+    /** 艺人播放量合计（首页「常听艺术家」：真实聚合，杜绝内存里 distinct 后瞎猜）。 */
+    @Query(
+        """
+        SELECT t.artist_gid AS ownerId, COALESCE(SUM(h.play_count), 0) AS total
+        FROM tracks t
+        JOIN play_history h ON h.global_id = t.global_id
+        WHERE (:serverId IS NULL OR t.server_id = :serverId)
+          AND t.artist_gid IS NOT NULL
+        GROUP BY t.artist_gid
+        ORDER BY total DESC, t.artist_gid
+        LIMIT :limit
+        """
+    )
+    suspend fun artistPlayTotals(serverId: String?, limit: Int): List<PlayTotalRow>
+
+    /** 专辑播放量合计（首页「常听专辑」）。 */
+    @Query(
+        """
+        SELECT t.album_gid AS ownerId, COALESCE(SUM(h.play_count), 0) AS total
+        FROM tracks t
+        JOIN play_history h ON h.global_id = t.global_id
+        WHERE (:serverId IS NULL OR t.server_id = :serverId)
+          AND t.album_gid IS NOT NULL
+        GROUP BY t.album_gid
+        ORDER BY total DESC, t.album_gid
+        LIMIT :limit
+        """
+    )
+    suspend fun albumPlayTotals(serverId: String?, limit: Int): List<PlayTotalRow>
+
     // ---- FTS ----
 
     @Query(
@@ -242,6 +304,10 @@ interface PlaylistDao {
     @Query("SELECT COUNT(*) FROM playlists WHERE (:serverId IS NULL OR server_id = :serverId)")
     suspend fun count(serverId: String?): Int
 
+    /** 歌单数量变化信号（首页「歌单」快捷入口 / 资料库统计）。 */
+    @Query("SELECT COUNT(*) FROM playlists WHERE (:serverId IS NULL OR server_id = :serverId)")
+    fun observeCount(serverId: String?): Flow<Int>
+
     @Query("SELECT * FROM playlist_tracks WHERE playlist_gid = :playlistGid ORDER BY position")
     suspend fun tracks(playlistGid: String): List<PlaylistTrackEntity>
 
@@ -265,6 +331,47 @@ interface AnnotationDao {
 
     @Query("SELECT global_id FROM favorites WHERE kind = 'Track' AND value = 1 AND (:serverId IS NULL OR server_id = :serverId)")
     suspend fun favoriteTrackIds(serverId: String?): List<String>
+
+    /** 收藏的歌曲总数（首页「收藏」快捷入口徽标）。 */
+    @Query(
+        """
+        SELECT COUNT(*) FROM favorites
+        WHERE kind = 'Track' AND value = 1
+          AND (:serverId IS NULL OR server_id = :serverId)
+        """
+    )
+    suspend fun favoriteTrackCount(serverId: String?): Int
+
+    /** 播放过的曲目总数（首页「最常听」快捷入口徽标）。 */
+    @Query(
+        """
+        SELECT COUNT(*) FROM (
+            SELECT DISTINCT h.global_id FROM play_history h
+            WHERE (:serverId IS NULL OR h.server_id = :serverId)
+              AND h.play_count > 0
+        )
+        """
+    )
+    suspend fun playedTrackCount(serverId: String?): Int
+
+    /** 收藏数量变化信号（首页「收藏」快捷入口自动刷新）。 */
+    @Query(
+        """
+        SELECT COUNT(*) FROM favorites
+        WHERE kind = 'Track' AND value = 1
+          AND (:serverId IS NULL OR server_id = :serverId)
+        """
+    )
+    fun observeFavoriteTrackCount(serverId: String?): Flow<Int>
+
+    /** 播放记录变化信号（首页最近播放/最常听/常听艺人专辑自动刷新）。 */
+    @Query(
+        """
+        SELECT COUNT(*) FROM play_history
+        WHERE (:serverId IS NULL OR server_id = :serverId) AND play_count > 0
+        """
+    )
+    fun observePlayedTrackCount(serverId: String?): Flow<Int>
 
     @Upsert
     suspend fun upsertFavorite(entity: FavoriteEntity)
@@ -329,6 +436,15 @@ interface DownloadDao {
 
     @Query("SELECT * FROM downloads WHERE (:serverId IS NULL OR server_id = :serverId) ORDER BY updated_at DESC")
     fun observeAll(serverId: String?): Flow<List<DownloadEntity>>
+
+    /** 已下载完成数量变化信号（首页「下载」模块自动刷新）。 */
+    @Query(
+        """
+        SELECT COUNT(*) FROM downloads
+        WHERE (:serverId IS NULL OR server_id = :serverId) AND state = 'Downloaded'
+        """
+    )
+    fun observeDownloadedCount(serverId: String?): Flow<Int>
 
     @Query("SELECT * FROM downloads WHERE global_id = :globalId")
     suspend fun get(globalId: String): DownloadEntity?

@@ -114,6 +114,41 @@ data class HomeLayoutPreference(
         return mutable
     }
 
+    /**
+     * 归一化（对齐 Apple `HomeLayoutStore.normalized`）：
+     * 1. 丢弃未知 / 重复模块 ID（旧版本遗留数据不会污染新首页）；
+     * 2. 数组顺序为权威（列表顺序即展示顺序）；
+     * 3. 补齐注册表里有、但旧配置里没有的新模块（按默认可见性追加到末尾），
+     *    保证「以后新增模块只需注册」对已装用户也成立。
+     */
+    fun normalized(): HomeLayoutPreference {
+        fun normalize(
+            current: List<HomeEntryPreference>,
+            registered: List<String>,
+            defaultVisible: (String) -> Boolean,
+        ): List<HomeEntryPreference> {
+            val seen = LinkedHashSet<String>()
+            val result = ArrayList<HomeEntryPreference>()
+            current.forEach { pref ->
+                if (pref.id in registered && seen.add(pref.id)) result.add(pref.copy(visible = pref.visible))
+            }
+            registered.forEach { id -> if (seen.add(id)) result.add(HomeEntryPreference(id, defaultVisible(id))) }
+            return result
+        }
+        return copy(
+            quickEntries = normalize(
+                quickEntries,
+                HomeQuickEntry.entries.map { it.name },
+                { true },
+            ),
+            contentModules = normalize(
+                contentModules,
+                HomeModuleId.entries.map { it.name },
+                { id -> HomeModuleId.valueOf(id).defaultEnabled },
+            ),
+        )
+    }
+
     companion object {
         fun defaultQuickEntries(): List<HomeEntryPreference> =
             HomeQuickEntry.entries.map { HomeEntryPreference(it.name, visible = true) }

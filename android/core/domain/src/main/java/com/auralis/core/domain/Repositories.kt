@@ -60,6 +60,26 @@ interface CatalogRepository {
     suspend fun favoriteRandom(serverId: ServerId?, limit: Int): List<Track>
     suspend fun topArtists(serverId: ServerId?, limit: Int): List<Artist>
     suspend fun topAlbums(serverId: ServerId?, limit: Int): List<Album>
+
+    // ---- 首页（Home）专用聚合，语义对齐 Apple HomeSnapshotBuilder ----
+
+    /** 收藏歌曲总数（快捷入口「收藏」徽标）。 */
+    suspend fun favoriteCount(serverId: ServerId?): Int
+
+    /** 播放过的曲目总数（快捷入口「最常听」徽标）。 */
+    suspend fun playedTrackCount(serverId: ServerId?): Int
+
+    /** 已下载曲目（下载完整文件；首页「下载」模块数据源）。 */
+    suspend fun downloadedTracks(serverId: ServerId?, limit: Int): List<Track>
+
+    /** 近 [days] 天同步入库的曲目（首页「最近添加」30 天窗口）。 */
+    suspend fun recentlyAddedWithin(serverId: ServerId?, days: Int, limit: Int): List<Track>
+
+    /** 常听艺术家：按播放量真实聚合降序，返回 (艺人, 播放量)。 */
+    suspend fun homeTopArtists(serverId: ServerId?, limit: Int): List<Pair<Artist, Int>>
+
+    /** 常听专辑：语义同上。 */
+    suspend fun homeTopAlbums(serverId: ServerId?, limit: Int): List<Pair<Album, Int>>
 }
 
 enum class FavoriteKind { Track, Album, Artist }

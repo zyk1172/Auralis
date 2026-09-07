@@ -111,9 +111,10 @@ class AuralisPreferences(private val context: Context) {
         if (v2 != null) {
             runCatching { layoutJson.decodeFromString<HomeLayoutPreference>(v2) }
                 .getOrDefault(HomeLayoutPreference())
+                .normalized()
         } else {
             val legacy = prefs[homeLayoutV1]
-            if (legacy != null) migrateLegacySet(legacy) else HomeLayoutPreference()
+            if (legacy != null) migrateLegacySet(legacy).normalized() else HomeLayoutPreference().normalized()
         }
     }
 
@@ -121,7 +122,7 @@ class AuralisPreferences(private val context: Context) {
 
     suspend fun setHomeLayout(layout: HomeLayoutPreference) {
         store.edit {
-            it[homeLayoutV2] = layoutJson.encodeToString(layout)
+            it[homeLayoutV2] = layoutJson.encodeToString(layout.normalized())
             it.remove(homeLayoutV1)
         }
     }
