@@ -301,3 +301,28 @@ Android `AgentToolLoop` 保留了审计 §5.2/5.3 的**三条不变式**：
 - **本地结果当前曲高亮裁剪**：Swift TrackRow 的 isCurrent 指示依赖全局播放游标，S6 未做
   （文档记录；后续如需可经 Shell 传入 playback 快照实现）。
 
+## 2l. 设置（S7，2026-09-07）
+
+- **feature:settings 替换 SettingsPlaceholderPage**：MainActivity `Route.Settings` 直接用真实
+  SettingsScreen（服务器→ManageServers、AI 助手行 S8 前如实置灰、播放与音质/数据与备份/主题
+  为模块内子页（内部 page state + BackHandler），首页布局走 S3 HomeLayoutEditScreen）。
+- **主题即时应用 + 冷启动恢复**：S7 修复此前缺口——selectedThemeFlow 只写不读，冷启动恒回
+  aurora-glass。现 AppRoot LaunchedEffect 先读 prefs.selectedThemeId 再路由；主题页点击同时
+  写 DataStore 与 `AuralisThemeController.current`（进程内 compose state）→ 全 App 即时生效。
+  12 主题与 Swift 对齐（含 legacyIdMappings 迁移）；关闭 Swift 主表注释里"已合并重复主题"
+  的折叠说明只用于介绍文案。
+- **网络音质/ReplayGain 全部真实写偏好**：Switch 直接驱动 prefs.setStreamQuality；
+  ReplayGain 模式 RadioButton、前级 Slider 拖动本地暂存（0.5 步），松手才 setReplayGain
+  （对齐 S5 进度条"拖动暂存松手提交"模式）；模式=关闭时前级/峰值保护禁用。
+- **缓存清理真实执行**：元数据目录 = dataDir/databases + files/datastore 真实 walkTopDown
+  字节；歌词表新增 `lyricCount/clearAllLyrics` DAO（Room 直删，歌词按需重新加载，与歌词页
+  miss 负缓存无关）；封面缓存 = coil2 默认 `cacheDir/image_cache` 磁盘删除（coil 主类在
+  core:image 编译 classpath 不可达，不做内存缓存清理，重启即失效，文档记录）。**不删用户
+  主动下载**（离线下载只计数，说明由「音乐库 → 下载」管理）——对齐 Swift 语义。
+- **Android 无临时音频流缓存**（播放直连流式、未落盘）→ CacheManagementSection 的"临时
+  音频"行无对应，用说明文字如实声明，不做假按钮；Music Haptics（平台特性）、播放速率
+  （Swift 无设置 UI，仅 Agent 工具调用）均裁剪记录。
+- **关于版本真实值**：PackageManager versionName（versionCodeLong，API<28 降级
+  versionCode）；Swift 的 Git commit/branch/build 信息无 Android 等价（Debug BuildConfig
+  字段未开启）→ 文档记录不移植。
+

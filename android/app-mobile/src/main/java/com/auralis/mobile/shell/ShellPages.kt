@@ -1,7 +1,6 @@
 package com.auralis.mobile.shell
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,10 +12,8 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -143,67 +140,5 @@ fun AssistantPlaceholderPage(
             style = MaterialTheme.typography.bodyMedium,
             color = colors.secondaryText,
         )
-    }
-}
-
-/** 设置占位页（S2 含真实「服务器」入口；S3 新增「首页布局」编辑入口；其余在 S7 接入）。 */
-@Composable
-fun SettingsPlaceholderPage(
-    onOpenServers: () -> Unit,
-    onEditHomeLayout: () -> Unit,
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val colors = LocalAuralisTheme.current.colors
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(colors.background)
-            .statusBarsPadding(),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = AuralisSpacing.medium, vertical = AuralisSpacing.small),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = colors.primaryText)
-            }
-            Spacer(Modifier.width(AuralisSpacing.small))
-            Text("设置", style = MaterialTheme.typography.titleLarge, color = colors.primaryText)
-        }
-        SettingsRow(title = "服务器", subtitle = "连接音乐服务器与下载服务", onClick = onOpenServers)
-        HorizontalDivider(color = colors.separator)
-        SettingsRow(title = "首页布局", subtitle = "模块显示与排序", onClick = onEditHomeLayout)
-        HorizontalDivider(color = colors.separator)
-        Text(
-            "其余设置项（主题/流质量/下载/历史等）将在 Settings 阶段接入。",
-            style = MaterialTheme.typography.bodySmall,
-            color = colors.secondaryText,
-            modifier = Modifier.padding(AuralisSpacing.large),
-        )
-    }
-}
-
-@Composable
-internal fun SettingsRow(
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit,
-) {
-    val colors = LocalAuralisTheme.current.colors
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.medium),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, color = colors.primaryText)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
-        }
-        Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = colors.secondaryText)
     }
 }

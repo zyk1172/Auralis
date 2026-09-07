@@ -64,7 +64,7 @@
 | Bottom Dock（3 分区：Home/Library/Assistant 圆钮） | app-mobile/shell（≤760dp 居中 overlay） | Done（S2） |
 | 分区根切换 + 顶栏大标题结构 | MobileShell / ShellPages | Partial（Home/Library 已真实页，Assistant 待 S8） |
 | Mini Player（真实绑定 playback） | app-mobile/shell MiniPlayerBar | Done（S5：上一首/下一首/缓冲/点开 Now Playing） |
-| Settings 齿轮入口 → 设置占位（服务器行可用） | LibraryScreen 顶栏齿轮 | Partial（S7 完善） |
+| Settings 齿轮入口 → 设置页（服务器/播放音质/数据/主题/关于） | LibraryScreen 顶栏齿轮 | feature:settings SettingsScreen | Done（S7） |
 
 ## 5b. Home 首页（audit 06 首页规格）
 
@@ -133,6 +133,23 @@
 | 入口：Assistant 顶栏放大镜 →「搜索音乐库」（Swift：搜索是助手内兜底，非一级 Tab） | AssistantView header → sheet | ShellPages AssistantPlaceholderPage 放大镜 → MobileShell 全屏覆盖 SearchScreen | Done（S6 提前启用；S8 助手主体保留） |
 | 输入提交/结果点击记录搜索历史 | onSubmit/recordSearch | recordSearch（submit + 结果点击 + 历史 chip） | Done（S6） |
 
+## 5f. 设置（SettingsView + SettingsDetailPages 规格；S7）
+
+| 能力 | Swift 基准 | Android 实现 | 状态 |
+|---|---|---|---|
+| 设置主表：设置（服务器/AI 助手/播放与音质/数据与备份）+ 外观（首页布局/主题）+ 关于 | SettingsView body | feature:settings SettingsScreen | Done（S7） |
+| 服务器入口 + 副标题「已连接 · N 首歌曲」真实统计 | SettingsView 服务器行 | SettingsScreen 服务器行（servers()+stats().trackCount） | Done（S7） |
+| AI 助手入口（大模型/隐私） | AgentSettingsPage | 行置灰 + 「S8 接入」说明（S8 时启用） | Partial（S8 完善） |
+| 播放与音质：Wi-Fi 原始音质 / 蜂窝转码 toggle | PlaybackSettingsPage 网络音质 | SettingsSwitchRow + streamQualityFlow | Done（S7） |
+| ReplayGain：模式（关/曲目/专辑）/前级 -12..+12 步进 0.5/峰值保护 | PlaybackSettingsPage ReplayGain | RadioButton + Slider + prefs.setReplayGain | Done（S7） |
+| 数据与备份：本地缓存统计 + 清理（封面确认/歌词直清；不删用户主动下载） | DataSettingsPage + CacheManagementSection | DataAndBackupPage（元数据目录字节/歌词行数 DAO 清理/coil image_cache 清理/离线下载计数） | Done（S7） |
+| 首页布局入口 | SettingsView 外观 | onEditHomeLayout → HomeLayoutEditScreen（S3） | Done |
+| 主题：网格选择 + 当前主题名 + 即时应用 + 冷启动恢复 | ThemeSettingsPage + ThemeStore | 12 主题网格 + AuralisThemeController + prefs.selectedThemeId（S7 修复冷启动未恢复） | Done（S7） |
+| 关于：版本 | LabeledContent 版本 | PackageManager versionName（versionCodeLong） | Done（S7） |
+| Music Haptics 设置区/诊断（平台特性） | PlaybackSettingsPage | 未移植（文档记录） | N/A |
+| 临时音频流缓存（Android 播放直连流式无落盘缓存） | CacheManagementSection 临时音频 | 无对应（直连流式；文档记录差异） | N/A |
+| 播放速率（Swift 无设置 UI，仅 Agent 工具调用） | — | 不移植（core prefs 已备，Agent 阶段用） | N/A |
+
 ## 6. 离线 / 歌词 / 封面（audit 07）
 
 | 能力 | Android 实现 | 状态 |
@@ -160,8 +177,8 @@
 4. ~~Library + Browse Detail~~ ✅ S4 完成（Library 7 scope + BrowseDetail 17 目的地 + 歌单远端先行管理 + 播放动作接线；APK 已打包）
 5. ~~Mini Player / Now Playing / Queue / Lyrics~~ ✅ S5 完成（Mini 展开 + NowPlaying 三页 + 队列编辑 + 同步歌词高亮 + 位置节拍；APK 已打包）
 6. ~~Search~~ ✅ S6 完成（本地四类 FTS 搜索 + 防抖 + 历史/清空 + 在线 search3 兜底 + Assistant 顶栏放大镜入口；APK 已打包）
-7. Settings ← 当前阶段
-8. Assistant
+7. ~~Settings~~ ✅ S7 完成（真实设置页：服务器/播放与音质/数据与备份/首页布局/主题即时应用/关于；冷启动主题恢复修复；APK 已打包）
+8. Assistant ← 当前阶段
 9. Android TV（app-tv）
 
-> 最后更新：2026-09-07（P0 Core 九项 + S1–S6 完成，S7 Settings 待开始）
+> 最后更新：2026-09-07（P0 Core 九项 + S1–S7 完成，S8 Assistant 待开始）

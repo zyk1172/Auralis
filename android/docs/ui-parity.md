@@ -73,9 +73,11 @@
 
 | 页面 | Swift 基准 | 状态 | 按钮级核对 |
 |---|---|---|---|
-| 主题选择 | SettingsView.swift | Not Started | ☐ |
-| 服务器管理（编辑/忘记） | SettingsView.swift | Not Started | ☐ 忘记二次确认 |
-| 流质量/下载/历史开关 | SettingsView.swift | Not Started | ☐ |
+| 设置主表（设置/外观/关于） | SettingsView.swift | Done（S7） | ☑ 服务器行副标题=激活服务器+歌曲数真实统计 ☑ AI 助手行如实置灰+阶段说明 ☑ 首页布局→编辑页 ☑ 版本=PackageManager 真实值 |
+| 播放与音质 | SettingsDetailPages PlaybackSettingsPage | Done（S7） | ☑ Wi-Fi 原始音质/蜂窝转码真实 toggle ☑ ReplayGain 模式单选 ☑ 前级 Slider -12..+12（0.5 步）松手保存 ☑ 峰值保护开关（关 ReplayGain 时禁用） |
+| 数据与备份 | DataSettingsPage + CacheManagementSection | Done（S7） | ☑ 元数据目录/封面缓存字节真实统计 ☑ 离线下载计数 ☑ 清理歌词缓存（DAO 真实删除）☑ 清理封面缓存（coil image_cache + 二次确认）☑ 不删主动下载 |
+| 主题选择 | ThemeSettingsPage | Done（S7） | ☑ 12 主题网格（色板预览）☑ 点击即时全 App 生效 ☑ DataStore 持久化 ☑ 冷启动恢复上次主题（S7 修复） |
+| 服务器管理入口 | SettingsView 服务器行 | Done（S7） | ☑ 跳转 ServerList（S1 feature:server）☑ 返回栈正常 |
 
 ## Assistant
 
@@ -101,5 +103,8 @@
 > **S6 搜索完成**（feature:search：本地四类 FTS 搜索 + 150ms 防抖 + 历史/清空 + 服务器
 > search3 在线兜底；入口对齐 Swift 语义：Assistant 顶栏放大镜 →「搜索音乐库」，非一级 Tab；
 > APK 已打包）。
-> 下一步：S7 Settings。
+> **S7 设置完成**（feature:settings：真实设置页替换占位——服务器行真实统计、AI 助手行如实
+> 置灰、播放与音质（流质量+ReplayGain）、数据与备份（元数据/歌词/封面/下载统计+清理）、
+> 首页布局、12 主题网格即时应用、关于版本；修复冷启动未恢复主题；APK 已打包）。
+> 下一步：S8 Assistant。
 > 最后更新：2026-09-07

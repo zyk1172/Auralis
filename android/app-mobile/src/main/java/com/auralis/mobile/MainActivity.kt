@@ -20,13 +20,14 @@ import androidx.compose.ui.Modifier
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.AuralisTheme
 import com.auralis.core.designsystem.AuralisThemeController
+import com.auralis.core.designsystem.BuiltInThemes
 import com.auralis.core.designsystem.LocalAuralisTheme
 import com.auralis.core.domain.ServerAccount
 import com.auralis.feature.home.HomeLayoutEditScreen
 import com.auralis.feature.server.ServerFormScreen
 import com.auralis.feature.server.ServerListScreen
+import com.auralis.feature.settings.SettingsScreen
 import com.auralis.mobile.shell.MobileShell
-import com.auralis.mobile.shell.SettingsPlaceholderPage
 
 /**
  * 单一 Activity + 顶层路由。
@@ -57,7 +58,7 @@ private sealed interface Route {
     data class AddServer(val fromManage: Boolean) : Route
     data class EditServer(val account: ServerAccount, val fromManage: Boolean) : Route
 
-    /** 设置（S3：含「首页布局」编辑入口；其余项在 S7 接入）。 */
+    /** 设置（S7：真实设置页——服务器/AI 助手占位说明/播放与音质/数据与备份/首页布局/主题/关于）。 */
     data object Settings : Route
 
     /** 首页布局编辑（对齐 Apple HomeLayoutEditView；入口在 设置 → 首页布局）。 */
@@ -72,6 +73,9 @@ private fun AppRoot(graph: AuralisGraph) {
     var route by remember { mutableStateOf<Route>(Route.Boot) }
 
     LaunchedEffect(graph) {
+        // 冷启动恢复上次选择的主题（DataStore 已持久化；S7 前未应用导致重启回默认）。
+        val savedTheme = runCatching { graph.preferences.selectedThemeId() }.getOrNull()
+        AuralisThemeController.current = BuiltInThemes.byId(savedTheme)
         val saved = runCatching { graph.catalogRepository.servers() }.getOrDefault(emptyList())
         route = if (saved.isEmpty()) Route.ManageServers(showBack = false) else Route.Shell
     }
@@ -101,10 +105,11 @@ private fun AppRoot(graph: AuralisGraph) {
             onBack = { route = Route.ManageServers(showBack = true) },
         )
 
-        Route.Settings -> SettingsPlaceholderPage(
+        Route.Settings -> SettingsScreen(
+            graph = graph,
+            onBack = { route = Route.Shell },
             onOpenServers = { route = Route.ManageServers(showBack = true) },
             onEditHomeLayout = { route = Route.HomeLayoutEdit },
-            onBack = { route = Route.Shell },
         )
 
         Route.HomeLayoutEdit -> HomeLayoutEditScreen(
