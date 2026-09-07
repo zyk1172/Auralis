@@ -86,6 +86,32 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         )
     }
 
+    func testNowPlayingMoreMenuActionFiresOnFirstTap() throws {
+        launchSmokeApp(with: "-auralis-ui-smoke-now-playing")
+
+        XCTAssertTrue(
+            app.staticTexts["正在播放"].waitForExistence(timeout: 15),
+            "Now Playing sheet did not open from the deterministic smoke-test route"
+        )
+        let more = app.buttons["auralis.nowPlaying.moreActions"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 10), "Now Playing more-actions entry is missing")
+        more.tap()
+
+        // This regression used to require reopening/tapping the system Menu
+        // several times.  One menu-item tap must be sufficient to fire the
+        // action and present the nested information sheet.
+        let trackInfo = app.buttons["歌曲信息"].firstMatch
+        XCTAssertTrue(trackInfo.waitForExistence(timeout: 10), "Track information menu action is missing")
+        trackInfo.tap()
+
+        let title = app.navigationBars["歌曲信息"].firstMatch
+        let basicInfo = app.staticTexts["基本信息"].firstMatch
+        XCTAssertTrue(
+            title.waitForExistence(timeout: 4) || basicInfo.waitForExistence(timeout: 4),
+            "A single tap on a Now Playing system Menu item must execute its action"
+        )
+    }
+
     func testAssistantSessionSheetSurvivesColdBootstrap() throws {
         launchSmokeApp(with: "-auralis-ui-smoke-assistant")
 
