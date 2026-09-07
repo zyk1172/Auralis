@@ -52,16 +52,47 @@ class LibraryActionCoordinator(
             else client.unstar(StarTarget.Artist(artist.id.value))
         }
 
-    /** 收藏 Track：远端成功后才写 Room。 */
+    /**
+     * 收藏 Track：远端成功后写 Room；收藏与不喜欢互斥（对齐 Apple：
+     * 点击收藏时若该曲处于「不喜欢」，先清除不喜欢再收藏）。
+     */
     suspend fun setTrackFavorite(track: Track, favorite: Boolean): Boolean {
         val client = requireClient(track.serverId)
-        return remoteThenLocal(
+        val result = remoteThenLocal(
             remote = {
                 if (favorite) client.star(StarTarget.Song(track.id.value))
                 else client.unstar(StarTarget.Song(track.id.value))
             },
             local = { catalog.setFavorite(track.globalId, FavoriteKind.Track, favorite) },
         )
+        if (result && favorite) {
+            catalog.setDisliked(track.globalId, false)
+        }
+        return result
+    }
+
+    // ------------------------------------------------------------ 不喜欢（本地状态）
+
+    /**
+     * 设置/取消「不喜欢」（对齐 Apple `toggleDisliked` 产品规则）：
+     * - 设置不喜欢时若当前已收藏，先取消收藏（收藏与不喜欢互斥）；
+     *   远端取消收藏失败**不回滚本地不喜欢**——dislike 是本地私人状态，
+     *   用户意图必须落盘；收藏残留由下次 starred() 全量回流纠正（与 Apple 一致：
+     *   `_ = await connector.setFavorite(...)` 忽略远端结果）。
+     * - 取消不喜欢不恢复旧收藏；
+     * - 不改变当前播放、不改变队列、不跳歌、不删除任何内容。
+     */
+    suspend fun setDisliked(track: Track, disliked: Boolean) {
+        if (disliked && catalog.isFavorite(track.globalId)) {
+            runCatching { setTrackFavorite(track, false) }
+        }
+        catalog.setDisliked(track.globalId, disliked)
+    }
+
+    suspend fun toggleDisliked(track: Track): Boolean {
+        val target = !catalog.isDisliked(track.globalId)
+        setDisliked(track, target)
+        return target
     }
 
     private suspend fun toggleRemoteKind(

@@ -151,15 +151,24 @@ interface TrackDao {
     )
     suspend fun mostPlayed(serverId: String?, limit: Int): List<TrackEntity>
 
-    @Query("SELECT * FROM tracks WHERE (:serverId IS NULL OR server_id = :serverId) ORDER BY RANDOM() LIMIT :limit")
+    @Query(
+        """
+        SELECT * FROM tracks t
+        WHERE (:serverId IS NULL OR t.server_id = :serverId)
+          AND NOT EXISTS (SELECT 1 FROM disliked_tracks d WHERE d.global_id = t.global_id)
+        ORDER BY RANDOM()
+        LIMIT :limit
+        """
+    )
     suspend fun random(serverId: String?, limit: Int): List<TrackEntity>
 
-    /** 收藏里随便听。 */
+    /** 收藏里随便听（自动发现语义：同样排除不喜欢）。 */
     @Query(
         """
         SELECT t.* FROM tracks t
         JOIN favorites f ON f.global_id = t.global_id AND f.kind = 'Track' AND f.value = 1
         WHERE (:serverId IS NULL OR t.server_id = :serverId)
+          AND NOT EXISTS (SELECT 1 FROM disliked_tracks d WHERE d.global_id = t.global_id)
         ORDER BY RANDOM()
         LIMIT :limit
         """
@@ -412,6 +421,16 @@ interface AnnotationDao {
 
     @Upsert
     suspend fun upsertDislike(entity: DislikedTrackEntity)
+
+    @Query("SELECT EXISTS(SELECT 1 FROM disliked_tracks WHERE global_id = :globalId)")
+    suspend fun isDisliked(globalId: String): Boolean
+
+    @Query("SELECT global_id FROM disliked_tracks WHERE server_id = :serverId")
+    suspend fun dislikedIds(serverId: String): List<String>
+
+    /** 不喜欢集合变化信号（播放页镜像按钮 / 排除逻辑消费；Room 表变更即发射）。 */
+    @Query("SELECT global_id FROM disliked_tracks WHERE (:serverId IS NULL OR server_id = :serverId)")
+    fun observeDislikedIds(serverId: String?): Flow<List<String>>
 
     @Query("DELETE FROM disliked_tracks WHERE global_id = :globalId")
     suspend fun deleteDislike(globalId: String)

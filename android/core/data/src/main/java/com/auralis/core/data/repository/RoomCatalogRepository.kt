@@ -280,6 +280,19 @@ class RoomCatalogRepository(
         }
     }
 
+    override suspend fun isDisliked(globalId: GlobalId): Boolean =
+        annotationDao.isDisliked(globalId.serialized)
+
+    override suspend fun dislikedIds(serverId: ServerId): Set<GlobalId> =
+        annotationDao.dislikedIds(serverId.value).mapNotNullTo(mutableSetOf()) { raw ->
+            runCatching { GlobalId.parse(raw) }.getOrNull()
+        }
+
+    override fun observeDislikedIds(serverId: ServerId?): Flow<List<GlobalId>> =
+        annotationDao.observeDislikedIds(serverId?.value).map { list ->
+            list.mapNotNull { raw -> runCatching { GlobalId.parse(raw) }.getOrNull() }
+        }
+
     override suspend fun isFavorite(globalId: GlobalId): Boolean =
         isFavorite(globalId, FavoriteKind.Track)
 

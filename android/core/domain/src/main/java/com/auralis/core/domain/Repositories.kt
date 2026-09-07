@@ -50,6 +50,19 @@ interface CatalogRepository {
     suspend fun markCompleted(globalId: GlobalId)
     suspend fun setDisliked(globalId: GlobalId, disliked: Boolean)
 
+    /**
+     * 是否「不喜欢」（本地私人状态，GlobalID 权威）。
+     * 语义与 Apple 一致：只影响自动推荐/发现（随机/智能队列），
+     * 搜索、浏览与显式播放不受影响。
+     */
+    suspend fun isDisliked(globalId: GlobalId): Boolean
+
+    /** 指定服务器全部「不喜欢」的 GlobalID（自动排除逻辑用）。 */
+    suspend fun dislikedIds(serverId: ServerId): Set<GlobalId>
+
+    /** 不喜欢集合变化信号（播放页镜像按钮用）。 */
+    fun observeDislikedIds(serverId: ServerId?): Flow<List<GlobalId>>
+
     suspend fun isFavorite(globalId: GlobalId): Boolean
 
     /** 按实体类型查收藏（专辑/艺术家菜单动态 label 用）。 */

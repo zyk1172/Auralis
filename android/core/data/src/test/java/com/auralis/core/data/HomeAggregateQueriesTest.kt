@@ -12,9 +12,11 @@ import com.auralis.core.domain.PlaylistId
 import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
 import com.auralis.core.domain.TrackId
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -194,5 +196,47 @@ class HomeAggregateQueriesTest : RoomDbTest() {
         // 全部曲目都是刚同步 → 应全部落入 30 天窗口。
         assertEquals(4, within.size)
         assertTrue(within.all { it.serverId == sid })
+    }
+
+    // ------------------------------------------------------------ 不喜欢硬排除（R4）
+
+    @Test
+    fun `随机播放硬排除不喜欢_自动发现语义`() = runBlocking {
+        open()
+        val sid = ServerId("server-a")
+        repo.upsertServer(server(id = sid))
+        seedCatalog()
+        // t1 标记不喜欢：自动随机 / 收藏随机都不应再出现。
+        repo.setDisliked(GlobalId(sid, "t1"), true)
+
+        val random = repo.randomTracks(sid, limit = 100)
+        assertTrue(random.isNotEmpty())
+        assertTrue(random.none { it.id.value == "t1" })
+
+        // 收藏随机：只收藏 t1（不喜欢）→ 结果必须为空；t2 收藏后可出且仍排除 t1。
+        repo.setFavorite(GlobalId(sid, "t1"), FavoriteKind.Track, true)
+        assertTrue(repo.favoriteRandom(sid, 10).isEmpty())
+
+        repo.setFavorite(GlobalId(sid, "t2"), FavoriteKind.Track, true)
+        val favRandom = repo.favoriteRandom(sid, 10)
+        assertEquals(listOf("t2"), favRandom.map { it.id.value })
+    }
+
+    @Test
+    fun `不喜欢集合与观察流按服务器隔离`() = runBlocking {
+        open()
+        val sidA = ServerId("server-a")
+        val sidB = ServerId("server-b")
+        repo.upsertServer(server(id = sidA))
+        repo.upsertServer(server(id = sidB))
+        repo.setDisliked(GlobalId(sidA, "t1"), true)
+
+        assertEquals(setOf(GlobalId(sidA, "t1")), repo.dislikedIds(sidA))
+        assertTrue(repo.dislikedIds(sidB).isEmpty())
+        assertTrue(repo.isDisliked(GlobalId(sidA, "t1")))
+        assertFalse(repo.isDisliked(GlobalId(sidB, "t1")))
+
+        val snapshot = repo.observeDislikedIds(sidA).first()
+        assertEquals(listOf(GlobalId(sidA, "t1")), snapshot)
     }
 }
