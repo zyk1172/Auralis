@@ -194,7 +194,7 @@ private fun EmptyServers(state: ServerListState) {
         Button(onClick = { state.add() }) {
             Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(AuralisSpacing.small))
-            Text(stringResource(R.string.server_add_button))
+            Text(stringResource(AuralisR.string.add_server))
         }
     }
 }
@@ -315,7 +315,7 @@ fun ServerFormScreen(
             .imePadding(),
     ) {
         HeaderRow(
-            title = stringResource(if (existing != null) R.string.server_edit_title else R.string.server_add_button),
+            title = stringResource(if (existing != null) R.string.server_edit_title else AuralisR.string.add_server),
             action = {
                 TextButton(onClick = { state.cancel() }, enabled = !state.busy && !state.isTesting) {
                     Text(stringResource(AuralisR.string.cancel), color = colors.secondaryText)

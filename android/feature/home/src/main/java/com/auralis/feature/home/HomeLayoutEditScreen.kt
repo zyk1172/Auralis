@@ -38,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -45,6 +46,7 @@ import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.designsystem.R as AuralisR
 import com.auralis.core.domain.HomeEntryPreference
 import com.auralis.core.domain.HomeLayoutPreference
 import com.auralis.core.domain.HomeModuleId
@@ -106,16 +108,16 @@ fun HomeLayoutEditScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = colors.primaryText)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(AuralisR.string.back), tint = colors.primaryText)
             }
             Text(
-                "编辑首页",
+                stringResource(R.string.home_edit_title),
                 style = MaterialTheme.typography.titleLarge,
                 color = colors.primaryText,
                 modifier = Modifier.weight(1f),
             )
             TextButton(onClick = onBack) {
-                Text("完成", fontWeight = FontWeight.SemiBold, color = colors.accent)
+                Text(stringResource(AuralisR.string.done), fontWeight = FontWeight.SemiBold, color = colors.accent)
             }
         }
         HorizontalDivider(color = colors.separator)
@@ -130,13 +132,13 @@ fun HomeLayoutEditScreen(
                 ),
             ) {
                 item(key = "quick-header") {
-                    SectionTitle("快捷入口")
+                    SectionTitle(stringResource(R.string.home_layout_quick_entries))
                 }
                 itemsIndexed(quickEntries, key = { _, pref -> "quick-${pref.id}" }) { index, pref ->
                     val entryId = runCatching { HomeQuickEntry.valueOf(pref.id) }.getOrNull()
                     LayoutRow(
                         icon = entryId?.icon,
-                        title = entryId?.titleZh ?: pref.id,
+                        title = entryId?.let { stringResource(it.titleRes) } ?: pref.id,
                         visible = pref.visible,
                         canMoveUp = index > 0,
                         canMoveDown = index < quickEntries.lastIndex,
@@ -161,13 +163,13 @@ fun HomeLayoutEditScreen(
                     HorizontalDivider(color = colors.separator)
                 }
                 item(key = "content-header") {
-                    SectionTitle("内容模块")
+                    SectionTitle(stringResource(R.string.home_layout_content_modules))
                 }
                 itemsIndexed(contentModules, key = { _, pref -> "content-${pref.id}" }) { index, pref ->
                     val moduleId = runCatching { HomeModuleId.valueOf(pref.id) }.getOrNull()
                     LayoutRow(
                         icon = moduleId?.icon,
-                        title = moduleId?.titleZh ?: pref.id,
+                        title = moduleId?.let { stringResource(it.titleRes) } ?: pref.id,
                         visible = pref.visible,
                         canMoveUp = index > 0,
                         canMoveDown = index < contentModules.lastIndex,
@@ -201,15 +203,15 @@ fun HomeLayoutEditScreen(
                 .align(Alignment.CenterHorizontally)
                 .padding(vertical = AuralisSpacing.medium),
         ) {
-            Text("恢复默认布局", color = colors.error)
+            Text(stringResource(R.string.home_reset_layout), color = colors.error)
         }
     }
 
     if (confirmingReset) {
         AlertDialog(
             onDismissRequest = { confirmingReset = false },
-            title = { Text("恢复默认布局？") },
-            text = { Text("仅重置首页模块的显示与排序，不会删除任何歌曲、缓存或播放记录。") },
+            title = { Text(stringResource(R.string.home_reset_layout_confirm_title)) },
+            text = { Text(stringResource(R.string.home_reset_layout_message)) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmingReset = false
@@ -219,10 +221,10 @@ fun HomeLayoutEditScreen(
                         quickEntries = defaults.quickEntries
                         contentModules = defaults.contentModules
                     }
-                }) { Text("恢复默认", color = colors.error) }
+                }) { Text(stringResource(R.string.home_reset_layout_confirm), color = colors.error) }
             },
             dismissButton = {
-                TextButton(onClick = { confirmingReset = false }) { Text("取消") }
+                TextButton(onClick = { confirmingReset = false }) { Text(stringResource(AuralisR.string.cancel)) }
             },
             containerColor = colors.elevated,
         )
@@ -286,7 +288,7 @@ private fun LayoutRow(
         ) {
             Icon(
                 Icons.Filled.KeyboardArrowUp,
-                contentDescription = "上移",
+                contentDescription = stringResource(AuralisR.string.move_up),
                 tint = if (canMoveUp) colors.primaryText else colors.separator,
             )
         }
@@ -297,7 +299,7 @@ private fun LayoutRow(
         ) {
             Icon(
                 Icons.Filled.KeyboardArrowDown,
-                contentDescription = "下移",
+                contentDescription = stringResource(AuralisR.string.move_down),
                 tint = if (canMoveDown) colors.primaryText else colors.separator,
             )
         }

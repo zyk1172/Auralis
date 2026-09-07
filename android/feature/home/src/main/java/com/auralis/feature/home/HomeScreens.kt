@@ -39,6 +39,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -47,6 +49,7 @@ import com.auralis.core.designsystem.AuralisChrome
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.designsystem.R as AuralisR
 import com.auralis.core.domain.Album
 import com.auralis.core.domain.Artist
 import com.auralis.core.domain.BrowseDestination
@@ -73,7 +76,8 @@ fun HomeScreen(
 ) {
     val colors = LocalAuralisTheme.current.colors
     val scope = rememberCoroutineScope()
-    val state = remember(graph) { HomeState(scope, graph) }
+    val context = LocalContext.current.applicationContext
+    val state = remember(graph) { HomeState(scope, graph, context) }
 
     LaunchedEffect(state) { state.start() }
 
@@ -117,14 +121,14 @@ private fun HomeHeader(serverName: String?, onManageServers: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text("首页", style = MaterialTheme.typography.headlineMedium, color = colors.primaryText)
+            Text(stringResource(R.string.home_title), style = MaterialTheme.typography.headlineMedium, color = colors.primaryText)
             if (serverName != null) {
                 Text(serverName, style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
             }
         }
         // 服务器入口（与 S2 摘要卡等价：真实跳转服务器管理）。
         IconButton(onClick = onManageServers) {
-            Icon(Icons.Filled.Add, contentDescription = "管理服务器", tint = colors.primaryText)
+            Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.home_manage_servers), tint = colors.primaryText)
         }
     }
 }
@@ -200,7 +204,7 @@ private fun QuickEntriesGrid(
             ) {
                 Icon(
                     module.id.icon,
-                    contentDescription = module.id.titleZh,
+                    contentDescription = stringResource(module.id.titleRes),
                     tint = colors.accent,
                     modifier = Modifier.size(26.dp),
                 )
@@ -258,7 +262,7 @@ private fun ModuleHeader(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            module.id.titleZh,
+            stringResource(module.id.titleRes),
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             color = colors.primaryText,
@@ -282,13 +286,12 @@ private fun ModuleHeader(
                 )
                 Spacer(Modifier.width(2.dp))
                 Text(
-                    "换一批",
+                    stringResource(R.string.home_reshuffle),
                     style = MaterialTheme.typography.labelMedium,
                     color = colors.secondaryText,
                 )
             }
         }
-        val countLabel = moduleCountLabel(module)
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(AuralisRadius.small))
@@ -297,7 +300,7 @@ private fun ModuleHeader(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                countLabel,
+                stringResource(moduleCountLabelRes(module), module.itemCount),
                 style = MaterialTheme.typography.labelMedium,
                 color = colors.secondaryText,
             )
@@ -311,10 +314,10 @@ private fun ModuleHeader(
     }
 }
 
-private fun moduleCountLabel(module: HomeModuleSnapshot): String = when {
-    module.tracks.isNotEmpty() -> "${module.itemCount} 首"
-    module.artists.isNotEmpty() -> "${module.itemCount} 位艺人"
-    else -> "${module.itemCount} 张专辑"
+private fun moduleCountLabelRes(module: HomeModuleSnapshot): Int = when {
+    module.tracks.isNotEmpty() -> R.string.home_count_tracks
+    module.artists.isNotEmpty() -> R.string.home_count_artists
+    else -> R.string.home_count_albums
 }
 
 private fun HomeModuleId.toBrowseDestination(): BrowseDestination = when (this) {
@@ -448,7 +451,7 @@ private fun HomeArtistCard(
             modifier = Modifier.height(AuralisChrome.homeCardTitleHeight),
         )
         Text(
-            "播放 $playCount 次",
+            stringResource(R.string.home_played_times, playCount),
             style = MaterialTheme.typography.bodySmall,
             color = colors.secondaryText,
             maxLines = 1,
@@ -491,7 +494,7 @@ private fun HomeAlbumCard(
             modifier = Modifier.height(AuralisChrome.homeCardTitleHeight),
         )
         Text(
-            "播放 $playCount 次",
+            stringResource(R.string.home_played_times, playCount),
             style = MaterialTheme.typography.bodySmall,
             color = colors.secondaryText,
             maxLines = 1,
@@ -505,16 +508,16 @@ private fun HomeAlbumCard(
 private fun LibrarySummaryCard(stats: com.auralis.core.domain.LibraryStats) {
     val colors = LocalAuralisTheme.current.colors
     val entries = listOf(
-        stats.artistCount to "艺术家",
-        stats.albumCount to "专辑",
-        stats.trackCount to "歌曲",
-        stats.playlistCount to "歌单",
+        stats.artistCount to AuralisR.string.artist,
+        stats.albumCount to AuralisR.string.album,
+        stats.trackCount to AuralisR.string.song,
+        stats.playlistCount to AuralisR.string.playlist,
     )
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.small),
     ) {
-        entries.forEach { (value, label) ->
+        entries.forEach { (value, labelRes) ->
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -531,7 +534,7 @@ private fun LibrarySummaryCard(stats: com.auralis.core.domain.LibraryStats) {
                     maxLines = 1,
                 )
                 Text(
-                    label,
+                    stringResource(labelRes),
                     style = MaterialTheme.typography.labelSmall,
                     color = colors.secondaryText,
                     maxLines = 1,
@@ -550,16 +553,16 @@ private fun NoServerHome(onManageServers: () -> Unit) {
             .padding(AuralisSpacing.large),
         verticalArrangement = Arrangement.spacedBy(AuralisSpacing.medium),
     ) {
-        Text("尚未连接服务器", style = MaterialTheme.typography.titleMedium, color = colors.primaryText)
+        Text(stringResource(R.string.home_no_server_title), style = MaterialTheme.typography.titleMedium, color = colors.primaryText)
         Text(
-            "连接 OpenSubsonic 服务器后，你的音乐库会出现在这里。",
+            stringResource(R.string.home_no_server_message),
             style = MaterialTheme.typography.bodyMedium,
             color = colors.secondaryText,
         )
         Button(onClick = onManageServers) {
             Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(AuralisSpacing.small))
-            Text("添加服务器")
+            Text(stringResource(AuralisR.string.add_server))
         }
     }
 }
@@ -573,9 +576,9 @@ private fun EmptyLibraryHome(onManageServers: () -> Unit) {
             .padding(AuralisSpacing.large),
         verticalArrangement = Arrangement.spacedBy(AuralisSpacing.small),
     ) {
-        Text("音乐库还是空的", style = MaterialTheme.typography.titleMedium, color = colors.primaryText)
+        Text(stringResource(R.string.home_empty_title), style = MaterialTheme.typography.titleMedium, color = colors.primaryText)
         Text(
-            "同步完成后，首页模块会自动出现（打开你不需要的模块可去 设置 → 首页布局 调整）。",
+            stringResource(R.string.home_empty_message),
             style = MaterialTheme.typography.bodyMedium,
             color = colors.secondaryText,
         )
@@ -591,8 +594,8 @@ private fun HomeError(message: String, onRetry: () -> Unit) {
             .padding(AuralisSpacing.large),
         verticalArrangement = Arrangement.spacedBy(AuralisSpacing.medium),
     ) {
-        Text("加载失败", style = MaterialTheme.typography.titleMedium, color = colors.error)
+        Text(stringResource(R.string.home_error_title), style = MaterialTheme.typography.titleMedium, color = colors.error)
         Text(message, style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText)
-        Button(onClick = onRetry) { Text("重试") }
+        Button(onClick = onRetry) { Text(stringResource(AuralisR.string.retry)) }
     }
 }

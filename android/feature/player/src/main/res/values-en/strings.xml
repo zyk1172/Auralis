@@ -16,8 +16,6 @@
     <string name="player_queue_window_format">Queue %1$d–%2$d of %3$d</string>
     <string name="player_queue_total_format">%1$d songs</string>
     <string name="player_queue_empty">The queue is empty</string>
-    <string name="player_move_up">Move up</string>
-    <string name="player_move_down">Move down</string>
     <string name="player_remove_from_queue">Remove from queue</string>
     <!-- Transport area (errors and play modes) -->
     <string name="player_action_failed">Action failed: %1$s</string>

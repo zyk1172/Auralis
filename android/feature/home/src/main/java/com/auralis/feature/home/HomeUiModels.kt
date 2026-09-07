@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.ui.graphics.vector.ImageVector
+import com.auralis.core.designsystem.R as AuralisR
 import com.auralis.core.domain.HomeModuleId
 import com.auralis.core.domain.HomeQuickEntry
 
@@ -22,13 +23,14 @@ import com.auralis.core.domain.HomeQuickEntry
  * domain 的 [HomeModuleId] / [HomeQuickEntry] 只表达 id 与默认可见性，不携带展示元数据；
  * 标题/图标是纯 UI 关注点，放在 feature 层，避免 domain 依赖 Compose。
  * 内容模块顺序由 domain 枚举声明顺序决定 = Apple defaultOrder（已在 P0 核对）。
+ * R5d：标题改为 string resource id（titleRes），Composable 内 stringResource(titleRes) 取文。
  */
 
-val HomeQuickEntry.titleZh: String
+val HomeQuickEntry.titleRes: Int
     get() = when (this) {
-        HomeQuickEntry.Playlists -> "歌单"
-        HomeQuickEntry.Favorites -> "收藏"
-        HomeQuickEntry.MostPlayed -> "最常听"
+        HomeQuickEntry.Playlists -> AuralisR.string.playlist
+        HomeQuickEntry.Favorites -> AuralisR.string.favorite
+        HomeQuickEntry.MostPlayed -> R.string.home_quick_most_played
     }
 
 val HomeQuickEntry.icon: ImageVector
@@ -38,18 +40,18 @@ val HomeQuickEntry.icon: ImageVector
         HomeQuickEntry.MostPlayed -> Icons.Filled.PlayCircle
     }
 
-/** 内容模块中文标题。 */
-val HomeModuleId.titleZh: String
+/** 内容模块标题资源。 */
+val HomeModuleId.titleRes: Int
     get() = when (this) {
-        HomeModuleId.RandomSongs -> "随机音乐"
-        HomeModuleId.RecentlyPlayed -> "最近播放"
-        HomeModuleId.LongUnplayed -> "很久没听"
-        HomeModuleId.RecentlyAdded -> "最近添加"
-        HomeModuleId.FavoriteRandom -> "收藏里随便听"
-        HomeModuleId.Downloads -> "下载"
-        HomeModuleId.NeverPlayed -> "从未播放"
-        HomeModuleId.TopArtists -> "常听艺术家"
-        HomeModuleId.TopAlbums -> "常听专辑"
+        HomeModuleId.RandomSongs -> R.string.home_module_random_songs
+        HomeModuleId.RecentlyPlayed -> R.string.home_module_recently_played
+        HomeModuleId.LongUnplayed -> R.string.home_module_long_unplayed
+        HomeModuleId.RecentlyAdded -> R.string.home_module_recently_added
+        HomeModuleId.FavoriteRandom -> R.string.home_module_favorite_random
+        HomeModuleId.Downloads -> R.string.home_module_downloads
+        HomeModuleId.NeverPlayed -> R.string.home_module_never_played
+        HomeModuleId.TopArtists -> R.string.home_module_top_artists
+        HomeModuleId.TopAlbums -> R.string.home_module_top_albums
     }
 
 /** 内容模块图标（对齐 SF Symbols 语义：shuffle/clock/moon/add/heart/download/…）。 */

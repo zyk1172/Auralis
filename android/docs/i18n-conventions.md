@@ -42,6 +42,8 @@
 阶段 `ConnectionStage.titleRes()` + 模型层注入 Context）/ `feature:player`（61 处：播放页/歌词/
 队列/传输/菜单 + `PlayerTab.titleRes()`、`PlayMode.modeTitleRes()`、`audioTechnicalLabel(context,…)`；
 共享层新增通用动作动词 play/pause/previous/next/favorite/unfavorite/dislike/undislike/edit/done/
-retry/add_to_playlist）。
-待迁移（按量）：home 44 / library 204 / settings 97 / assistant 245（其中大量为工具/会话文案属
+retry/add_to_playlist）/ `feature:home`（44 处：模块标题 `HomeModuleId.titleRes`/`HomeQuickEntry.titleRes`、
+货架计数/空态/布局编辑页 + `HomeState` 注入 Context；上移/下移/添加服务器提升共享层
+move_up/move_down/add_server，player/server 同义本地 key 一并归一化）。
+待迁移（按量）：library 204 / settings 97 / assistant 245（其中大量为工具/会话文案属
 边界，实际 UI 面更小）/ app-mobile 31 / app-tv 11 / designsystem 12（共享层按需进 core:designsystem）。

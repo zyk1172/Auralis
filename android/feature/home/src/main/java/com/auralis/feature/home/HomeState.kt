@@ -1,5 +1,6 @@
 package com.auralis.feature.home
 
+import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -28,6 +29,7 @@ import kotlinx.coroutines.launch
 class HomeState(
     private val scope: CoroutineScope,
     private val graph: AuralisGraph,
+    private val context: Context,
 ) {
     private val repo get() = graph.catalogRepository
     private val prefs get() = graph.preferences
@@ -120,7 +122,7 @@ class HomeState(
             buildContentModules(serverId)
             lastError = null
         } catch (t: Throwable) {
-            lastError = "首页加载失败：${t.message}"
+            lastError = context.getString(R.string.home_load_failed, t.message)
         } finally {
             refreshing = false
             loaded = true

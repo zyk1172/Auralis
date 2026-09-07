@@ -508,10 +508,10 @@ private fun QueueRow(
             }
         } else {
             IconButton(onClick = { if (canMoveUp) onMove(logicalIndex - 1) }) {
-                Icon(Icons.Filled.KeyboardArrowUp, contentDescription = stringResource(R.string.player_move_up), tint = if (canMoveUp) colors.primaryText else colors.secondaryText.copy(alpha = 0.35f))
+                Icon(Icons.Filled.KeyboardArrowUp, contentDescription = stringResource(AuralisR.string.move_up), tint = if (canMoveUp) colors.primaryText else colors.secondaryText.copy(alpha = 0.35f))
             }
             IconButton(onClick = { if (canMoveDown) onMove(logicalIndex + 1) }) {
-                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = stringResource(R.string.player_move_down), tint = if (canMoveDown) colors.primaryText else colors.secondaryText.copy(alpha = 0.35f))
+                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = stringResource(AuralisR.string.move_down), tint = if (canMoveDown) colors.primaryText else colors.secondaryText.copy(alpha = 0.35f))
             }
             IconButton(onClick = onRemove) {
                 Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.player_remove_from_queue), tint = colors.error)

@@ -31,4 +31,7 @@
     <string name="done">完成</string>
     <string name="retry">重试</string>
     <string name="add_to_playlist">添加到歌单</string>
+    <string name="move_up">上移</string>
+    <string name="move_down">下移</string>
+    <string name="add_server">添加服务器</string>
 </resources>

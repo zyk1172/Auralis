@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- R5d：feature:home 独有文案（默认=中文；英文见 values-en）。key 一律 home_ 前缀。
+     跨模块通用词（歌曲/专辑/艺术家/歌单/收藏/播放/重试/返回/完成/取消/上移/下移/添加服务器）放
+     core:designsystem 共享层经 AuralisR 引用；此处只放首页模块/入口/空态等模块特有词。 -->
+<resources>
+    <!-- 首页头 -->
+    <string name="home_title">首页</string>
+    <string name="home_manage_servers">管理服务器</string>
+    <string name="home_reshuffle">换一批</string>
+    <string name="home_quick_most_played">最常听</string>
+    <!-- 内容模块标题（HomeModuleId 显示名） -->
+    <string name="home_module_random_songs">随机音乐</string>
+    <string name="home_module_recently_played">最近播放</string>
+    <string name="home_module_long_unplayed">很久没听</string>
+    <string name="home_module_recently_added">最近添加</string>
+    <string name="home_module_favorite_random">收藏里随便听</string>
+    <string name="home_module_downloads">下载</string>
+    <string name="home_module_never_played">从未播放</string>
+    <string name="home_module_top_artists">常听艺术家</string>
+    <string name="home_module_top_albums">常听专辑</string>
+    <!-- 货架计数与播放次数 -->
+    <string name="home_count_tracks">%1$d 首</string>
+    <string name="home_count_artists">%1$d 位艺人</string>
+    <string name="home_count_albums">%1$d 张专辑</string>
+    <string name="home_played_times">播放 %1$d 次</string>
+    <!-- 空态与错误 -->
+    <string name="home_no_server_title">尚未连接服务器</string>
+    <string name="home_no_server_message">连接 OpenSubsonic 服务器后，你的音乐库会出现在这里。</string>
+    <string name="home_empty_title">音乐库还是空的</string>
+    <string name="home_empty_message">同步完成后，首页模块会自动出现（打开你不需要的模块可去 设置 → 首页布局 调整）。</string>
+    <string name="home_error_title">加载失败</string>
+    <string name="home_load_failed">首页加载失败：%1$s</string>
+    <!-- 布局编辑页 -->
+    <string name="home_edit_title">编辑首页</string>
+    <string name="home_layout_quick_entries">快捷入口</string>
+    <string name="home_layout_content_modules">内容模块</string>
+    <string name="home_reset_layout">恢复默认布局</string>
+    <string name="home_reset_layout_confirm_title">恢复默认布局？</string>
+    <string name="home_reset_layout_message">仅重置首页模块的显示与排序，不会删除任何歌曲、缓存或播放记录。</string>
+    <string name="home_reset_layout_confirm">恢复默认</string>
+</resources>

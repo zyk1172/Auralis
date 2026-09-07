@@ -6,7 +6,6 @@
     <string name="server_empty_title">No servers yet</string>
     <string name="server_empty_desc_1">Auralis connects to your private music library over the OpenSubsonic protocol.</string>
     <string name="server_empty_desc_2">Once added, the music and favorites on the server sync to this device.</string>
-    <string name="server_add_button">Add Server</string>
     <string name="server_active_icon">Current server</string>
     <string name="server_edit_icon">Edit server</string>
     <string name="server_delete_icon">Delete server</string>

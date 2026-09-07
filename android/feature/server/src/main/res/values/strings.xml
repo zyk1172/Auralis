@@ -7,7 +7,6 @@
     <string name="server_empty_title">尚未添加服务器</string>
     <string name="server_empty_desc_1">Auralis 通过 OpenSubsonic 协议连接你的私有曲库。</string>
     <string name="server_empty_desc_2">添加后，服务器上的音乐与收藏会同步到本机。</string>
-    <string name="server_add_button">添加服务器</string>
     <string name="server_active_icon">当前服务器</string>
     <string name="server_edit_icon">编辑服务器</string>
     <string name="server_delete_icon">删除服务器</string>
