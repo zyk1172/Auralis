@@ -20,10 +20,12 @@ android {
 
 dependencies {
     implementation(project(":core:domain"))
+    implementation(project(":core:data"))
     implementation(project(":core:designsystem"))
     implementation(project(":core:image"))
     implementation(project(":core:playback"))
     implementation(project(":core:lyrics"))
+    implementation(project(":core:offline"))
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
