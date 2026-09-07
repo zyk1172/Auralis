@@ -139,7 +139,7 @@
 |---|---|---|---|
 | 设置主表：设置（服务器/AI 助手/播放与音质/数据与备份）+ 外观（首页布局/主题）+ 关于 | SettingsView body | feature:settings SettingsScreen | Done（S7） |
 | 服务器入口 + 副标题「已连接 · N 首歌曲」真实统计 | SettingsView 服务器行 | SettingsScreen 服务器行（servers()+stats().trackCount） | Done（S7） |
-| AI 助手入口（大模型/隐私） | AgentSettingsPage | 行置灰 + 「S8 接入」说明（S8 时启用） | Partial（S8 完善） |
+| AI 助手入口（模型接口/外发授权） | SettingsView AI 助手行 → AIProviderSettingsPage | SettingsScreen AI 行（副标题=真实状态）→ Route.AiSettings（AiSettingsPage） | Done（S8） |
 | 播放与音质：Wi-Fi 原始音质 / 蜂窝转码 toggle | PlaybackSettingsPage 网络音质 | SettingsSwitchRow + streamQualityFlow | Done（S7） |
 | ReplayGain：模式（关/曲目/专辑）/前级 -12..+12 步进 0.5/峰值保护 | PlaybackSettingsPage ReplayGain | RadioButton + Slider + prefs.setReplayGain | Done（S7） |
 | 数据与备份：本地缓存统计 + 清理（封面确认/歌词直清；不删用户主动下载） | DataSettingsPage + CacheManagementSection | DataAndBackupPage（元数据目录字节/歌词行数 DAO 清理/coil image_cache 清理/离线下载计数） | Done（S7） |
@@ -149,6 +149,20 @@
 | Music Haptics 设置区/诊断（平台特性） | PlaybackSettingsPage | 未移植（文档记录） | N/A |
 | 临时音频流缓存（Android 播放直连流式无落盘缓存） | CacheManagementSection 临时音频 | 无对应（直连流式；文档记录差异） | N/A |
 | 播放速率（Swift 无设置 UI，仅 Agent 工具调用） | — | 不移植（core prefs 已备，Agent 阶段用） | N/A |
+
+## 5g. AI 助手（AssistantView + AgentCoordinator + AuralisAgentBridge + AISettings 规格；S8）
+
+| 能力 | Swift 基准 | Android 实现 | 状态 |
+|---|---|---|---|
+| 助手分区页：Header 状态标签 / 消息流 / 输入区 | AssistantView | AssistantScreen（绿勾+model / 黄标「未配置模型接口」+配置；搜索/会话按钮；发送/停止切换） | Done（S8） |
+| 会话持久化 + 会话列表（新建/置顶/改名/清空/归档/删除二次确认） | AgentSession + agent-sessions.json + .sessions sheet | AssistantSessionStore（filesDir/assistant/agent-sessions.json）+ SessionsDialog | Done（S8） |
+| 首次外发确认：允许一次/允许并记住/取消 | pendingConsent | ConsentDialog + prefs auralis.ai.consentGiven | Done（S8） |
+| 工具授权 fail-closed + 破坏性二次确认绑 runID | AgentToolRegistry + pendingOperationConfirmation | core:ai 注册表 + OperationConfirmDialog（批准并执行/取消） | Done（S8） |
+| 工具桥：canonical 工具真实可执行（读 17 / 写 22 / 删 1） | AuralisAgentBridge | AssistantToolHost（executor 直连 graph/播放器/歌词/歌单协调器） | Done（S8） |
+| 运行指示/停止/错误如实呈现（reasoning 仅瞬态） | AssistantRunPresentationState | AssistantRunPresentation + 工具状态行 + ErrorRow（不伪装本地模式） | Done（S8） |
+| 操作日志 + 可逆撤销（收藏对真实逆向） | agent.actionRecords + 撤销 | ActionLogDialog + host.undo（agent-actions.json） | Done（S8） |
+| AI 连接设置页：baseURL/apiPath/model/API Key(Keystore)/上下文/输出/原生工具/测试连接 | AIProviderSettingsPage + AIConnectionSettings | feature:settings AiSettingsPage（保存即 DataStore；Key 走 Keystore reference ai.provider.api-key） | Done（S8） |
+| 历史回灌只取文本、丢弃 transient | AgentHistoryPolicy | Coordinator 消息过滤 | Done（S8） |
 
 ## 6. 离线 / 歌词 / 封面（audit 07）
 
@@ -167,7 +181,7 @@
 | Chat Completions 客户端 | core:ai | Done |
 | 流式工具调用（按 index 拼接） | core:ai | Done |
 | AgentToolLoop 三不变式 | core:ai | Done |
-| Assistant 页面与工具执行 UI | feature/assistant | Not Started |
+| Assistant 页面与工具执行 UI | feature/assistant | Done（S8） |
 
 ## 8. 当前缺口（按用户强制顺序排队）
 
@@ -178,7 +192,7 @@
 5. ~~Mini Player / Now Playing / Queue / Lyrics~~ ✅ S5 完成（Mini 展开 + NowPlaying 三页 + 队列编辑 + 同步歌词高亮 + 位置节拍；APK 已打包）
 6. ~~Search~~ ✅ S6 完成（本地四类 FTS 搜索 + 防抖 + 历史/清空 + 在线 search3 兜底 + Assistant 顶栏放大镜入口；APK 已打包）
 7. ~~Settings~~ ✅ S7 完成（真实设置页：服务器/播放与音质/数据与备份/首页布局/主题即时应用/关于；冷启动主题恢复修复；APK 已打包）
-8. Assistant ← 当前阶段
+8. ~~Assistant~~ ✅ S8 完成（会话持久化 + 对话/工具执行 UI + 外发授权/破坏性确认 + canonical 工具子集真实执行 + 操作日志/撤销 + AI 配置页 + 设置 AI 行启用；APK 已打包）
 9. Android TV（app-tv）
 
-> 最后更新：2026-09-07（P0 Core 九项 + S1–S7 完成，S8 Assistant 待开始）
+> 最后更新：2026-09-07（P0 Core 九项 + S1–S8 完成，S9 Android TV 待开始）

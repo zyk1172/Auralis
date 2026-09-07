@@ -83,8 +83,14 @@
 
 | 页面 | Swift 基准 | 状态 | 按钮级核对 |
 |---|---|---|---|
-| Assistant 对话页（含工具授权 UI） | AgentKit/App 侧 | Not Started | ☐ 副作用确认绑定 run ☐ |
-| 搜索音乐库入口（顶栏放大镜 → 搜索页） | AssistantView header → sheet | Done（S6 提前启用；对话主体待 S8） | ☑ 放大镜按钮 → 全屏 SearchScreen ☑ 返回/系统返回关闭 |
+| Assistant 对话页（气泡/流式态/工具行/错误行） | AssistantView | Done（S8） | ☑ 用户气泡右对齐(accent 22%) ☑ 助手气泡左对齐+复制 ☑ 运行中阶段行+停止 ☑ 工具执行行(进行/成功/被拒) ☑ 错误红字如实呈现 ☑ 未配置时发送禁用并引导配置 |
+| Header：状态标签（live 绿勾+model / 未配置黄标）+ 配置 + 会话列表 | AssistantView header | Done（S8） | ☑ 状态真实来自 prefs.aiEnabled+isComplete ☑ 未 live 显示配置齿轮 → Route.AiSettings ☑ 会话列表按钮 → SessionsDialog |
+| 会话列表（新建/置顶/改名/清空/归档/删除二次确认/显示已归档） | .sessions sheet | Done（S8） | ☑ 全量真实 CRUD + agent-sessions.json 持久化 ☑ 删除/改名 AlertDialog ☑ 选中即切会话 |
+| 首次外发确认 | pendingConsent | Done（S8） | ☑ 允许一次 ☑ 允许并记住（写 auralis.ai.consentGiven）☑ 取消 |
+| 副作用/破坏性二次确认（批准并执行/取消，绑 runID） | pendingOperationConfirmation | Done（S8） | ☑ Destructive 工具（deletePlaylist）执行前挂起 ☑ 拒绝→fail closed 回灌模型 ☑ 确认绑定具体 run |
+| 操作日志（含可逆撤销） | agent.actionRecords sheet | Done（S8） | ☑ 写操作如实记录（agent-actions.json）☑ 收藏/取消收藏对可真实撤销 ☑ 不可逆项不显示撤销按钮 |
+| 搜索音乐库入口（顶栏放大镜 → 搜索页） | AssistantView header → sheet | Done（S8 保留 S6） | ☑ 放大镜按钮 → 全屏 SearchScreen ☑ 返回/系统返回关闭 |
+| AI 助手设置页（配置/Key/高级/连接测试/撤销授权） | AIProviderSettingsPage | Done（S8） | ☑ 开关/接口地址/路径/模型/API Key(Keystore)/上下文/输出/原生工具 ☑ 保存写 DataStore ☑ 测试连接绿勾/红叉真实 ☑ 撤销外发授权 ☑ 设置 AI 行启用并显示状态副标题 |
 
 ## Android TV
 
@@ -106,5 +112,8 @@
 > **S7 设置完成**（feature:settings：真实设置页替换占位——服务器行真实统计、AI 助手行如实
 > 置灰、播放与音质（流质量+ReplayGain）、数据与备份（元数据/歌词/封面/下载统计+清理）、
 > 首页布局、12 主题网格即时应用、关于版本；修复冷启动未恢复主题；APK 已打包）。
-> 下一步：S8 Assistant。
+> **S8 Assistant 完成**（feature:assistant：会话持久化 + 对话/工具执行 UI + 首次外发
+> 授权 + 破坏性确认 + canonical 工具子集真实执行 + 操作日志/撤销；feature:settings
+> AiSettingsPage + 设置 AI 行启用；AI 配置/不可用/失败均如实呈现；APK 已打包）。
+> 下一步：S9 Android TV。
 > 最后更新：2026-09-07

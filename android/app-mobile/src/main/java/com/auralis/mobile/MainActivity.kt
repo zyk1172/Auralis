@@ -14,6 +14,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -23,9 +24,11 @@ import com.auralis.core.designsystem.AuralisThemeController
 import com.auralis.core.designsystem.BuiltInThemes
 import com.auralis.core.designsystem.LocalAuralisTheme
 import com.auralis.core.domain.ServerAccount
+import com.auralis.feature.assistant.AssistantCoordinator
 import com.auralis.feature.home.HomeLayoutEditScreen
 import com.auralis.feature.server.ServerFormScreen
 import com.auralis.feature.server.ServerListScreen
+import com.auralis.feature.settings.AiSettingsPage
 import com.auralis.feature.settings.SettingsScreen
 import com.auralis.mobile.shell.MobileShell
 
@@ -58,8 +61,11 @@ private sealed interface Route {
     data class AddServer(val fromManage: Boolean) : Route
     data class EditServer(val account: ServerAccount, val fromManage: Boolean) : Route
 
-    /** 设置（S7：真实设置页——服务器/AI 助手占位说明/播放与音质/数据与备份/首页布局/主题/关于）。 */
+    /** 设置（S7：真实设置页；S8：AI 助手配置已启用）。 */
     data object Settings : Route
+
+    /** AI 助手配置（对齐 Swift AIProviderSettingsPage；入口：设置 → AI 助手 或 助手页 配置）。 */
+    data object AiSettings : Route
 
     /** 首页布局编辑（对齐 Apple HomeLayoutEditView；入口在 设置 → 首页布局）。 */
     data object HomeLayoutEdit : Route
@@ -71,6 +77,9 @@ private sealed interface Route {
 @Composable
 private fun AppRoot(graph: AuralisGraph) {
     var route by remember { mutableStateOf<Route>(Route.Boot) }
+    val scope = rememberCoroutineScope()
+    // AI 助手协调器：AppRoot 持有（跨分区/路由不中断运行中的对话）。
+    val assistantCoordinator = remember(graph, scope) { AssistantCoordinator(graph, scope) }
 
     LaunchedEffect(graph) {
         // 冷启动恢复上次选择的主题（DataStore 已持久化；S7 前未应用导致重启回默认）。
@@ -110,6 +119,12 @@ private fun AppRoot(graph: AuralisGraph) {
             onBack = { route = Route.Shell },
             onOpenServers = { route = Route.ManageServers(showBack = true) },
             onEditHomeLayout = { route = Route.HomeLayoutEdit },
+            onOpenAiSettings = { route = Route.AiSettings },
+        )
+
+        Route.AiSettings -> AiSettingsPage(
+            graph = graph,
+            onBack = { route = Route.Settings },
         )
 
         Route.HomeLayoutEdit -> HomeLayoutEditScreen(
@@ -119,8 +134,10 @@ private fun AppRoot(graph: AuralisGraph) {
 
         Route.Shell -> MobileShell(
             graph = graph,
+            assistantCoordinator = assistantCoordinator,
             onOpenServers = { route = Route.ManageServers(showBack = true) },
             onOpenSettings = { route = Route.Settings },
+            onOpenAiSettings = { route = Route.AiSettings },
             onOpenEditHomeLayout = { route = Route.HomeLayoutEdit },
         )
     }

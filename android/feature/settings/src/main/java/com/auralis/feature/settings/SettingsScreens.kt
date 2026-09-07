@@ -81,6 +81,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onOpenServers: () -> Unit,
     onEditHomeLayout: () -> Unit,
+    onOpenAiSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var page by remember { mutableStateOf<SettingsPage?>(null) }
@@ -92,6 +93,7 @@ fun SettingsScreen(
             onBack = onBack,
             onOpenServers = onOpenServers,
             onEditHomeLayout = onEditHomeLayout,
+            onOpenAiSettings = onOpenAiSettings,
             onOpenQuality = { page = SettingsPage.Quality },
             onOpenData = { page = SettingsPage.Data },
             onOpenTheme = { page = SettingsPage.Theme },
@@ -114,6 +116,7 @@ private fun SettingsRootPage(
     onBack: () -> Unit,
     onOpenServers: () -> Unit,
     onEditHomeLayout: () -> Unit,
+    onOpenAiSettings: () -> Unit,
     onOpenQuality: () -> Unit,
     onOpenData: () -> Unit,
     onOpenTheme: () -> Unit,
@@ -141,6 +144,18 @@ private fun SettingsRootPage(
         }
     }
 
+    // AI 助手行副标题：模型接口配置状态（真实读取；未配置/已关闭如实显示）。
+    var aiSubtitle by remember { mutableStateOf("大模型、推荐索引与隐私") }
+    LaunchedEffect(Unit) {
+        val enabled = runCatching { graph.preferences.aiEnabledValue() }.getOrDefault(true)
+        val settings = runCatching { graph.preferences.aiConnectionValue() }.getOrNull()
+        aiSubtitle = when {
+            !enabled -> "已关闭"
+            settings == null || !settings.isComplete -> "未配置模型接口"
+            else -> settings.model
+        }
+    }
+
     val theme = AuralisThemeController.observe()
 
     SettingsPageContainer(modifier = modifier) {
@@ -159,12 +174,11 @@ private fun SettingsRootPage(
             item {
                 SettingsCategoryRow(
                     title = "AI 助手",
-                    subtitle = "大模型、推荐索引与隐私",
+                    subtitle = aiSubtitle,
                     icon = Icons.Filled.AutoAwesome,
-                    onClick = { },
-                    enabled = false,
+                    onClick = onOpenAiSettings,
                 )
-                SettingsCaption("AI 助手设置在 Assistant 阶段（S8）接入。")
+                SettingsCaption("模型接口、API Key 与外发授权。")
             }
             item {
                 SettingsCategoryRow(

@@ -39,6 +39,8 @@ import com.auralis.core.playback.LocalPlaybackHost
 import com.auralis.core.playback.PlaybackController
 import com.auralis.core.playback.PlaybackSnapshot
 import com.auralis.core.playback.QueueSnapshot
+import com.auralis.feature.assistant.AssistantCoordinator
+import com.auralis.feature.assistant.AssistantScreen
 import com.auralis.feature.home.HomeScreen
 import com.auralis.feature.library.BrowseDetailScreen
 import com.auralis.feature.library.LibraryScreen
@@ -61,8 +63,10 @@ import kotlinx.coroutines.launch
 @Composable
 fun MobileShell(
     graph: AuralisGraph,
+    assistantCoordinator: AssistantCoordinator,
     onOpenServers: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAiSettings: () -> Unit,
     onOpenEditHomeLayout: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -182,8 +186,11 @@ fun MobileShell(
                 }
             }
 
-            AppSection.Assistant -> AssistantPlaceholderPage(
+            AppSection.Assistant -> AssistantScreen(
+                coordinator = assistantCoordinator,
                 onOpenSearch = { searchOpen = true },
+                onOpenAiSettings = onOpenAiSettings,
+                modifier = Modifier.fillMaxSize(),
             )
         }
 
