@@ -8,15 +8,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-/**
- * Auralis 设计 token。
- *
- * Apple 对应 `DesignSystem/ThemeContracts.swift`：
- * - `AuralisSpacing` = 4 / 8 / 12 / 20 / 28 / 40
- * - `AuralisRadius`  = 8 / 14 / 22 / 18(artwork)
- *
- * Android 直接按 dp 映射（与 iOS pt 1:1），**不要**改成 4/8/16/24/32 那套。
- */
 object AuralisSpacing {
     val xSmall: Dp = 4.dp
     val small: Dp = 8.dp
@@ -33,40 +24,35 @@ object AuralisRadius {
     val artwork: Dp = 18.dp
 }
 
-/** 底部 Dock / Mini Player 的硬规格（Apple `AuralisRootView.swift` / `PlayerViews.swift`）。 */
+/** Apple `ThemeContracts` / `AuralisRootView` / `PlayerViews` 的跨页视觉硬规格。 */
 object AuralisChrome {
     val miniPlayerHeight: Dp = 56.dp
     val dockHeight: Dp = 56.dp
     val dockSpacing: Dp = 8.dp
-    /** Apple 展开态外层 `.padding(.horizontal, 16)`。 */
     val dockHorizontalPadding: Dp = 16.dp
     val dockBottomPadding: Dp = 6.dp
-    /** 判定为 Dock 手势的最小纵向位移。 */
     val dockGestureThreshold: Dp = 44.dp
-    /** 触控目标下限。 */
     val minTouchTarget: Dp = 44.dp
 
-    /** 收拢态切换真实交互树的阈值与中间播放器宽度。 */
     const val compactInteractionThreshold: Float = 0.96f
     val compactPlayerWidth: Dp = 128.dp
-    val compactInteractionHeight: Dp = 62.dp // 56 + bottom 6
-    val expandedInteractionHeight: Dp = 126.dp // 56 + 8 + 56 + bottom 6
+    val compactInteractionHeight: Dp = 62.dp
+    val expandedInteractionHeight: Dp = 126.dp
 
-    /** Apple MiniPlayerContent / CompactMiniPlayerContent。 */
     val miniPlayerArtwork: Dp = 42.dp
     val compactMiniPlayerArtwork: Dp = 36.dp
     val miniPlayerHorizontalPadding: Dp = 12.dp
     val compactMiniPlayerHorizontalPadding: Dp = 10.dp
     val miniPlayerControlSpacing: Dp = 4.dp
 
-    /** 首页卡片固定视觉宽度（Phone 固定尺寸，让下一张自然露出；Tablet 只是显示更多张）。 */
     val homeCardWidth: Dp = 140.dp
     val homeCardSpacing: Dp = 12.dp
     val homeCardTextSpacing: Dp = 3.dp
     val homeCardTitleHeight: Dp = 20.dp
-    /** iPad / Tablet 可读内容最大宽度。 */
+
+    /** iOS `IOSLayoutMetrics`，窄屏自然取满、宽屏分别封顶。 */
+    val floatingChromeMaxWidth: Dp = 760.dp
     val readableContentMaxWidth: Dp = 960.dp
-    /** Apple 播放页最大可读宽度。 */
     val playerContentMaxWidth: Dp = 680.dp
 
     val trackRowArtwork: Dp = 48.dp
@@ -76,18 +62,12 @@ object AuralisChrome {
     val artistArtwork: Dp = 48.dp
 }
 
-/**
- * 两套动画时长，必须分开实现（Apple 审计结论）：
- * 1. `BottomDockMotion`：Dock / 浮层 / 避让空间，0.56s smooth，reduce-motion 时 0.18s linear；
- * 2. 主题自身 `MotionTokens.standardDuration`：0.18–0.42s easeInOut，reduce-motion 时**完全无动画**。
- */
 object AuralisMotion {
     const val DOCK_DURATION_MS = 560
     const val DOCK_REDUCED_DURATION_MS = 180
     const val CARD_DURATION_MS = 220
 }
 
-/** 11 个颜色 token。Apple `ThemeColors` 实际是 11 个，不是 12 个。 */
 @Immutable
 data class AuralisColors(
     val background: Color,
@@ -111,7 +91,6 @@ enum class AuralisMaterialStyle { Solid, SubtleGlass, LuminousGlass, Paper }
 data class AuralisMaterials(
     val navigation: AuralisMaterialStyle,
     val floatingControls: AuralisMaterialStyle,
-    /** solid → 1.0，其余 → 0.82。navigation 与 floatingControls 恒等。 */
     val opacity: Float,
 )
 
@@ -150,7 +129,6 @@ data class AuralisTheme(
 
 val LocalAuralisTheme = staticCompositionLocalOf { BuiltInThemes.default }
 
-/** hex → Color。支持 6 位（alpha=1）与 8 位 AARRGGBB。 */
 fun Color.Companion.fromHex(hex: String): Color {
     val raw = hex.removePrefix("#")
     require(raw.length == 6 || raw.length == 8) { "Unsupported color: $hex" }
