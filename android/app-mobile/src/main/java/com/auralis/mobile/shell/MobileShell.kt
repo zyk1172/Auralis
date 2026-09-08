@@ -211,6 +211,7 @@ fun MobileShell(
                 onPlayTracks = ::playShelf,
                 onBrowse = ::openBrowse,
                 onManageServers = onOpenServers,
+                bottomChromeClearance = scrollBottomClearance,
                 modifier = dockScrollModifier(),
             )
 
