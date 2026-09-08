@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-only
 set -eu
 
 app_bundle="${1:?usage: check_ios_artifact.sh /path/to/Auralis.app [expected-commit]}"

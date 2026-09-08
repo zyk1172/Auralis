@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// Schedules bounded future slices against the AVPlayer clock supplied by

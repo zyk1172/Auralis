@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// A beat candidate is only promoted after a stable grid has been observed.

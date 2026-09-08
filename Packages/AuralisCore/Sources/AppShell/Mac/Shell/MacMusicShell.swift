@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 #if os(macOS)
 @preconcurrency import AppKit
 import Domain

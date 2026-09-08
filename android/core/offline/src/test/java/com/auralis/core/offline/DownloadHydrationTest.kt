@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 package com.auralis.core.offline
 
 import com.auralis.core.domain.DownloadRecord
@@ -69,20 +70,19 @@ class DownloadHydrationTest : OfflineTestBase() {
 
         manager.hydrate { gid -> track(serverId = gid.serverId.value, id = gid.remoteId) }
 
-        // 第一秒密集采样并发峰值（每 10ms 一次）。
+        // 在任务仍然活跃时密集采样并发峰值（每 10ms 一次）。不要只
+        // 采样固定的一秒：GitHub runner 首次启动 Robolectric/Gradle 时，
+        // 调度器可能在这一秒之后才拿到 CPU，但这不代表没有并发执行。
         var maxRunning = 0
-        repeat(100) {
-            maxRunning = maxOf(maxRunning, manager.runningCount.value)
-            delay(10)
-        }
-        // 等待全部完成：预算放宽到 15s，避免并行负载/首轮 Robolectric 预热导致的抖动。
         val deadline = System.currentTimeMillis() + 15_000
         var downloaded = 0
         while (System.currentTimeMillis() < deadline) {
+            maxRunning = maxOf(maxRunning, manager.runningCount.value)
             downloaded = repo.observeAll(null).first().count { it.status == DownloadStatus.Downloaded }
-            if (downloaded == 12) break
-            delay(50)
+            if (downloaded == 12 && manager.activeCount.value == 0) break
+            delay(10)
         }
+        downloaded = repo.observeAll(null).first().count { it.status == DownloadStatus.Downloaded }
 
         val statuses = repo.observeAll(null).first().associate { it.globalId.remoteId to it.status }
         assertTrue("水合也应并发 >1，实际 $maxRunning", maxRunning > 1)

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 package com.auralis.core.data.connector
 
 import com.auralis.core.data.repository.RoomCatalogRepository

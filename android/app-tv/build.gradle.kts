@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)

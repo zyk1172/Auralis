@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 package com.auralis.feature.server
 
 import androidx.compose.foundation.background

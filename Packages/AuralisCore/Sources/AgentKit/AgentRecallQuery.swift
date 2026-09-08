@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// Shared lexical recall for durable memories and reusable skills. Chinese

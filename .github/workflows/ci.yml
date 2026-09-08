@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 name: CI
 
 on:
@@ -34,6 +35,12 @@ jobs:
           else
             git show --check --oneline HEAD
           fi
+
+      - name: Secret scan
+        run: python3 Scripts/check_secrets.py
+
+      - name: SPDX header check
+        run: python3 Scripts/check_license_headers.py
 
       - name: Toolchain diagnostics
         run: |

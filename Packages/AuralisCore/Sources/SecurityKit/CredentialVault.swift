@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 public struct CredentialID: RawRepresentable, Codable, Hashable, Sendable {

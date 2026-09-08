@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// Core Haptics dynamic controls affect every event in their pattern. Keep
