@@ -33,16 +33,31 @@ object AuralisRadius {
     val artwork: Dp = 18.dp
 }
 
-/** 底部 Dock / Mini Player 的硬规格（Apple `AuralisRootView.swift`）。 */
+/** 底部 Dock / Mini Player 的硬规格（Apple `AuralisRootView.swift` / `PlayerViews.swift`）。 */
 object AuralisChrome {
     val miniPlayerHeight: Dp = 56.dp
     val dockHeight: Dp = 56.dp
     val dockSpacing: Dp = 8.dp
+    /** Apple 展开态外层 `.padding(.horizontal, 16)`。 */
+    val dockHorizontalPadding: Dp = 16.dp
     val dockBottomPadding: Dp = 6.dp
     /** 判定为 Dock 手势的最小纵向位移。 */
     val dockGestureThreshold: Dp = 44.dp
     /** 触控目标下限。 */
     val minTouchTarget: Dp = 44.dp
+
+    /** 收拢态切换真实交互树的阈值与中间播放器宽度。 */
+    const val compactInteractionThreshold: Float = 0.96f
+    val compactPlayerWidth: Dp = 128.dp
+    val compactInteractionHeight: Dp = 62.dp // 56 + bottom 6
+    val expandedInteractionHeight: Dp = 126.dp // 56 + 8 + 56 + bottom 6
+
+    /** Apple MiniPlayerContent / CompactMiniPlayerContent。 */
+    val miniPlayerArtwork: Dp = 42.dp
+    val compactMiniPlayerArtwork: Dp = 36.dp
+    val miniPlayerHorizontalPadding: Dp = 12.dp
+    val compactMiniPlayerHorizontalPadding: Dp = 10.dp
+    val miniPlayerControlSpacing: Dp = 4.dp
 
     /** 首页卡片固定视觉宽度（Phone 固定尺寸，让下一张自然露出；Tablet 只是显示更多张）。 */
     val homeCardWidth: Dp = 140.dp
@@ -51,6 +66,8 @@ object AuralisChrome {
     val homeCardTitleHeight: Dp = 20.dp
     /** iPad / Tablet 可读内容最大宽度。 */
     val readableContentMaxWidth: Dp = 960.dp
+    /** Apple 播放页最大可读宽度。 */
+    val playerContentMaxWidth: Dp = 680.dp
 
     val trackRowArtwork: Dp = 48.dp
     val trackRowArtworkRadius: Dp = 10.dp
