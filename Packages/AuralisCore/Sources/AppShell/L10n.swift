@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// 本地化数量辅助：根据 count 返回正确单复数的本地化字符串

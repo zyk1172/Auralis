@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 name: Android CI
 
 # R2（第三方审查 P0-2）：Android 正式成为合并门禁。
@@ -32,6 +33,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Secret scan
+        run: python3 ../Scripts/check_secrets.py
+
+      - name: SPDX header check
+        run: python3 ../Scripts/check_license_headers.py
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4

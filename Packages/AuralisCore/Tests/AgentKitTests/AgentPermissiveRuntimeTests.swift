@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import AgentKit
 import AIKit
 import Domain
@@ -1132,7 +1133,7 @@ struct AgentPermissiveRuntimeTests {
         let bridge = PermissiveBridge()
         let collector = PermissiveCollector()
         let provider = PermissiveScriptedProvider(actionBatches: [
-            #"ACTION: {"tool":"addServer","args":{"displayName":"NAS","baseURL":"http://192.168.1.2","username":"admin","token":"sekret-token-xyz"}}"#,
+            #"ACTION: {"tool":"addServer","args":{"displayName":"Test Server","baseURL":"http://music.example.test","username":"test-user","token":"test-token-placeholder"}}"#,
         ], closing: "已完成。")
         await AgentRunner.run(
             userText: "添加服务器",
@@ -1147,11 +1148,11 @@ struct AgentPermissiveRuntimeTests {
             log: { _ in }
         )
         // redactor：日志/轨迹参数一律脱敏。
-        let redacted = AgentSensitiveDataRedactor.arguments(["token": "sekret-token-xyz", "baseURL": "http://192.168.1.2"])
+        let redacted = AgentSensitiveDataRedactor.arguments(["token": "test-token-placeholder", "baseURL": "http://music.example.test"])
         #expect(redacted["token"] == "<redacted>")
         #expect(redacted["baseURL"] == "<redacted>")
         // addServer 工具本身不把 token 写进任何 Tool Result / 日志摘要。
-        #expect(await collector.containsText("sekret-token-xyz") == false)
+        #expect(await collector.containsText("test-token-placeholder") == false)
     }
 
     // MARK: - TEST 25：用户取消立即结束

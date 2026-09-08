@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import AgentKit
 import Domain
 import Foundation
@@ -406,4 +407,17 @@ struct AgentSystemPromptTests {
         #expect(hasMemoryPlaceholder, "prompt should contain memory placeholder in any supported language")
         #expect(hasSkillPlaceholder, "prompt should contain skill placeholder in any supported language")
     }
+}
+
+
+@Test("memory_search 按中文问题召回，不要求完整问题是记忆子串")
+func memorySearchUnderstandsUnspacedQuery() async {
+    let service = MemoryStubSystemService()
+    service.memories = [
+        AgentMemoryEntry(key: "运动习惯", value: "夜跑时听周杰伦"),
+        AgentMemoryEntry(key: "午餐", value: "面条"),
+    ]
+    let result = await service.searchMemories(query: "帮我找适合夜跑的周杰伦歌曲")
+    #expect(result.map(\.key) == ["运动习惯"])
+    #expect(await service.searchMemories(query: "   ").isEmpty)
 }

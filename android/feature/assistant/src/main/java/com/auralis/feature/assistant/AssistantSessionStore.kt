@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 package com.auralis.feature.assistant
 
 import android.content.Context

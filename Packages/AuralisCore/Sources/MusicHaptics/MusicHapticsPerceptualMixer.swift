@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// A beat candidate is only promoted after a stable grid has been observed.
@@ -158,12 +159,16 @@ public struct MusicHapticsBeatTracker: Sendable {
             }
         }
         let promoted = candidate && confidence >= 0.45 && onGrid
-        let latestEnergy = onsets.last?.energy ?? safeEnergy
         let strength: MusicHapticsBeatStrength
-        if promoted && latestEnergy >= safeThreshold * 2.2 {
-            strength = .strongBeat
-        } else if promoted {
-            strength = .normalBeat
+        if promoted {
+            // Compare like with like: the onset threshold includes spectral
+            // flux/log attack, so comparing RMS energy to it labels nearly
+            // every beat as strong. Accent relative to recent audible beats
+            // instead, preserving dynamics across different mastering levels.
+            let recentEnergy = onsets.dropLast().suffix(16).map(\.energy).sorted()
+            let reference = recentEnergy.isEmpty ? safeEnergy : recentEnergy[recentEnergy.count / 2]
+            let accented = safeEnergy > max(0.003, reference * 1.20)
+            strength = accented ? .strongBeat : .normalBeat
         } else {
             strength = .subBeat
         }

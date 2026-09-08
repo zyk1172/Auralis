@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 #if os(macOS)
 @testable import AppShell
 import Domain

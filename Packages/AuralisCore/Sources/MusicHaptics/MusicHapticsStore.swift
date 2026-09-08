@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// Actor-owned manifest keeps cache decisions O(1); normal playback never scans directories.

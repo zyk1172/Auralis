@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import AgentKit
 import Application
 import Domain
@@ -894,13 +895,8 @@ public final class AuralisSystemToolService: AgentSystemService {
         memoryStore.memories
     }
 
-    public func searchMemories(query: String) async -> [AgentMemoryEntry] {
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !needle.isEmpty else { return [] }
-        return memoryStore.memories.filter {
-            $0.key.lowercased().contains(needle) || $0.value.lowercased().contains(needle)
-        }
-    }
+    // Natural-language memory recall is shared with the protocol default;
+    // keeping a substring-only override here would bypass the ranked query.
 
     public func saveMemory(key: String, value: String) async -> Bool {
         guard permitsMutationCommit else { return false }

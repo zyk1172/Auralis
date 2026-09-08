@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Domain
 import Foundation
 
@@ -349,11 +350,9 @@ public struct MusicHapticsTimeline: Codable, Hashable, Sendable {
     /// changes. Stored timelines from an older algorithm deliberately become
     /// cache misses so playback cannot silently mix old and new tactile
     /// semantics.
-    /// v2.4 changes the remote analysis input from a server-transcoded
-    /// sidecar to the original encoded stream and changes the checkpoint/
-    /// source arbitration semantics. Older timelines must therefore be a
-    /// cache miss instead of being silently mixed with the new analysis.
-    public static let algorithmVersion = "auralis-haptics-v2.4"
+    /// v2.5 isolates texture controls from attacks and makes low-power DSP
+    /// adaptation track elapsed audio time. Reanalyze older cached timelines.
+    public static let algorithmVersion = "auralis-haptics-v2.5"
     public var formatVersion: Int
     public var algorithmVersion: String
     public var identity: MusicHapticsIdentity

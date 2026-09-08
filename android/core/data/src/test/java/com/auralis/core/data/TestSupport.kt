@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 package com.auralis.core.data
 
 import androidx.room.Room
@@ -221,4 +222,3 @@ fun artistOf(
 
 fun genreOf(name: String, songCount: Int = 1, serverId: ServerId? = null): com.auralis.core.domain.Genre =
     com.auralis.core.domain.Genre(name = name, songCount = songCount, serverId = serverId)
-

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// 单个首页模块的布局偏好：是否显示 + 排序。

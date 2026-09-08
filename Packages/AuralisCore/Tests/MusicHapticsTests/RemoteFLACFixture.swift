@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// A checked-in original FLAC fixture. It is intentionally served without

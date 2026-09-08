@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// 播放队列项（R05）：歌曲身份（Track）与队列项身份（UUID）分离。

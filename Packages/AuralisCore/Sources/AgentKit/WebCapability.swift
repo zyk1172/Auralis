@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// A citation that can safely cross the tool/UI boundary. It contains no

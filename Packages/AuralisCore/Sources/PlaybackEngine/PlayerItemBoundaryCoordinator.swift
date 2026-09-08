@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// 播放边界确定性状态机（纯逻辑，可脱离 AVFoundation 独立测试）。

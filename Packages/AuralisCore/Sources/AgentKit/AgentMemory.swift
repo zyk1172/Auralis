@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// 一条跨会话记忆：主人告诉 Agent 的个人信息（如「我叫小猫」「我喜欢周杰伦」）。
