@@ -7,7 +7,6 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -16,15 +15,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.text.rememberTextMeasurer
 import kotlinx.coroutines.delay
 
 /** Now Playing 顶部分段页（对齐 Swift `NowPlayingPage`：lyrics/player/queue）。 */
@@ -43,8 +44,9 @@ internal fun formatClock(ms: Long): String {
 }
 
 /**
- * 单向慢速跑马灯（对齐 Swift OneShotMarqueeText）：标题不超宽时等价单行 Text；
- * 超宽时等 900ms 后以约 40px/s 从头滚到结尾并**停在末尾**（不循环，避免持续干扰）。
+ * 单向慢速跑马灯（对齐 Swift OneShotMarqueeText）：标题不超宽时保持真正的视觉居中；
+ * 超宽时在自己的裁剪槽内等 900ms，再以约 40px/s 从头滚到结尾并停在末尾。
+ * 切歌会重建 Animatable，即使新旧标题宽度相同也不会继承上一首的末端偏移。
  */
 @Composable
 internal fun AutoMarqueeText(
@@ -65,6 +67,7 @@ internal fun AutoMarqueeText(
     Box(
         modifier = modifier
             .fillMaxWidth()
+            .clipToBounds()
             .onSizeChanged { containerWidth = it.width },
     ) {
         val width = containerWidth
@@ -76,12 +79,14 @@ internal fun AutoMarqueeText(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 softWrap = false,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
             )
         } else {
             val distance = (textWidth + gapPx - width).toFloat().coerceAtLeast(0f)
             val durationMs = (distance / (40f / 1000f)).toInt().coerceIn(1500, 30000)
-            val anim = remember { Animatable(0f) }
-            LaunchedEffect(distance) {
+            val anim = remember(text) { Animatable(0f) }
+            LaunchedEffect(text, distance) {
                 anim.snapTo(0f)
                 delay(900)
                 anim.animateTo(-distance, animationSpec = tween(durationMillis = durationMs, easing = LinearEasing))
