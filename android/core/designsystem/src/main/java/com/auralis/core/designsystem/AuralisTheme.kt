@@ -2,6 +2,7 @@
 package com.auralis.core.designsystem
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -14,6 +15,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -37,7 +39,7 @@ fun AuralisTheme(
     content: @Composable () -> Unit,
 ) {
     val durationMillis = (theme.motion.standardDurationSeconds * 1_000.0).toInt().coerceAtLeast(0)
-    val colorSpec = if (reduceMotion) {
+    val colorSpec: AnimationSpec<Color> = if (reduceMotion) {
         snap()
     } else {
         tween(durationMillis = durationMillis, easing = AppleEaseInOut)
