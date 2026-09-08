@@ -48,13 +48,6 @@ import com.auralis.feature.search.SearchScreen
 import kotlinx.coroutines.launch
 import com.auralis.core.designsystem.R as AuralisR
 
-/**
- * 移动端 Shell（对齐 Apple IOSMusicShell）：
- * - 内容根随一级分区切换（Home / Library / Assistant），切分区即回到分区根页；
- * - Bottom Dock 与 Mini Player 作为 **overlay** 固定在底部，宽屏最大约 760dp 居中；
- * - Mini Player 只在 Home / Library 显示（Assistant 分区由自身附件持有底部空间）；
- * - 无正在播放内容时 Mini Player 隐藏，Dock 保持。
- */
 @Composable
 fun MobileShell(
     graph: AuralisGraph,
@@ -186,7 +179,6 @@ fun MobileShell(
             )
         }
 
-        // 展开态底部 Chrome：Apple 外层横向 16、两条 56、高度间距 8。
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -202,7 +194,7 @@ fun MobileShell(
                 val currentLogical = queue.currentLogicalIndex
                 Row(
                     modifier = Modifier
-                        .widthIn(max = AuralisChrome.readableContentMaxWidth - 200.dp)
+                        .widthIn(max = AuralisChrome.floatingChromeMaxWidth)
                         .fillMaxWidth()
                         .padding(horizontal = AuralisChrome.dockHorizontalPadding),
                 ) {
@@ -229,7 +221,7 @@ fun MobileShell(
             }
             Row(
                 modifier = Modifier
-                    .widthIn(max = AuralisChrome.readableContentMaxWidth - 200.dp)
+                    .widthIn(max = AuralisChrome.floatingChromeMaxWidth)
                     .fillMaxWidth()
                     .padding(horizontal = AuralisChrome.dockHorizontalPadding),
             ) {
