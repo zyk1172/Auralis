@@ -877,12 +877,17 @@ public extension AgentSystemService {
 
     func agentMemories() async -> [AgentMemoryEntry] { [] }
     func searchMemories(query: String) async -> [AgentMemoryEntry] {
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !needle.isEmpty else { return [] }
-        return await agentMemories().filter {
-            $0.key.lowercased().contains(needle) || $0.value.lowercased().contains(needle)
-        }
+        let recall = AgentRecallQuery(query)
+        return await agentMemories().map { ($0, recall.score($0)) }
+            .filter { $0.1 > 0 }
+            .sorted { lhs, rhs in
+                if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
+                return lhs.0.updatedAt == rhs.0.updatedAt
+                    ? lhs.0.key < rhs.0.key : lhs.0.updatedAt > rhs.0.updatedAt
+            }
+            .map { $0.0 }
     }
+
     func saveMemory(key: String, value: String) async -> Bool { false }
     func deleteMemory(key: String) async -> Bool { false }
     func clearMemories() async -> Int { 0 }

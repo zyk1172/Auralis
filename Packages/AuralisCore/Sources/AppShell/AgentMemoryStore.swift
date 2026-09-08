@@ -53,6 +53,7 @@ public final class AgentMemoryStore {
               trimmedValue.count <= Self.maxValueLength else {
             return false
         }
+        let previous = entries
         let entry = AgentMemoryEntry(key: trimmedKey, value: trimmedValue, updatedAt: .now)
         if let index = entries.firstIndex(where: { $0.key == trimmedKey }) {
             entries[index] = entry
@@ -60,25 +61,38 @@ public final class AgentMemoryStore {
             // 不设普通数量硬上限：用户没有要求删除，系统绝不静默淘汰旧记忆。
             entries.append(entry)
         }
-        return persistMemory()
+        guard persistMemory() else {
+            entries = previous
+            return false
+        }
+        return true
     }
 
     /// 删除一条记忆；不存在返回 false。
     @discardableResult
     public func deleteMemory(key: String) -> Bool {
         let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        let previous = entries
         let before = entries.count
         entries.removeAll { $0.key == trimmedKey }
         guard entries.count != before else { return false }
-        return persistMemory()
+        guard persistMemory() else {
+            entries = previous
+            return false
+        }
+        return true
     }
 
     /// 清空全部记忆；返回删除条数。
     public func clearMemory() -> Int {
         let count = entries.count
         guard count > 0 else { return 0 }
+        let previous = entries
         entries.removeAll()
-        persistMemory()
+        guard persistMemory() else {
+            entries = previous
+            return 0
+        }
         return count
     }
 

@@ -119,3 +119,40 @@ struct AgentMemoryStoreTests {
         #expect(store.skills.isEmpty)
     }
 }
+
+
+@Test @MainActor func failedMemoryWritesDoNotChangeRecallState() throws {
+    let directory = makeTempDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = AgentMemoryStore(directory: directory)
+    #expect(store.saveMemory(key: "偏好", value: "夜跑"))
+    let previous = store.memories
+    let file = directory.appendingPathComponent("agent-memory.json")
+    // Force a real atomic-write failure without relying on file permissions
+    // (CI may run with different users). A directory cannot replace this file.
+    try FileManager.default.removeItem(at: file)
+    try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
+    #expect(!store.saveMemory(key: "偏好", value: "午睡"))
+    #expect(store.memories == previous)
+    #expect(!store.saveMemory(key: "新信息", value: "不应进入召回"))
+    #expect(store.memories == previous)
+    #expect(!store.deleteMemory(key: "偏好"))
+    #expect(store.memories == previous)
+    #expect(store.clearMemory() == 0)
+    #expect(store.memories == previous)
+    try FileManager.default.removeItem(at: file)
+    #expect(store.saveMemory(key: "偏好", value: "午睡"))
+    #expect(AgentMemoryStore(directory: directory).memories.first?.value == "午睡")
+}
+
+@Test @MainActor func correctedSkillIsReusedAcrossSessions() throws {
+    let directory = makeTempDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = AgentMemoryStore(directory: directory)
+    #expect(store.createSkill(name: "夜跑", instructions: "搜索歌曲后创建歌单") != nil)
+    let corrected = "搜索歌曲，分页收齐51首，解析真实ID，再创建歌单并回读确认数量"
+    #expect(store.createSkill(name: "夜跑", instructions: corrected) != nil)
+    let reloaded = AgentMemoryStore(directory: directory)
+    #expect(reloaded.skills.count == 1)
+    #expect(reloaded.readSkill(name: "夜跑")?.instructions == corrected)
+}

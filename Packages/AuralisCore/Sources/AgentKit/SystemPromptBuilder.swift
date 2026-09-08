@@ -34,7 +34,7 @@ public enum SystemPromptBuilder {
             ? "\(context.favoriteCount) 首收藏"
             : "收藏与评分：已隐藏"
         let memories = memorySummary(context.memories, language: language, goal: goal)
-        let skills = skillSummary(context.skills, language: language)
+        let skills = skillSummary(context.skills, language: language, goal: goal)
         let awareness = awarenessSummary(
             awarenessTools ?? tools,
             activeSkillID: activeSkillID,
@@ -143,6 +143,12 @@ public enum SystemPromptBuilder {
         与当前 track ID、接受可恢复的 partial coverage → Runtime 持久化并保留缺失曲目待处理 →
         Runtime 再次读取真实数据库验证写入。因此：不要因为看不到 recommendation_index_commit
         就判断"无法保存"；不要声称自己直接写数据库；正确表述是"Auralis Runtime 会保存分类结果"。
+
+        ## 经验复用与改进
+        - 上面的记忆和技能已按当前目标召回。相关技能出现时先用 skill_read 读取完整步骤，再结合当前请求和真实工具结果执行。
+        - 需要跨会话信息时，用 memory_search 提交自然语言问题；没有命中可改用实体名或主题词检索。
+        - 用户要求记住流程、纠正做法或改进技能时，把实际成功的步骤、参数选择、失败原因和修复办法整理进 skill_create；同名技能会更新，先读取旧版本并保留仍有效的经验。
+        - 将用户明确表达的长期偏好通过 memory_save 更新原键。后续遇到类似任务复用这些经验；已保存的流程仍需适配当前真实歌曲、歌单和工具结果。
 
         ## 声明式自定义工具
         当现有工具组合确实不足以高效完成可重复任务时，可以通过 Tool Builder 创建声明式自定义工具；
@@ -283,17 +289,19 @@ public enum SystemPromptBuilder {
                     ? "（目前沒有記憶；只有主人明確分享長期個人資訊時才使用 memory_save。）"
                     : "（还没有记忆；只有用户明确分享长期个人信息时才使用 memory_save。）"
         }
-        let goalTokens = goal.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        let query = AgentRecallQuery(goal)
+        let scores = Dictionary(entries.map { ($0.key, query.score($0)) }, uniquingKeysWith: max)
         let sorted = entries.sorted { lhs, rhs in
-            let left = relevance(lhs, tokens: goalTokens)
-            let right = relevance(rhs, tokens: goalTokens)
-            return left == right ? lhs.updatedAt > rhs.updatedAt : left > right
+            let left = scores[lhs.key, default: 0]
+            let right = scores[rhs.key, default: 0]
+            if left != right { return left > right }
+            return lhs.updatedAt == rhs.updatedAt ? lhs.key < rhs.key : lhs.updatedAt > rhs.updatedAt
         }
         let coreTerms = ["名字", "姓名", "喜欢", "偏好", "不喜欢", "服务器", "设备"]
         let core = sorted.filter { entry in
             coreTerms.contains { entry.key.lowercased().contains($0) }
         }
-        let relevant = sorted.filter { relevance($0, tokens: goalTokens) > 0 }
+        let relevant = sorted.filter { scores[$0.key, default: 0] > 0 }
         let recent = entries.sorted { $0.updatedAt > $1.updatedAt }
 
         var selected: [AgentMemoryEntry] = []
@@ -317,12 +325,7 @@ public enum SystemPromptBuilder {
         return lines.joined(separator: "\n")
     }
 
-    private static func relevance(_ entry: AgentMemoryEntry, tokens: [String]) -> Int {
-        let text = "\(entry.key) \(entry.value)".lowercased()
-        return tokens.filter { $0.count >= 2 && text.contains($0) }.count
-    }
-
-    private static func skillSummary(_ skills: [AgentSkillEntry], language: String) -> String {
+    private static func skillSummary(_ skills: [AgentSkillEntry], language: String, goal: String) -> String {
         guard !skills.isEmpty else {
             return language == "en"
                 ? "(No skills yet; use skill_list or skill_read when needed.)"
@@ -330,7 +333,14 @@ public enum SystemPromptBuilder {
                     ? "（目前沒有技能；需要時使用 skill_list 或 skill_read。）"
                     : "（还没有技能；需要时使用 skill_list 或 skill_read。）"
         }
-        let selected = skills.sorted { $0.createdAt > $1.createdAt }.prefix(maxSkillEntries)
+        let query = AgentRecallQuery(goal)
+        let scores = Dictionary(skills.map { ($0.name, query.score($0)) }, uniquingKeysWith: max)
+        let selected = skills.sorted { lhs, rhs in
+            let left = scores[lhs.name, default: 0]
+            let right = scores[rhs.name, default: 0]
+            if left != right { return left > right }
+            return lhs.createdAt == rhs.createdAt ? lhs.name < rhs.name : lhs.createdAt > rhs.createdAt
+        }.prefix(maxSkillEntries)
         var lines = selected.map { "- 「\($0.name)」：\($0.summary)" }
         let remaining = skills.count - selected.count
         if remaining > 0 {
