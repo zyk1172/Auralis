@@ -3380,4 +3380,3 @@ public final class MusicHapticsCoordinator {
             .joined(separator: ",")
     }
 }
-

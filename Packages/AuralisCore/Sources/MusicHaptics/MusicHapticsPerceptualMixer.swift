@@ -1317,4 +1317,3 @@ func fusedTransientEvent(
         curve: dominant.curve
     )
 }
-

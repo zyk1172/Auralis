@@ -367,4 +367,3 @@ public enum SystemPromptBuilder {
         return byNamespace.joined(separator: "\n")
     }
 }
-

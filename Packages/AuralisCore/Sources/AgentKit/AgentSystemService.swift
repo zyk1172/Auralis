@@ -896,4 +896,3 @@ public extension AgentSystemService {
     func readSkill(name: String) async -> AgentSkillEntry? { nil }
     func deleteSkill(name: String) async -> Bool { false }
 }
-

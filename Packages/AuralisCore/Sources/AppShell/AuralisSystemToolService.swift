@@ -934,4 +934,3 @@ public final class AuralisSystemToolService: AgentSystemService {
         ToolExecutionContext.permitsMutationCommit
     }
 }
-

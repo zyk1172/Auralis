@@ -890,4 +890,3 @@ public enum MusicHapticsEventDeduplicator {
         transientScore(event)
     }
 }
-

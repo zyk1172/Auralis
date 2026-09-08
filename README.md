@@ -199,6 +199,7 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
 
 ## 📄 许可与致谢
 
-- 本仓库为私有项目；第三方依赖与许可决策见 [`Docs/OpenSourceAudit.md`](Docs/OpenSourceAudit.md)
+- 本项目为开源项目，采用 GNU General Public License v3.0（GPL-3.0）发布，详见 [`LICENSE`](LICENSE)
+- 第三方依赖与许可决策见 [`Docs/OpenSourceAudit.md`](Docs/OpenSourceAudit.md)
   与 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
 - 项目使用 Navidrome 的 OpenSubsonic API 规范进行互通

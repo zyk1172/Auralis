@@ -430,4 +430,3 @@ public struct MusicHapticsUsage: Sendable, Equatable {
     public var favoriteBytes: Int64
     public init(transientBytes: Int64 = 0, favoriteBytes: Int64 = 0) { self.transientBytes = transientBytes; self.favoriteBytes = favoriteBytes }
 }
-

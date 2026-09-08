@@ -178,4 +178,3 @@ public enum AgentHistoryPolicy {
         ].contains(normalized)
     }
 }
-
