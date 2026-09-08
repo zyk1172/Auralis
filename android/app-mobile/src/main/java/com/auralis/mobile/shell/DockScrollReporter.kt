@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.auralis.mobile.shell
 
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
