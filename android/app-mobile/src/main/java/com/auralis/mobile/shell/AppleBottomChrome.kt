@@ -1,11 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.auralis.mobile.shell
 
-import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -16,7 +11,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,12 +24,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -48,10 +38,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.auralis.core.designsystem.AuralisChrome
 import com.auralis.core.designsystem.AuralisChromeSurfaceRole
-import com.auralis.core.designsystem.AuralisMotion
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.LocalAuralisTheme
-import com.auralis.core.designsystem.LocalReduceMotion
 import com.auralis.core.designsystem.auralisChromeSurface
 import com.auralis.core.designsystem.R as AuralisR
 import com.auralis.core.domain.PlaybackState
@@ -60,11 +48,12 @@ import com.auralis.core.image.AuralisArtwork
 import kotlin.math.abs
 
 /**
- * Android 版 Apple `MorphingBottomDockProgressHost`。
+ * Android counterpart of Apple `MorphingBottomDockProgressHost`.
  *
- * 状态只有两个终点，不跟手发布任意中间值：有效纵向位移 >=44dp 后，在手势结束时
- * 选择 0/1，再用固定 0.56s 动画完成；Reduce Motion 为 0.18s linear。这样与 Apple
- * `BottomDockProgressReducer` / `BottomDockMotion` 的核心交互语义一致。
+ * The collapse state is owned by [MobileShell], not by the chrome itself. This is deliberate:
+ * Apple has one `HomeChromeState` shared by the dock and every vertically scrolling section, so a
+ * swipe in Home/Library/Assistant and a swipe directly on the dock must drive the exact same 0/1
+ * state and 0.56s terminal animation.
  */
 @Composable
 fun AppleBottomChrome(
@@ -73,6 +62,8 @@ fun AppleBottomChrome(
     playbackState: PlaybackState,
     canGoPrevious: Boolean,
     canGoNext: Boolean,
+    collapseProgress: Float,
+    onCompactRequest: (compact: Boolean) -> Unit,
     onSelectSection: (AppSection) -> Unit,
     onOpenPlayer: () -> Unit,
     onPrevious: () -> Unit,
@@ -80,47 +71,38 @@ fun AppleBottomChrome(
     onNext: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val reduceMotion = LocalReduceMotion.current
     val density = LocalDensity.current
     val canCompact = section == AppSection.Assistant || track != null
-    var compactTarget by rememberSaveable { mutableStateOf(false) }
-    var dragX by remember { mutableFloatStateOf(0f) }
-    var dragY by remember { mutableFloatStateOf(0f) }
-
-    if (!canCompact && compactTarget) compactTarget = false
-
-    val target = if (compactTarget && canCompact) 1f else 0f
-    val progress by animateFloatAsState(
-        targetValue = target,
-        animationSpec = tween(
-            durationMillis = if (reduceMotion) AuralisMotion.DOCK_REDUCED_DURATION_MS else AuralisMotion.DOCK_DURATION_MS,
-            easing = if (reduceMotion) LinearEasing else AppleDockSmooth,
-        ),
-        label = "auralis-bottom-dock-progress",
-    )
+    val progress = if (canCompact) collapseProgress.coerceIn(0f, 1f) else 0f
+    val dragX = remember { mutableFloatStateOf(0f) }
+    val dragY = remember { mutableFloatStateOf(0f) }
 
     val thresholdPx = with(density) { AuralisChrome.dockGestureThreshold.toPx() }
     val gestureModifier = Modifier.pointerInput(canCompact) {
         detectDragGestures(
             onDragStart = {
-                dragX = 0f
-                dragY = 0f
+                dragX.floatValue = 0f
+                dragY.floatValue = 0f
             },
             onDrag = { change, amount ->
                 change.consume()
-                dragX += amount.x
-                dragY += amount.y
+                dragX.floatValue += amount.x
+                dragY.floatValue += amount.y
             },
             onDragEnd = {
-                if (canCompact && abs(dragY) > abs(dragX) && abs(dragY) >= thresholdPx) {
-                    compactTarget = dragY < 0f
+                if (
+                    canCompact &&
+                    abs(dragY.floatValue) > abs(dragX.floatValue) &&
+                    abs(dragY.floatValue) >= thresholdPx
+                ) {
+                    onCompactRequest(dragY.floatValue < 0f)
                 }
-                dragX = 0f
-                dragY = 0f
+                dragX.floatValue = 0f
+                dragY.floatValue = 0f
             },
             onDragCancel = {
-                dragX = 0f
-                dragY = 0f
+                dragX.floatValue = 0f
+                dragY.floatValue = 0f
             },
         )
     }
@@ -137,10 +119,10 @@ fun AppleBottomChrome(
                 section = section,
                 track = track,
                 playbackState = playbackState,
-                onExpand = { compactTarget = false },
+                onExpand = { onCompactRequest(false) },
                 onAssistant = {
                     onSelectSection(AppSection.Assistant)
-                    compactTarget = false
+                    onCompactRequest(false)
                 },
                 onOpenPlayer = onOpenPlayer,
                 onTogglePlayPause = onTogglePlayPause,
@@ -200,7 +182,8 @@ private fun MorphingBottomChrome(
             .fillMaxWidth()
             .height(AuralisChrome.expandedInteractionHeight),
     ) {
-        val fullWidth = (maxWidth - AuralisChrome.dockHorizontalPadding * 2).coerceAtLeast(AuralisChrome.dockHeight)
+        val fullWidth = (maxWidth - AuralisChrome.dockHorizontalPadding * 2)
+            .coerceAtLeast(AuralisChrome.dockHeight)
         val playerWidth = interpolateDp(
             fullWidth,
             AuralisChrome.compactPlayerWidth.coerceAtLeast(AuralisChrome.dockHeight),
@@ -212,7 +195,6 @@ private fun MorphingBottomChrome(
             eased,
         )
 
-        // 完整导航层后半程淡出；它仍保持原几何，不在动画中重排所有页面。
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -235,7 +217,9 @@ private fun MorphingBottomChrome(
                 MiniPlayerBar(
                     track = track,
                     isPlaying = playbackState is PlaybackState.Playing,
-                    isBuffering = playbackState is PlaybackState.Buffering || playbackState is PlaybackState.Stalled || playbackState is PlaybackState.Preparing,
+                    isBuffering = playbackState is PlaybackState.Buffering ||
+                        playbackState is PlaybackState.Stalled ||
+                        playbackState is PlaybackState.Preparing,
                     canGoPrevious = canGoPrevious,
                     canGoNext = canGoNext,
                     onOpen = onOpenPlayer,
@@ -247,24 +231,41 @@ private fun MorphingBottomChrome(
             }
         }
 
-        // 终态两端圆形玻璃从完整栏中“存活”出来。
         CircularChromeButton(
             onClick = { onSelectSection(AppSection.Home) },
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = AuralisChrome.dockHorizontalPadding, bottom = AuralisChrome.dockBottomPadding)
+                .padding(
+                    start = AuralisChrome.dockHorizontalPadding,
+                    bottom = AuralisChrome.dockBottomPadding,
+                )
                 .alpha(endpointFade),
             tintAccent = true,
-            icon = { Icon(Icons.Filled.Home, contentDescription = stringResource(AuralisR.string.home_title), modifier = Modifier.size(19.dp)) },
+            icon = {
+                Icon(
+                    Icons.Filled.Home,
+                    contentDescription = stringResource(AuralisR.string.home_title),
+                    modifier = Modifier.size(19.dp),
+                )
+            },
         )
         CircularChromeButton(
             onClick = { onSelectSection(AppSection.Assistant) },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = AuralisChrome.dockHorizontalPadding, bottom = AuralisChrome.dockBottomPadding)
+                .padding(
+                    end = AuralisChrome.dockHorizontalPadding,
+                    bottom = AuralisChrome.dockBottomPadding,
+                )
                 .alpha(endpointFade),
             tintAccent = false,
-            icon = { Icon(Icons.Filled.AutoAwesome, contentDescription = stringResource(AuralisR.string.ai_assistant), modifier = Modifier.size(21.dp)) },
+            icon = {
+                Icon(
+                    Icons.Filled.AutoAwesome,
+                    contentDescription = stringResource(AuralisR.string.ai_assistant),
+                    modifier = Modifier.size(21.dp),
+                )
+            },
         )
     }
 }
@@ -290,10 +291,19 @@ private fun CollapsedBottomChrome(
         CircularChromeButton(
             onClick = onExpand,
             tintAccent = true,
-            icon = { Icon(Icons.Filled.Home, contentDescription = stringResource(AuralisR.string.home_title), modifier = Modifier.size(19.dp)) },
+            icon = {
+                Icon(
+                    Icons.Filled.Home,
+                    contentDescription = stringResource(AuralisR.string.home_title),
+                    modifier = Modifier.size(19.dp),
+                )
+            },
         )
         Spacer(Modifier.width(8.dp))
-        Box(modifier = Modifier.weight(1f).height(AuralisChrome.dockHeight), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier.weight(1f).height(AuralisChrome.dockHeight),
+            contentAlignment = Alignment.Center,
+        ) {
             if (section != AppSection.Assistant && track != null) {
                 CompactMiniPlayer(
                     track = track,
@@ -308,7 +318,13 @@ private fun CollapsedBottomChrome(
         CircularChromeButton(
             onClick = onAssistant,
             tintAccent = false,
-            icon = { Icon(Icons.Filled.AutoAwesome, contentDescription = stringResource(AuralisR.string.ai_assistant), modifier = Modifier.size(21.dp)) },
+            icon = {
+                Icon(
+                    Icons.Filled.AutoAwesome,
+                    contentDescription = stringResource(AuralisR.string.ai_assistant),
+                    modifier = Modifier.size(21.dp),
+                )
+            },
         )
     }
 }
@@ -356,15 +372,35 @@ private fun CompactMiniPlayer(
             modifier = Modifier
                 .width(42.dp)
                 .height(44.dp)
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onTogglePlayPause),
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onTogglePlayPause,
+                ),
             contentAlignment = Alignment.Center,
         ) {
-            if (playbackState is PlaybackState.Buffering || playbackState is PlaybackState.Stalled || playbackState is PlaybackState.Preparing) {
-                CircularProgressIndicator(modifier = Modifier.size(17.dp), strokeWidth = 2.dp, color = colors.accent)
+            if (
+                playbackState is PlaybackState.Buffering ||
+                playbackState is PlaybackState.Stalled ||
+                playbackState is PlaybackState.Preparing
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(17.dp),
+                    strokeWidth = 2.dp,
+                    color = colors.accent,
+                )
             } else {
                 Icon(
-                    imageVector = if (playbackState is PlaybackState.Playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = if (playbackState is PlaybackState.Playing) stringResource(AuralisR.string.pause) else stringResource(AuralisR.string.play),
+                    imageVector = if (playbackState is PlaybackState.Playing) {
+                        Icons.Filled.Pause
+                    } else {
+                        Icons.Filled.PlayArrow
+                    },
+                    contentDescription = if (playbackState is PlaybackState.Playing) {
+                        stringResource(AuralisR.string.pause)
+                    } else {
+                        stringResource(AuralisR.string.play)
+                    },
                     tint = colors.primaryText,
                     modifier = Modifier.size(17.dp),
                 )
@@ -391,12 +427,14 @@ private fun CircularChromeButton(
         contentAlignment = Alignment.Center,
     ) {
         androidx.compose.runtime.CompositionLocalProvider(
-            androidx.compose.material3.LocalContentColor provides if (tintAccent) colors.accent else colors.primaryText,
+            androidx.compose.material3.LocalContentColor provides if (tintAccent) {
+                colors.accent
+            } else {
+                colors.primaryText
+            },
         ) { icon() }
     }
 }
-
-private val AppleDockSmooth = CubicBezierEasing(0.25f, 0.1f, 0.25f, 1f)
 
 private fun smoothstep(start: Float, end: Float, value: Float): Float {
     if (end <= start) return if (value >= end) 1f else 0f
