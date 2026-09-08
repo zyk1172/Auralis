@@ -59,6 +59,15 @@ struct MusicHapticsCoordinatorIntegrationTests {
         #expect(preparation.realtimeTapSink != nil)
 
         coordinator.activate(preparation, position: 0, isPlaying: true)
+        // This 0.75-second fixture is already in the production gate's
+        // "nearly finished" exception at 0.5 seconds. Advance the
+        // authoritative playback clock so the test exercises the decoder
+        // without weakening the audio-first policy.
+        coordinator.updatePlaybackPosition(
+            0.5,
+            isPlaying: true,
+            source: .playbackEngine
+        )
 
         for _ in 0..<60 {
             if output.playedWindows.contains(where: { !$0.events.isEmpty }) { break }
@@ -136,6 +145,11 @@ struct MusicHapticsCoordinatorIntegrationTests {
         realtime.begin(format: format)
 
         coordinator.activate(preparation, position: 0, isPlaying: true)
+        coordinator.updatePlaybackPosition(
+            1.5,
+            isPlaying: true,
+            source: .playbackEngine
+        )
         let pcm = makeCoordinatorPCM(duration: 4)
         let framesPerChunk = 2_205
         for chunkIndex in 0..<40 {
@@ -241,6 +255,11 @@ struct MusicHapticsCoordinatorIntegrationTests {
         realtime.begin(format: format)
 
         coordinator.activate(preparation, position: 0, isPlaying: true)
+        coordinator.updatePlaybackPosition(
+            0.5,
+            isPlaying: true,
+            source: .playbackEngine
+        )
         let pcm = makeCoordinatorPCM(duration: 0.75)
         realtime.consumePCM(pcm, time: 0, format: format, frameCount: pcm.count / 2)
 
@@ -308,6 +327,11 @@ struct MusicHapticsCoordinatorIntegrationTests {
             playbackURL: server.url
         )
         coordinator.activate(preparation, position: 0, isPlaying: true)
+        coordinator.updatePlaybackPosition(
+            1.5,
+            isPlaying: true,
+            source: .playbackEngine
+        )
 
         var diagnostics = await coordinator.diagnostics()
         for _ in 0..<60 {
