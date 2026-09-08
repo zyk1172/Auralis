@@ -63,4 +63,7 @@ dependencies {
     implementation(project(":feature:assistant"))
     implementation(project(":feature:settings"))
     implementation(project(":feature:server"))
+
+    testImplementation(libs.junit)
+    testImplementation(libs.truth)
 }
