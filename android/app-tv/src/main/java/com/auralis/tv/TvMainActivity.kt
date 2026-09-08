@@ -81,6 +81,10 @@ private fun AppRoot(graph: AuralisGraph) {
     var route by remember { mutableStateOf<Route>(Route.Boot) }
 
     LaunchedEffect(graph) {
+        // Application 已在后台做同一恢复；这里再执行一次幂等本地 bootstrap，作为进入
+        // Shell 前的确定性屏障，避免 Activity 首帧先于后台协程而看到空 Registry。
+        runCatching { graph.bootstrapFromLocal() }
+
         // 冷启动恢复上次选择的主题（DataStore 已持久化）。
         val savedTheme = runCatching { graph.preferences.selectedThemeId() }.getOrNull()
         AuralisThemeController.current = BuiltInThemes.byId(savedTheme)

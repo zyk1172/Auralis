@@ -2,7 +2,6 @@
 package com.auralis.core.playback
 
 import android.content.Context
-import android.content.Intent
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.auralis.core.domain.PlaybackSourceResolver
@@ -14,6 +13,10 @@ import com.auralis.core.domain.PlaybackSourceResolver
  * - 本服务持有**单个 ExoPlayer**（进程内 [LocalPlaybackHost.engine]）；
  * - 通过 MediaSession 接通系统媒体控制：通知栏 / 锁屏 / 蓝牙耳机 / 媒体按键；
  * - 播放独立于 Activity 生命周期：切后台、熄屏、Activity 被回收、TV 页面切换均继续。
+ *
+ * 服务生命周期仍以 MediaSessionService 为权威：任务被划掉时沿用 Media3 默认策略
+ * （正在播放则保留，非持续播放状态可停止）；服务真正销毁时必须释放 Player/Session，
+ * 并清空进程内 Host，避免留下“available=true 但已无 MediaSessionService”的僵尸引擎。
  */
 class AuralisPlaybackService : MediaSessionService() {
 
@@ -37,13 +40,14 @@ class AuralisPlaybackService : MediaSessionService() {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
 
-    /** 任务被划掉时不停止播放（对应 Apple 后台继续播放语义）。 */
-    override fun onTaskRemoved(rootIntent: Intent?) = Unit
-
     override fun onDestroy() {
+        // 先让所有 UI/Agent 观察者看到“引擎不可用”，阻止新命令继续落到正在销毁的 Player。
+        val engine = LocalPlaybackHost.engine
+        LocalPlaybackHost.clear()
+
+        engine?.release()
         mediaSession?.release()
         mediaSession = null
-        // 引擎实例由进程单例持有；进程死亡时随进程回收。
         super.onDestroy()
     }
 

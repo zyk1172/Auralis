@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -13,17 +15,23 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.SubcomposeAsyncImage
-import com.auralis.core.domain.ServerId
+import coil.request.ImageRequest
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.domain.ServerId
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * 封面 URL 生成器。由 App 组合根装配（需要对应 OpenSubsonicClient 的
  * `getCoverArt?id=&size=`）。**key 必须包含 serverId**：不同服务器可能出现相同 ID。
+ *
+ * provider 目前是同步接口，但真实实现可能读取 Keystore 并生成认证签名；调用方必须
+ * 把它视为潜在阻塞操作，不能直接在 Compose 主线程执行。
  */
 fun interface ArtworkUrlProvider {
     fun url(serverId: ServerId, artworkKey: String, size: Int): String?
@@ -45,6 +53,9 @@ fun tieredSize(pixelSize: Int): Int {
  * Auralis 封面。
  *
  * - 请求 = `getCoverArt&size=`（服务端缩放），不要永远下原图再缩放；
+ * - URL 解析放到 IO dispatcher，避免 Token/Keystore 读取阻塞 Compose 主线程；
+ * - OpenSubsonic token URL 每次可能带不同 salt，Coil 缓存键因此不能直接使用完整 URL；
+ *   使用 serverId + artworkKey + size 的稳定键，避免同一封面因签名变化反复下载；
  * - 无封面 / 加载失败 → 圆角渐变占位 + 首字母字标。
  */
 @Composable
@@ -58,14 +69,46 @@ fun AuralisArtwork(
     targetSizeDp: Int = 200,
 ) {
     val theme = LocalAuralisTheme.current
-    val url = remember(serverId, artworkKey, targetSizeDp) {
-        if (artworkKey.isNullOrBlank()) {
+    val context = LocalContext.current
+    val requestSize = tieredSize(targetSizeDp)
+    val provider = ArtworkUrl.provider
+
+    val url by produceState<String?>(
+        null,
+        serverId,
+        artworkKey,
+        requestSize,
+        provider,
+    ) {
+        value = if (artworkKey.isNullOrBlank() || provider == null) {
             null
         } else {
-            ArtworkUrl.provider?.url(serverId, artworkKey, tieredSize(targetSizeDp))
+            withContext(Dispatchers.IO) {
+                runCatching { provider.url(serverId, artworkKey, requestSize) }.getOrNull()
+            }
         }
     }
-    if (url == null) {
+
+    val stableCacheKey = remember(serverId, artworkKey, requestSize) {
+        artworkKey?.takeIf { it.isNotBlank() }?.let {
+            "auralis-artwork:${serverId.value}:$it:$requestSize"
+        }
+    }
+    val imageRequest = remember(context, url, stableCacheKey) {
+        val resolvedUrl = url
+        val cacheKey = stableCacheKey
+        if (resolvedUrl == null || cacheKey == null) {
+            null
+        } else {
+            ImageRequest.Builder(context)
+                .data(resolvedUrl)
+                .memoryCacheKey(cacheKey)
+                .diskCacheKey(cacheKey)
+                .build()
+        }
+    }
+
+    if (imageRequest == null) {
         FallbackArtwork(
             label = titleForFallback,
             accent = theme.colors.accent,
@@ -75,7 +118,7 @@ fun AuralisArtwork(
         return
     }
     SubcomposeAsyncImage(
-        model = url,
+        model = imageRequest,
         loading = {
             FallbackArtwork(
                 label = titleForFallback,

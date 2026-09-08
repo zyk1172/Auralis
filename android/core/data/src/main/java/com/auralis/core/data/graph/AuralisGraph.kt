@@ -223,9 +223,14 @@ class AuralisGraph(context: Context) {
         appContext.startForegroundService(intent)
     }
 
+    /**
+     * 下载是长期 dataSync 前台任务。Android 8+ 从后台启动普通 Service 会直接被系统拒绝，
+     * 因此与播放服务一样走 startForegroundService；DownloadService 会在收到启动后立即
+     * 根据 activeCount 进入前台或自停。
+     */
     fun startDownloadService() {
         val intent = Intent(appContext, com.auralis.core.offline.DownloadService::class.java)
-        appContext.startService(intent)
+        appContext.startForegroundService(intent)
     }
 
     suspend fun trackFor(globalId: GlobalId): Track? = catalogRepository.track(globalId)

@@ -7,7 +7,6 @@ import com.auralis.core.playback.PlaybackDependencies
 import com.auralis.core.offline.DownloadServiceHolder
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 
 /**
  * Auralis 移动端 Application：进程级组合根。
