@@ -22,6 +22,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.AuralisChrome
 import com.auralis.core.designsystem.AuralisMotion
@@ -51,9 +52,9 @@ import com.auralis.core.designsystem.R as AuralisR
 /**
  * Mobile shell aligned to Apple `IOSMusicShell`.
  *
- * The bottom chrome now has one shell-owned terminal state. Home, Library, Assistant, browse detail
- * and the dock itself all request that same state, matching Apple's shared `HomeChromeState` instead
- * of keeping an isolated gesture state inside the dock composable.
+ * The bottom chrome has one shell-owned terminal state. Home, Library, Assistant, browse detail and
+ * the dock itself all request that same state, matching Apple's shared `HomeChromeState` instead of
+ * keeping an isolated gesture state inside the dock composable.
  */
 @Composable
 fun MobileShell(
@@ -111,6 +112,10 @@ fun MobileShell(
         ),
         label = "auralis-shell-dock-progress",
     )
+    val scrollBottomClearance = (
+        AuralisChrome.expandedInteractionHeight.value +
+            (AuralisChrome.compactInteractionHeight.value - AuralisChrome.expandedInteractionHeight.value) * dockProgress
+        ).dp
 
     fun setDockCompact(compact: Boolean) {
         dockCompactTarget = compact && canCompactDock
@@ -217,6 +222,7 @@ fun MobileShell(
                     onPlayNext = ::playNextShelf,
                     onAppendToQueue = ::appendQueueShelf,
                     onBrowse = ::openBrowse,
+                    bottomChromeClearance = scrollBottomClearance,
                     modifier = dockScrollModifier(),
                 )
                 browseDestination?.let { destination ->
