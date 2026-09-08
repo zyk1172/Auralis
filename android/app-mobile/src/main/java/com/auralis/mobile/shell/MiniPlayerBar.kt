@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,6 +27,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -74,9 +75,6 @@ fun MiniPlayerBar(
                 interactionSource = openInteraction,
                 indication = null,
                 onClick = onOpen,
-            )
-            .then(
-                Modifier,
             ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -190,6 +188,7 @@ private fun MiniTransportButton(
         modifier = Modifier
             .size(44.dp)
             .alpha(if (enabled) 1f else 0.35f)
+            .semantics { this.contentDescription = contentDescription }
             .clickable(
                 enabled = enabled,
                 interactionSource = interaction,
@@ -198,10 +197,6 @@ private fun MiniTransportButton(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        // semantics 由外层点击目标承担；图标自身 contentDescription 置空避免重复朗读。
-        androidx.compose.ui.semantics.semantics {
-            this.contentDescription = contentDescription
-        }
         content()
     }
 }
