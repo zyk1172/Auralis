@@ -3,25 +3,26 @@ package com.auralis.feature.library
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -56,6 +57,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.AuralisChrome
@@ -75,15 +77,12 @@ import com.auralis.core.image.AuralisArtwork
 import kotlinx.coroutines.launch
 
 /**
- * 资料库（对齐 Swift `LibraryView.swift`，S4）。
+ * Android Library mirrors iOS `LibraryView` and the surrounding `IOSMusicShell` navigation chrome.
  *
- * - 顶部分段 7 scope（专辑/歌曲/艺术家/歌单/收藏/流派/分类），默认专辑；
- *   「分类」数据源为 AI 推荐索引库（Android 第一版未迁移）→ 展示能力说明，不拿假数据。
- * - 各 scope 数据全部真实：专辑/歌曲/艺术家/歌单/流派 = Room 观察流；
- *   收藏 = favorites 表观察流；下载徽标/菜单态 = downloads 表逐行观察。
- * - 点行 = 当前列表作新队列从该行起播；点专辑/艺术家/歌单卡 = 打开 Browse 详情；
- *   Swift contextMenu 长按 → Android 行尾/卡角 ⋯ 菜单，菜单项动作全部真实
- *   （播放/下一首/加入队列/添加到歌单/下载·取消·删缓存/收藏切换）。
+ * The iOS source of truth is a large navigation title + 44pt accent settings target, followed by a
+ * single segmented picker and divider. Scrollable scopes reserve the same dynamic bottom-chrome
+ * clearance as Apple's `reportsBottomDockScroll`, so the final row/card never sits underneath the
+ * morphing dock while wide screens stay inside the shared 960pt readable width.
  */
 @Composable
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -94,6 +93,7 @@ fun LibraryScreen(
     onPlayNext: (List<Track>) -> Unit,
     onAppendToQueue: (List<Track>) -> Unit,
     onBrowse: (BrowseDestination) -> Unit,
+    bottomChromeClearance: Dp = AuralisChrome.expandedInteractionHeight,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
@@ -109,54 +109,131 @@ fun LibraryScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.small),
+                .padding(start = AuralisSpacing.large, end = 16.dp, top = 6.dp, bottom = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(stringResource(AuralisR.string.library_title), style = MaterialTheme.typography.headlineMedium, color = colors.primaryText, modifier = Modifier.weight(1f))
-            IconButton(onClick = onOpenSettings) {
-                Icon(Icons.Filled.Settings, contentDescription = stringResource(AuralisR.string.settings), tint = colors.primaryText)
+            Text(
+                text = stringResource(AuralisR.string.library_title),
+                style = MaterialTheme.typography.displayLarge,
+                color = colors.primaryText,
+                maxLines = 1,
+                modifier = Modifier.weight(1f),
+            )
+            Box(
+                modifier = Modifier
+                    .size(AuralisChrome.minTouchTarget)
+                    .clip(CircleShape)
+                    .clickable(onClick = onOpenSettings),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.Settings,
+                    contentDescription = stringResource(AuralisR.string.settings),
+                    tint = colors.accent,
+                    modifier = Modifier.size(16.dp),
+                )
             }
         }
+
         ScopeSelector(selected = scope, onSelect = { scope = it })
         HorizontalDivider(color = colors.separator)
-        Box(Modifier.fillMaxSize()) {
-            when (scope) {
-                LibraryScope.Albums -> AlbumScope(graph, serverId, onPlayTracks, onBrowse)
-                LibraryScope.Tracks -> TracksOrFavoritesScope(graph, serverId, isFavorites = false, onPlayTracks, onPlayNext, onAppendToQueue)
-                LibraryScope.Artists -> ArtistScope(graph, serverId, onPlayTracks, onBrowse)
-                LibraryScope.Playlists -> PlaylistScope(graph, serverId, onBrowse)
-                LibraryScope.Favorites -> TracksOrFavoritesScope(graph, serverId, isFavorites = true, onPlayTracks, onPlayNext, onAppendToQueue)
-                LibraryScope.Genres -> GenreScope(graph, serverId, onBrowse)
-                LibraryScope.Categories -> CategoryScope()
+
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .widthIn(max = AuralisChrome.readableContentMaxWidth),
+            ) {
+                when (scope) {
+                    LibraryScope.Albums -> AlbumScope(
+                        graph = graph,
+                        serverId = serverId,
+                        onPlayTracks = onPlayTracks,
+                        onBrowse = onBrowse,
+                        bottomPadding = bottomChromeClearance,
+                    )
+                    LibraryScope.Tracks -> TracksOrFavoritesScope(
+                        graph = graph,
+                        serverId = serverId,
+                        isFavorites = false,
+                        onPlayTracks = onPlayTracks,
+                        onPlayNext = onPlayNext,
+                        onAppendToQueue = onAppendToQueue,
+                        bottomPadding = bottomChromeClearance,
+                    )
+                    LibraryScope.Artists -> ArtistScope(
+                        graph = graph,
+                        serverId = serverId,
+                        onPlayTracks = onPlayTracks,
+                        onBrowse = onBrowse,
+                        bottomPadding = bottomChromeClearance,
+                    )
+                    LibraryScope.Playlists -> PlaylistScope(
+                        graph = graph,
+                        serverId = serverId,
+                        onBrowse = onBrowse,
+                        bottomPadding = bottomChromeClearance,
+                    )
+                    LibraryScope.Favorites -> TracksOrFavoritesScope(
+                        graph = graph,
+                        serverId = serverId,
+                        isFavorites = true,
+                        onPlayTracks = onPlayTracks,
+                        onPlayNext = onPlayNext,
+                        onAppendToQueue = onAppendToQueue,
+                        bottomPadding = bottomChromeClearance,
+                    )
+                    LibraryScope.Genres -> GenreScope(
+                        graph = graph,
+                        serverId = serverId,
+                        onBrowse = onBrowse,
+                        bottomPadding = bottomChromeClearance,
+                    )
+                    LibraryScope.Categories -> CategoryScope()
+                }
             }
         }
     }
 }
 
-/** 分段选择（横向滚动胶囊，近似 Swift segmented picker）。 */
+/** iOS `.pickerStyle(.segmented)` geometry: one shared trough, no independent pill gaps. */
 @Composable
 private fun ScopeSelector(selected: LibraryScope, onSelect: (LibraryScope) -> Unit) {
     val colors = LocalAuralisTheme.current.colors
+    val outerShape = RoundedCornerShape(10.dp)
+    val selectedShape = RoundedCornerShape(8.dp)
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.small),
-        horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.small),
+            .padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.small)
+            .clip(outerShape)
+            .background(colors.elevated.copy(alpha = 0.82f))
+            .padding(2.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         LibraryScope.entries.forEach { item ->
             val isSelected = item == selected
-            androidx.compose.material3.Surface(
-                color = if (isSelected) colors.accent.copy(alpha = 0.16f) else colors.surface,
-                shape = RoundedCornerShape(50),
-                onClick = { onSelect(item) },
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 32.dp)
+                    .clip(selectedShape)
+                    .background(if (isSelected) colors.surface else androidx.compose.ui.graphics.Color.Transparent)
+                    .clickable { onSelect(item) }
+                    .padding(horizontal = 2.dp, vertical = 6.dp),
+                contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    stringResource(item.titleRes()),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (isSelected) colors.accent else colors.primaryText,
-                    modifier = Modifier.padding(horizontal = AuralisSpacing.medium, vertical = 6.dp),
+                    text = stringResource(item.titleRes()),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (isSelected) colors.accent else colors.secondaryText,
+                    maxLines = 1,
+                    overflow = TextOverflow.Clip,
                 )
             }
         }
@@ -171,13 +248,14 @@ private fun AlbumScope(
     serverId: ServerId?,
     onPlayTracks: (List<Track>, Int) -> Unit,
     onBrowse: (BrowseDestination) -> Unit,
+    bottomPadding: Dp,
 ) {
     if (serverId == null) return ServerPrompt()
     val albums by remember(serverId) { graph.catalogRepository.observeAlbums(serverId) }.collectAsState(initial = null)
     when {
         albums == null -> LibraryLoadingBox(stringResource(R.string.library_loading_albums))
         albums!!.isEmpty() -> LibraryEmptyState(stringResource(R.string.library_empty_albums_title), stringResource(R.string.library_empty_albums_help))
-        else -> AlbumGrid(graph, albums!!, onPlayTracks, onBrowse)
+        else -> AlbumGrid(graph, albums!!, onPlayTracks, onBrowse, bottomPadding)
     }
 }
 
@@ -187,13 +265,14 @@ private fun ArtistScope(
     serverId: ServerId?,
     onPlayTracks: (List<Track>, Int) -> Unit,
     onBrowse: (BrowseDestination) -> Unit,
+    bottomPadding: Dp,
 ) {
     if (serverId == null) return ServerPrompt()
     val artists by remember(serverId) { graph.catalogRepository.observeArtists(serverId) }.collectAsState(initial = null)
     when {
         artists == null -> LibraryLoadingBox(stringResource(R.string.library_loading_artists))
         artists!!.isEmpty() -> LibraryEmptyState(stringResource(R.string.library_empty_artists_title), stringResource(R.string.library_empty_artists_help))
-        else -> ArtistRows(graph, artists!!, onPlayTracks, onBrowse)
+        else -> ArtistRows(graph, artists!!, onPlayTracks, onBrowse, bottomPadding)
     }
 }
 
@@ -202,13 +281,14 @@ private fun PlaylistScope(
     graph: AuralisGraph,
     serverId: ServerId?,
     onBrowse: (BrowseDestination) -> Unit,
+    bottomPadding: Dp,
 ) {
     if (serverId == null) return ServerPrompt()
     val playlists by remember(serverId) { graph.catalogRepository.observePlaylists(serverId) }.collectAsState(initial = null)
     when {
         playlists == null -> LibraryLoadingBox(stringResource(R.string.library_loading_playlists))
         playlists!!.isEmpty() -> LibraryEmptyState(stringResource(R.string.library_empty_playlists_title), stringResource(R.string.library_empty_playlists_help))
-        else -> PlaylistGrid(playlists!!, onBrowse)
+        else -> PlaylistGrid(playlists!!, onBrowse, bottomPadding)
     }
 }
 
@@ -221,6 +301,7 @@ private fun TracksOrFavoritesScope(
     onPlayTracks: (List<Track>, Int) -> Unit,
     onPlayNext: (List<Track>) -> Unit,
     onAppendToQueue: (List<Track>) -> Unit,
+    bottomPadding: Dp,
 ) {
     if (serverId == null) return ServerPrompt()
     val repo = graph.catalogRepository
@@ -246,6 +327,7 @@ private fun TracksOrFavoritesScope(
             onPlayNext = onPlayNext,
             onAppendToQueue = onAppendToQueue,
             showDownloadBadge = !isFavorites,
+            bottomPadding = bottomPadding,
         )
     }
 }
@@ -255,6 +337,7 @@ private fun GenreScope(
     graph: AuralisGraph,
     serverId: ServerId?,
     onBrowse: (BrowseDestination) -> Unit,
+    bottomPadding: Dp,
 ) {
     if (serverId == null) return ServerPrompt()
     val repo = graph.catalogRepository
@@ -274,7 +357,7 @@ private fun GenreScope(
                 }
             },
         )
-        else -> GenreGrid(genres!!, serverId, onBrowse)
+        else -> GenreGrid(genres!!, serverId, onBrowse, bottomPadding)
     }
 }
 
@@ -298,8 +381,12 @@ internal fun TrackRows(
     onPlayNext: (List<Track>) -> Unit,
     onAppendToQueue: (List<Track>) -> Unit,
     showDownloadBadge: Boolean = true,
+    bottomPadding: Dp = AuralisChrome.expandedInteractionHeight,
 ) {
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = bottomPadding + AuralisSpacing.large),
+    ) {
         items(tracks, key = { it.globalId.serialized }) { track ->
             LibraryTrackRow(
                 graph = graph,
@@ -322,12 +409,19 @@ private fun AlbumGrid(
     albums: List<Album>,
     onPlayTracks: (List<Track>, Int) -> Unit,
     onBrowse: (BrowseDestination) -> Unit,
+    bottomPadding: Dp,
 ) {
     LazyVerticalGrid(
         columns = GridCells.Adaptive(AuralisChrome.albumGridMin),
         horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.medium),
         verticalArrangement = Arrangement.spacedBy(AuralisSpacing.large),
-        modifier = Modifier.fillMaxSize().padding(horizontal = AuralisSpacing.large),
+        contentPadding = PaddingValues(
+            start = AuralisSpacing.large,
+            end = AuralisSpacing.large,
+            top = AuralisSpacing.medium,
+            bottom = bottomPadding + AuralisSpacing.large,
+        ),
+        modifier = Modifier.fillMaxSize(),
     ) {
         items(albums, key = { it.globalId.serialized }) { album ->
             AlbumCard(
@@ -380,7 +474,7 @@ private fun AlbumCard(
             )
             Text(
                 album.title,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.SemiBold,
                 color = colors.primaryText,
                 maxLines = 1,
@@ -389,7 +483,7 @@ private fun AlbumCard(
             )
             Text(
                 album.artistName,
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.labelMedium,
                 color = colors.secondaryText,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -461,8 +555,12 @@ private fun ArtistRows(
     artists: List<Artist>,
     onPlayTracks: (List<Track>, Int) -> Unit,
     onBrowse: (BrowseDestination) -> Unit,
+    bottomPadding: Dp,
 ) {
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = bottomPadding + AuralisSpacing.large),
+    ) {
         items(artists, key = { it.globalId.serialized }) { artist ->
             ArtistRow(graph, artist, onPlayTracks, onBrowse)
         }
@@ -511,7 +609,7 @@ private fun ArtistRow(
         )
         Column(Modifier.weight(1f)) {
             Text(artist.name, style = MaterialTheme.typography.titleMedium, color = colors.primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(stringResource(AuralisR.string.album_count_format, artist.albumCount), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+            Text(stringResource(AuralisR.string.album_count_format, artist.albumCount), style = MaterialTheme.typography.labelMedium, color = colors.secondaryText)
         }
         Box {
             IconButton(onClick = { menuOpen = true }) {
@@ -580,13 +678,20 @@ private fun ArtistRow(
 private fun PlaylistGrid(
     playlists: List<Playlist>,
     onBrowse: (BrowseDestination) -> Unit,
+    bottomPadding: Dp,
 ) {
     val colors = LocalAuralisTheme.current.colors
     LazyVerticalGrid(
         columns = GridCells.Adaptive(AuralisChrome.albumGridMin),
         horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.medium),
         verticalArrangement = Arrangement.spacedBy(AuralisSpacing.large),
-        modifier = Modifier.fillMaxSize().padding(horizontal = AuralisSpacing.large),
+        contentPadding = PaddingValues(
+            start = AuralisSpacing.large,
+            end = AuralisSpacing.large,
+            top = AuralisSpacing.medium,
+            bottom = bottomPadding + AuralisSpacing.large,
+        ),
+        modifier = Modifier.fillMaxSize(),
     ) {
         items(playlists, key = { it.globalId.serialized }) { playlist ->
             Column(
@@ -606,7 +711,7 @@ private fun PlaylistGrid(
                 }
                 Text(
                     playlist.name,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                     color = colors.primaryText,
                     maxLines = 1,
@@ -623,13 +728,20 @@ private fun GenreGrid(
     genres: List<Genre>,
     serverId: ServerId,
     onBrowse: (BrowseDestination) -> Unit,
+    bottomPadding: Dp,
 ) {
     val colors = LocalAuralisTheme.current.colors
     LazyVerticalGrid(
         columns = GridCells.Adaptive(AuralisChrome.genreGridMin),
         horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.medium),
         verticalArrangement = Arrangement.spacedBy(AuralisSpacing.medium),
-        modifier = Modifier.fillMaxSize().padding(horizontal = AuralisSpacing.medium, vertical = AuralisSpacing.medium),
+        contentPadding = PaddingValues(
+            start = AuralisSpacing.medium,
+            end = AuralisSpacing.medium,
+            top = AuralisSpacing.medium,
+            bottom = bottomPadding + AuralisSpacing.large,
+        ),
+        modifier = Modifier.fillMaxSize(),
     ) {
         items(genres, key = { it.id }) { genre ->
             Column(
@@ -647,7 +759,7 @@ private fun GenreGrid(
                 }
                 Spacer(Modifier.height(AuralisSpacing.small))
                 Text(genre.name, style = MaterialTheme.typography.titleSmall, color = colors.primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(stringResource(AuralisR.string.count_songs, genre.songCount), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+                Text(stringResource(AuralisR.string.count_songs, genre.songCount), style = MaterialTheme.typography.labelMedium, color = colors.secondaryText)
             }
         }
     }

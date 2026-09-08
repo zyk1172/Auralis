@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.auralis.core.data.graph.AuralisGraph
@@ -64,7 +65,8 @@ import com.auralis.core.image.AuralisArtwork
  * - Apple 首页没有额外的“首页 + 服务器名 + 添加”顶栏，因此这里移除 Android 自创 Header；
  * - 根背景使用 `[background, accent@12%, background]` 斜向环境渐变；
  * - 内容 20dp 横边距 / 12dp 顶边距 / 960dp 最大可读宽度；
- * - 快捷入口、140dp 货架卡片、字号和间距按 Apple 源码逐项映射。
+ * - 快捷入口、140dp 货架卡片、字号和间距按 Apple 源码逐项映射；
+ * - 底部滚动留白跟随共享 Dock 126→62dp 动画，不再固定占用展开态高度。
  */
 @Composable
 fun AppleParityHomeScreen(
@@ -72,6 +74,7 @@ fun AppleParityHomeScreen(
     onPlayTracks: (tracks: List<Track>, startIndex: Int) -> Unit,
     onBrowse: (BrowseDestination) -> Unit,
     onManageServers: () -> Unit,
+    bottomChromeClearance: Dp = AuralisChrome.expandedInteractionHeight,
     modifier: Modifier = Modifier,
 ) {
     val theme = LocalAuralisTheme.current
@@ -119,6 +122,7 @@ fun AppleParityHomeScreen(
                 state = state,
                 onPlayTracks = onPlayTracks,
                 onBrowse = onBrowse,
+                bottomChromeClearance = bottomChromeClearance,
             )
         }
     }
@@ -129,6 +133,7 @@ private fun AppleHomeContent(
     state: HomeState,
     onPlayTracks: (List<Track>, Int) -> Unit,
     onBrowse: (BrowseDestination) -> Unit,
+    bottomChromeClearance: Dp,
 ) {
     LazyColumn(
         modifier = Modifier
@@ -138,8 +143,7 @@ private fun AppleHomeContent(
             start = AuralisSpacing.large,
             end = AuralisSpacing.large,
             top = AuralisSpacing.medium,
-            // Apple expanded chrome=126；再保留页面自身 large(20) 底部空间。
-            bottom = AuralisChrome.expandedInteractionHeight + AuralisSpacing.large,
+            bottom = bottomChromeClearance + AuralisSpacing.large,
         ),
         verticalArrangement = Arrangement.spacedBy(AuralisSpacing.xLarge),
     ) {

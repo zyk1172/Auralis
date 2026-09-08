@@ -2,6 +2,10 @@
 package com.auralis.mobile.shell
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,9 +22,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.AuralisChrome
+import com.auralis.core.designsystem.AuralisMotion
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.designsystem.LocalReduceMotion
 import com.auralis.core.domain.BrowseDestination
 import com.auralis.core.domain.PlaybackState
 import com.auralis.core.domain.QueueEntry
@@ -42,6 +49,13 @@ import com.auralis.feature.search.SearchScreen
 import kotlinx.coroutines.launch
 import com.auralis.core.designsystem.R as AuralisR
 
+/**
+ * Mobile shell aligned to Apple `IOSMusicShell`.
+ *
+ * The bottom chrome has one shell-owned terminal state. Home, Library, Assistant, browse detail and
+ * the dock itself all request that same state, matching Apple's shared `HomeChromeState` instead of
+ * keeping an isolated gesture state inside the dock composable.
+ */
 @Composable
 fun MobileShell(
     graph: AuralisGraph,
@@ -53,10 +67,12 @@ fun MobileShell(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
+    val reduceMotion = LocalReduceMotion.current
     var section by rememberSaveable { mutableStateOf(AppSection.Home) }
     var browseDestination by remember { mutableStateOf<BrowseDestination?>(null) }
     var nowPlayingOpen by remember { mutableStateOf(false) }
     var searchOpen by remember { mutableStateOf(false) }
+    var dockCompactTarget by rememberSaveable { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -72,6 +88,45 @@ fun MobileShell(
         if (engineAvailable) controller.queue.collect { queue = it }
         else queue = QueueSnapshot.Empty
     }
+
+    val hasPlaybackAccessory = engineAvailable && playback.track != null && section != AppSection.Assistant
+    val canCompactDock = section == AppSection.Assistant || hasPlaybackAccessory
+
+    LaunchedEffect(section) {
+        // Apple resets the shared HomeChromeState whenever the top-level section changes.
+        dockCompactTarget = false
+    }
+    LaunchedEffect(canCompactDock) {
+        if (!canCompactDock) dockCompactTarget = false
+    }
+
+    val dockProgress by animateFloatAsState(
+        targetValue = if (dockCompactTarget && canCompactDock) 1f else 0f,
+        animationSpec = tween(
+            durationMillis = if (reduceMotion) {
+                AuralisMotion.DOCK_REDUCED_DURATION_MS
+            } else {
+                AuralisMotion.DOCK_DURATION_MS
+            },
+            easing = if (reduceMotion) LinearEasing else AppleDockSmooth,
+        ),
+        label = "auralis-shell-dock-progress",
+    )
+    val scrollBottomClearance = (
+        AuralisChrome.expandedInteractionHeight.value +
+            (AuralisChrome.compactInteractionHeight.value - AuralisChrome.expandedInteractionHeight.value) * dockProgress
+        ).dp
+
+    fun setDockCompact(compact: Boolean) {
+        dockCompactTarget = compact && canCompactDock
+    }
+
+    fun dockScrollModifier(): Modifier = Modifier
+        .fillMaxSize()
+        .reportsBottomDockScroll(
+            enabled = canCompactDock,
+            onTerminalRequest = ::setDockCompact,
+        )
 
     suspend fun awaitControllerOrNotify(): PlaybackController? =
         runCatching { awaitPlaybackController(startService = { graph.startPlaybackService() }) }
@@ -118,6 +173,7 @@ fun MobileShell(
     fun selectTopLevel(sel: AppSection) {
         nowPlayingOpen = false
         searchOpen = false
+        dockCompactTarget = false
         if (sel == AppSection.Library) {
             if (section == AppSection.Library && browseDestination != null) browseDestination = null
             else section = sel
@@ -131,6 +187,7 @@ fun MobileShell(
         nowPlayingOpen = false
         searchOpen = false
         browseDestination = null
+        dockCompactTarget = false
         section = AppSection.Assistant
         val seed = when (action) {
             PlayerTrackAction.PlaySimilar -> GuidedSessions.playSimilarSeed(track)
@@ -154,6 +211,8 @@ fun MobileShell(
                 onPlayTracks = ::playShelf,
                 onBrowse = ::openBrowse,
                 onManageServers = onOpenServers,
+                bottomChromeClearance = scrollBottomClearance,
+                modifier = dockScrollModifier(),
             )
 
             AppSection.Library -> Box(Modifier.fillMaxSize()) {
@@ -164,6 +223,8 @@ fun MobileShell(
                     onPlayNext = ::playNextShelf,
                     onAppendToQueue = ::appendQueueShelf,
                     onBrowse = ::openBrowse,
+                    bottomChromeClearance = scrollBottomClearance,
+                    modifier = dockScrollModifier(),
                 )
                 browseDestination?.let { destination ->
                     BrowseDetailScreen(
@@ -173,7 +234,7 @@ fun MobileShell(
                         onPlayTracks = ::playShelf,
                         onPlayNext = ::playNextShelf,
                         onAppendToQueue = ::appendQueueShelf,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = dockScrollModifier(),
                     )
                 }
             }
@@ -182,17 +243,19 @@ fun MobileShell(
                 coordinator = assistantCoordinator,
                 onOpenSearch = { searchOpen = true },
                 onOpenAiSettings = onOpenAiSettings,
-                modifier = Modifier.fillMaxSize(),
+                modifier = dockScrollModifier(),
             )
         }
 
         val currentLogical = queue.currentLogicalIndex
         AppleBottomChrome(
             section = section,
-            track = if (engineAvailable && section != AppSection.Assistant) playback.track else null,
+            track = if (hasPlaybackAccessory) playback.track else null,
             playbackState = playback.state,
             canGoPrevious = (currentLogical ?: 0) > 0,
             canGoNext = queue.totalCount > (currentLogical ?: -1) + 1,
+            collapseProgress = dockProgress,
+            onCompactRequest = ::setDockCompact,
             onSelectSection = ::selectTopLevel,
             onOpenPlayer = { if (playback.track != null) nowPlayingOpen = true },
             onPrevious = { controller.previous() },
@@ -230,3 +293,5 @@ fun MobileShell(
         }
     }
 }
+
+private val AppleDockSmooth = CubicBezierEasing(0.25f, 0.1f, 0.25f, 1f)
