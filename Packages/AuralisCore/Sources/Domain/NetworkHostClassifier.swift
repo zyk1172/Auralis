@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// 统一的主机私网/本机分类器：供 ServerURLPolicy、OpenSubsonicKit 错误提示等共用，

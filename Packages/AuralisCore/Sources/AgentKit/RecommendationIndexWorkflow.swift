@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// Runtime-owned state presentation for Recommendation Index. The closed Skill

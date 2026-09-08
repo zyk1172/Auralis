@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// The only home for pre-release Recommendation Index identifiers. They are

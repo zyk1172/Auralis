@@ -23,6 +23,7 @@ xcuserdata/
 
 # Developer-only build settings and exported credentials.
 Config/Local*.xcconfig
+Config/Secrets.xcconfig
 Config/*Secret*.xcconfig
 Config/*Private*.xcconfig
 Config/*Credential*.xcconfig
@@ -43,6 +44,11 @@ Config/*Keychain*.json
 *.keychain-db
 *.p12
 *.pfx
+*.p8
+*.pem
+*.key
+*.mobileprovision
+*.provisionprofile
 
 # 开发代理工作记忆（不进入仓库）
 .workbuddy/

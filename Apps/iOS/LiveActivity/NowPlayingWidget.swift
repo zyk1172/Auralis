@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Domain
 import SwiftUI
 import WidgetKit

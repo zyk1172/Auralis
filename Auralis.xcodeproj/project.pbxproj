@@ -397,24 +397,19 @@
 				LastUpgradeCheck = 2700;
 				TargetAttributes = {
 					0AB239630792168B1AA6B2CA = {
-						DevelopmentTeam = JUQXD87P93;
 						ProvisioningStyle = Automatic;
 					};
 					5097797681FF21CB927678CF = {
-						DevelopmentTeam = JUQXD87P93;
 						ProvisioningStyle = Automatic;
 					};
 					A94C23FA70165354CFD55948 = {
-						DevelopmentTeam = JUQXD87P93;
 						ProvisioningStyle = Automatic;
 					};
 					CA38E379DB0C07894F8A74B7 = {
-						DevelopmentTeam = JUQXD87P93;
 						ProvisioningStyle = Automatic;
 						TestTargetID = D2DFF0647A18535580FA7C69;
 					};
 					D2DFF0647A18535580FA7C69 = {
-						DevelopmentTeam = JUQXD87P93;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -578,7 +573,6 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Apps/iOS/LiveActivity/AuralisLiveActivity.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = JUQXD87P93;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Apps/iOS/LiveActivity/Info.plist;
@@ -605,7 +599,6 @@
 				CODE_SIGN_ENTITLEMENTS = Apps/macOS/AuralisMac.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_LANGUAGE = "zh-Hans";
-				DEVELOPMENT_TEAM = JUQXD87P93;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
@@ -706,7 +699,6 @@
 				CODE_SIGN_ENTITLEMENTS = Apps/iOS/Auralis.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				DEVELOPMENT_LANGUAGE = "zh-Hans";
-				DEVELOPMENT_TEAM = JUQXD87P93;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Apps/iOS/Info.plist;
@@ -733,7 +725,6 @@
 				CODE_SIGN_ENTITLEMENTS = Apps/macOS/AuralisMac.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_LANGUAGE = "zh-Hans";
-				DEVELOPMENT_TEAM = JUQXD87P93;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
@@ -761,7 +752,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				DEVELOPMENT_TEAM = JUQXD87P93;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -786,7 +776,6 @@
 				CODE_SIGN_ENTITLEMENTS = Apps/iOS/Auralis.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				DEVELOPMENT_LANGUAGE = "zh-Hans";
-				DEVELOPMENT_TEAM = JUQXD87P93;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Apps/iOS/Info.plist;
@@ -811,7 +800,6 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Apps/iOS/LiveActivity/AuralisLiveActivity.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = JUQXD87P93;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Apps/iOS/LiveActivity/Info.plist;
@@ -836,7 +824,6 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Apps/iOS/Intents/AuralisIntents.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = JUQXD87P93;
 				ENABLE_APP_INTENTS_METADATA_EXTRACTION = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -925,7 +912,6 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Apps/iOS/Intents/AuralisIntents.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = JUQXD87P93;
 				ENABLE_APP_INTENTS_METADATA_EXTRACTION = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -950,7 +936,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				DEVELOPMENT_TEAM = JUQXD87P93;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

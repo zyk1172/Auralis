@@ -5,7 +5,7 @@
 - 分支：`one-review`
 - 审查基线：`d36dbb23bb65d8dd6b2937a2e72c421bf054dfdb`
 - 范围：Auralis iOS / iPadOS / macOS、AuralisCore 全部 Swift 源码与测试、CI、Agent 工具与权限、已有产品文档。
-- 依据：先读初步审查 `/Users/zhengyunkai/.codex/attachments/236b100b-6bd1-4972-b6c7-b012237fede3/pasted-text-2.txt`，再读审查原则 `/Users/zhengyunkai/.codex/attachments/236b100b-6bd1-4972-b6c7-b012237fede3/pasted-text-1.txt`，随后逐文件检查实际实现与测试。
+- 依据：先读初步审查 `<audit-source-document>`，再读审查原则 `<audit-principles-document>`，随后逐文件检查实际实现与测试。
 - 证据分类：源码/静态分析、回归测试、SwiftPM 测试、Debug/Release 构建、模拟器运行日志与截图分别记录，不把其中任何一种当成其他证据的替代。
 
 ## 修复清单
@@ -41,7 +41,7 @@
 - scanId：`05b58288-5953-436f-8ec9-587b8a743e95`
 - 基线：`d36dbb23bb65d8dd6b2937a2e72c421bf054dfdb`
 - 结果：1 个中危、高置信基线发现（`authorization.agent-irreversible-operation`），已由 AGENT-001 修复并由分支回归测试覆盖。
-- 报告目录：`/private/var/folders/ry/bcnb7yhj78q160rpgq1tq3lr0000gn/T/codex-security-scans-bAyUwg/Auralis/d36dbb23bb65d8dd6b2937a2e72c421bf054dfdb_20260822T114200Z_xea_7luw/`
+- 报告目录：`<security-scan-report-directory>`
 - 外部 TAC 建议因未登录未生成；这是工具服务状态，不影响本地静态扫描与分支回归验证。
 
 ## 当前运行证据

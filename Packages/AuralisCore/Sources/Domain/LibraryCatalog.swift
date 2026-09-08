@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// 应用内统一的音乐库快照：连接服务器后被服务器数据填充。

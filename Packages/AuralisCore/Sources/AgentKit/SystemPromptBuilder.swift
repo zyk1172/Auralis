@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// Builds the small, provider-neutral instruction layer shared by generic chat

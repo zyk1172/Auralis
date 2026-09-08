@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// Timing facts for one tool call.  Values are durations in milliseconds and

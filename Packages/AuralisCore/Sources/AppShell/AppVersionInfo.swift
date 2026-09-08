@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// 版本信息的唯一事实来源：一律从 Bundle 读取

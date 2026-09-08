@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// 流派显示名本地化：把服务器返回的英文流派名翻译成当前 App 语言用于展示。

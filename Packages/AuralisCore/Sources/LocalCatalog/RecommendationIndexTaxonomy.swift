@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
 /// Stable, immutable fixed-tag taxonomy for Auralis Recommendation Index.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 package com.auralis.core.designsystem
 
 import androidx.compose.foundation.isSystemInDarkTheme
