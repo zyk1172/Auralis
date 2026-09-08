@@ -148,28 +148,50 @@ fun LibraryScreen(
                     .widthIn(max = AuralisChrome.readableContentMaxWidth),
             ) {
                 when (scope) {
-                    LibraryScope.Albums -> AlbumScope(graph, serverId, onPlayTracks, onBrowse, bottomChromeClearance)
+                    LibraryScope.Albums -> AlbumScope(
+                        graph = graph,
+                        serverId = serverId,
+                        onPlayTracks = onPlayTracks,
+                        onBrowse = onBrowse,
+                        bottomPadding = bottomChromeClearance,
+                    )
                     LibraryScope.Tracks -> TracksOrFavoritesScope(
-                        graph,
-                        serverId,
+                        graph = graph,
+                        serverId = serverId,
                         isFavorites = false,
-                        onPlayTracks,
-                        onPlayNext,
-                        onAppendToQueue,
-                        bottomChromeClearance,
+                        onPlayTracks = onPlayTracks,
+                        onPlayNext = onPlayNext,
+                        onAppendToQueue = onAppendToQueue,
+                        bottomPadding = bottomChromeClearance,
                     )
-                    LibraryScope.Artists -> ArtistScope(graph, serverId, onPlayTracks, onBrowse, bottomChromeClearance)
-                    LibraryScope.Playlists -> PlaylistScope(graph, serverId, onBrowse, bottomChromeClearance)
+                    LibraryScope.Artists -> ArtistScope(
+                        graph = graph,
+                        serverId = serverId,
+                        onPlayTracks = onPlayTracks,
+                        onBrowse = onBrowse,
+                        bottomPadding = bottomChromeClearance,
+                    )
+                    LibraryScope.Playlists -> PlaylistScope(
+                        graph = graph,
+                        serverId = serverId,
+                        onBrowse = onBrowse,
+                        bottomPadding = bottomChromeClearance,
+                    )
                     LibraryScope.Favorites -> TracksOrFavoritesScope(
-                        graph,
-                        serverId,
+                        graph = graph,
+                        serverId = serverId,
                         isFavorites = true,
-                        onPlayTracks,
-                        onPlayNext,
-                        onAppendToQueue,
-                        bottomChromeClearance,
+                        onPlayTracks = onPlayTracks,
+                        onPlayNext = onPlayNext,
+                        onAppendToQueue = onAppendToQueue,
+                        bottomPadding = bottomChromeClearance,
                     )
-                    LibraryScope.Genres -> GenreScope(graph, serverId, onBrowse, bottomChromeClearance)
+                    LibraryScope.Genres -> GenreScope(
+                        graph = graph,
+                        serverId = serverId,
+                        onBrowse = onBrowse,
+                        bottomPadding = bottomChromeClearance,
+                    )
                     LibraryScope.Categories -> CategoryScope()
                 }
             }
