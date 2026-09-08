@@ -322,54 +322,66 @@ class DownloadManager(
 /**
  * 下载前台服务：存在下载任务时保持前台通知，全部结束后 stopSelf。
  * （对应 Apple background URLSession 的后台下载语义；不依赖 UI 生命周期。）
+ *
+ * 前台状态只有一个入口 [updateForegroundState]，并且整个 Service 生命周期只有一个
+ * activeCount collector。避免 onStartCommand 重入时重复 collect，造成重复 start/stopForeground。
  */
 class DownloadService : Service() {
 
     private var manager: DownloadManager? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var activeCountJob: Job? = null
+    private var isForegrounded = false
 
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        val holder = DownloadServiceHolder
-        manager = holder.manager?.also { startForeground(NOTIFICATION_ID, it.let { buildNotification() }) }
+        manager = DownloadServiceHolder.manager
         if (manager == null) stopSelf()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val holder = DownloadServiceHolder
-        val mgr = holder.manager
+        val mgr = manager ?: DownloadServiceHolder.manager
         if (mgr == null) {
             stopSelf()
             return START_NOT_STICKY
         }
-        if (mgr.activeCount.value > 0) {
-            startForeground(NOTIFICATION_ID, buildNotification())
-        } else {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        }
-        scope.launch {
-            mgr.activeCount.collect {
-                if (it > 0 && !isForegrounded) {
-                    startForeground(NOTIFICATION_ID, buildNotification())
-                    isForegrounded = true
-                } else if (it == 0 && isForegrounded) {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    isForegrounded = false
-                    stopSelf()
-                }
+        manager = mgr
+
+        // startForegroundService 后必须尽快进入前台；没有活动任务则立即自停。
+        updateForegroundState(mgr.activeCount.value)
+
+        if (activeCountJob == null) {
+            activeCountJob = scope.launch {
+                mgr.activeCount.collect { count -> updateForegroundState(count) }
             }
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
-
-    private var isForegrounded = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        activeCountJob?.cancel()
+        activeCountJob = null
         scope.cancel()
         super.onDestroy()
+    }
+
+    private fun updateForegroundState(count: Int) {
+        if (count > 0) {
+            if (!isForegrounded) {
+                startForeground(NOTIFICATION_ID, buildNotification())
+                isForegrounded = true
+            }
+            return
+        }
+
+        if (isForegrounded) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            isForegrounded = false
+        }
+        stopSelf()
     }
 
     private fun buildNotification(): Notification {
