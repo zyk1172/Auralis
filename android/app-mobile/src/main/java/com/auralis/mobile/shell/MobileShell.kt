@@ -4,14 +4,8 @@ package com.auralis.mobile.shell
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -91,6 +85,7 @@ fun MobileShell(
             .getOrNull()
 
     fun playShelf(tracks: List<Track>, startIndex: Int) {
+        if (tracks.isEmpty()) return
         scope.launch {
             val ready = awaitControllerOrNotify() ?: return@launch
             runCatching {
@@ -118,6 +113,18 @@ fun MobileShell(
         searchOpen = false
         browseDestination = destination
         section = AppSection.Library
+    }
+
+    fun selectTopLevel(sel: AppSection) {
+        nowPlayingOpen = false
+        searchOpen = false
+        if (sel == AppSection.Library) {
+            if (section == AppSection.Library && browseDestination != null) browseDestination = null
+            else section = sel
+        } else {
+            browseDestination = null
+            section = sel
+        }
     }
 
     fun openGuidedAssistant(track: Track, action: PlayerTrackAction) {
@@ -179,72 +186,27 @@ fun MobileShell(
             )
         }
 
-        Column(
+        val currentLogical = queue.currentLogicalIndex
+        AppleBottomChrome(
+            section = section,
+            track = if (engineAvailable && section != AppSection.Assistant) playback.track else null,
+            playbackState = playback.state,
+            canGoPrevious = (currentLogical ?: 0) > 0,
+            canGoNext = queue.totalCount > (currentLogical ?: -1) + 1,
+            onSelectSection = ::selectTopLevel,
+            onOpenPlayer = { if (playback.track != null) nowPlayingOpen = true },
+            onPrevious = { controller.previous() },
+            onTogglePlayPause = {
+                if (playback.state is PlaybackState.Playing || playback.state is PlaybackState.Paused) {
+                    controller.togglePlayPause()
+                }
+            },
+            onNext = { controller.next() },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(bottom = AuralisChrome.dockBottomPadding),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            val showMini = engineAvailable &&
-                section != AppSection.Assistant &&
-                playback.entry != null && playback.track != null
-            if (showMini && playback.track != null) {
-                val currentLogical = queue.currentLogicalIndex
-                Row(
-                    modifier = Modifier
-                        .widthIn(max = AuralisChrome.floatingChromeMaxWidth)
-                        .fillMaxWidth()
-                        .padding(horizontal = AuralisChrome.dockHorizontalPadding),
-                ) {
-                    MiniPlayerBar(
-                        track = playback.track!!,
-                        isPlaying = playback.state is PlaybackState.Playing,
-                        isBuffering = playback.state is PlaybackState.Buffering ||
-                            playback.state is PlaybackState.Stalled ||
-                            playback.state is PlaybackState.Preparing,
-                        canGoPrevious = (currentLogical ?: 0) > 0,
-                        canGoNext = queue.totalCount > (currentLogical ?: -1) + 1,
-                        onOpen = { nowPlayingOpen = true },
-                        onPrevious = { controller.previous() },
-                        onTogglePlayPause = {
-                            if (playback.state is PlaybackState.Playing || playback.state is PlaybackState.Paused) {
-                                controller.togglePlayPause()
-                            }
-                        },
-                        onNext = { controller.next() },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                Spacer(Modifier.height(AuralisChrome.dockSpacing))
-            }
-            Row(
-                modifier = Modifier
-                    .widthIn(max = AuralisChrome.floatingChromeMaxWidth)
-                    .fillMaxWidth()
-                    .padding(horizontal = AuralisChrome.dockHorizontalPadding),
-            ) {
-                BottomDock(
-                    selected = section,
-                    onSelect = { sel ->
-                        nowPlayingOpen = false
-                        searchOpen = false
-                        if (sel == AppSection.Library) {
-                            if (section == AppSection.Library && browseDestination != null) {
-                                browseDestination = null
-                            } else {
-                                section = sel
-                            }
-                        } else {
-                            browseDestination = null
-                            section = sel
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        }
+                .widthIn(max = AuralisChrome.floatingChromeMaxWidth)
+                .fillMaxWidth(),
+        )
 
         if (nowPlayingOpen && playback.track != null) {
             NowPlayingScreen(
