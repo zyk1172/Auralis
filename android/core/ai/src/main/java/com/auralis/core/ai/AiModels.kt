@@ -73,7 +73,7 @@ sealed interface AiToolChoice {
 // 能力与工具模式
 // ---------------------------------------------------------------------------
 
-enum class AiProviderToolMode { None, OpenAiChat, OpenAiResponses }
+enum class AiProviderToolMode { None, OpenAiChat, OpenAiResponses, AnthropicMessages }
 
 /** 当前端点可确认的能力；未知时使用保守默认值（见 [ModelCapabilities.conservative]）。 */
 data class ModelCapabilities(
