@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.auralis.feature.library
 
+import android.content.Context
+import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -52,10 +54,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import android.content.Context
-import androidx.annotation.StringRes
 import com.auralis.core.data.graph.AuralisGraph
-import com.auralis.core.designsystem.AuralisChrome
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
@@ -63,25 +62,21 @@ import com.auralis.core.designsystem.R as AuralisR
 import com.auralis.core.domain.Album
 import com.auralis.core.domain.Artist
 import com.auralis.core.domain.BrowseDestination
-import com.auralis.core.domain.GlobalId
 import com.auralis.core.domain.Playlist
+import com.auralis.core.domain.RecommendationIndexCategory
 import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
+import com.auralis.core.domain.parseRecommendationCategoryId
 import com.auralis.core.image.AuralisArtwork
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
- * 浏览详情（对齐 Swift `BrowseDetailSheet` + `PlaylistTracksView`，S4）。
+ * 浏览详情（对齐 Swift `BrowseDetailSheet` + `PlaylistTracksView`）。
  *
- * - 顶部返回 + 标题 + 右上动作（random/favoriteRandom「换一批」；Playlist 详情歌单管理）。
- * - 列表型目的地（album/artist/favorites/mostPlayed/random/recentlyPlayed/
- *   recentlyAdded/longUnplayed/neverPlayed/favoriteRandom/downloads/genre/
- *   playlist/album detail…）→ 88 头图 + 标题/副标题 + 「播放全部」「下载」（确认弹窗）
- *   + 歌曲清单（点行 = 整组作队列从该行起播）。
- * - `.playlists` → 歌单总览（排序 + 单行删除二次确认；批量删除为后续迭代）。
- * - `.topArtists/.topAlbums` → 按真实播放次数列表，点行推入对应详情（内部返回栈）。
- * - 数据只来自真实本地目录/服务器刷新；失败展示错误与重试，不伪造数据。
+ * R10 把 `.recommendationCategory` 从占位状态切成真实本地索引查询：稳定 category id
+ * 每次进入都会重新解析并通过 RecommendationIndexStore 验证当前 Track content hash，
+ * 索引刷新/曲目元数据改变后不会继续展示旧快照。
  */
 @Composable
 fun BrowseDetailScreen(
@@ -94,13 +89,11 @@ fun BrowseDetailScreen(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
-    // 内部返回栈：topArtists/topAlbums/歌单总览 行点击 → 推入专辑/艺术家/歌单详情。
     var stack by remember { mutableStateOf(listOf(initial)) }
     val current = stack.last()
     val popOrBack = {
         if (stack.size > 1) stack = stack.dropLast(1) else onBack()
     }
-    // 随机类目的地「换一批」与实体名标题（由内容加载完成后上抛）提升到壳层。
     var detailReloadKey by remember { mutableStateOf(0) }
     var titleOverride by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(stack) { titleOverride = null }
@@ -111,7 +104,6 @@ fun BrowseDetailScreen(
             .background(colors.background)
             .statusBarsPadding(),
     ) {
-        // 顶栏
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -157,7 +149,6 @@ fun BrowseDetailScreen(
                     onPlayTracks = onPlayTracks,
                     onPlayNext = onPlayNext,
                     onAppendToQueue = onAppendToQueue,
-                    onOpenNested = { stack = stack + it },
                 )
             }
         }
@@ -186,8 +177,6 @@ internal fun destinationTitle(destination: BrowseDestination): String = when (de
     BrowseDestination.Downloads -> stringResource(AuralisR.string.downloads)
 }
 
-// ================================================================ 通用列表内容
-
 private sealed interface DetailLoad {
     data object Loading : DetailLoad
     data class Error(val message: String) : DetailLoad
@@ -202,7 +191,6 @@ private sealed interface DetailLoad {
 /** 按目的地加载真实数据（本地目录；Playlist 额外先服务器刷新详情）。 */
 private suspend fun loadDetail(context: Context, graph: AuralisGraph, destination: BrowseDestination): DetailLoad {
     val repo = graph.catalogRepository
-    // 目的地未显式带服务器时，落到当前激活服务器（多服务器隔离：绝不跨服务器合并）。
     val active = graph.preferences.activeServerIdFlow.first()?.let { ServerId(it) }
     fun sid() = destination.serverIdOf() ?: active
     return try {
@@ -231,8 +219,8 @@ private suspend fun loadDetail(context: Context, graph: AuralisGraph, destinatio
                     ?: return DetailLoad.Error(context.getString(R.string.library_detail_not_found_playlist))
                 val remote = try {
                     graph.playlistActions.refreshPlaylist(local)
-                } catch (t: Throwable) {
-                    null // 离线/失败：仍展示本地已有曲目（若为空则错误态带重试）
+                } catch (_: Throwable) {
+                    null
                 }
                 val refreshed = remote ?: local
                 val tracks = repo.playlistTracks(refreshed.globalId)
@@ -258,9 +246,18 @@ private suspend fun loadDetail(context: Context, graph: AuralisGraph, destinatio
             is BrowseDestination.Genre -> DetailLoad.Ready(
                 repo.genreTracks(destination.serverId ?: active, destination.name),
             )
-            // AI 推荐索引未迁移：能力说明（空态文案承接），不伪造数据。
-            is BrowseDestination.RecommendationCategory -> DetailLoad.Ready(emptyList())
-            // 其余目的地由上层（总览/列表）处理，不进详情。
+            is BrowseDestination.RecommendationCategory -> {
+                val server = active ?: return DetailLoad.Error(context.getString(R.string.library_server_prompt_help))
+                val (dimension, tagId) = parseRecommendationCategoryId(destination.categoryId)
+                    ?: return DetailLoad.Error(context.getString(R.string.library_category_invalid))
+                val tracks = graph.recommendationIndex.tracksForCategory(server, dimension, tagId, DETAIL_TRACK_CAP)
+                val category = RecommendationIndexCategory(dimension, tagId, tracks.size)
+                DetailLoad.Ready(
+                    tracks = tracks,
+                    headerTitle = recommendationCategoryTitleForContext(context, category),
+                    headerSubtitle = context.getString(R.string.library_track_count_format, tracks.size),
+                )
+            }
             BrowseDestination.Playlists,
             BrowseDestination.TopArtists,
             BrowseDestination.TopAlbums,
@@ -271,13 +268,11 @@ private suspend fun loadDetail(context: Context, graph: AuralisGraph, destinatio
     }
 }
 
-/** 服务器归属：多数列表目的地的 serverId 为空 → 以 active 服务器解析。 */
 private fun BrowseDestination.serverIdOf(): ServerId? = when (this) {
     is BrowseDestination.Genre -> serverId
     else -> null
 }
 
-/** 曲目列表详情（含头图 + 播放全部 + 下载确认）。 */
 @Composable
 private fun DetailTrackContent(
     graph: AuralisGraph,
@@ -287,9 +282,7 @@ private fun DetailTrackContent(
     onPlayTracks: (List<Track>, Int) -> Unit,
     onPlayNext: (List<Track>) -> Unit,
     onAppendToQueue: (List<Track>) -> Unit,
-    onOpenNested: (BrowseDestination) -> Unit,
 ) {
-    val colors = LocalAuralisTheme.current.colors
     val context = LocalContext.current
     var load by remember(destination) { mutableStateOf<DetailLoad>(DetailLoad.Loading) }
     var localReload by remember { mutableStateOf(0) }
@@ -313,9 +306,6 @@ private fun DetailTrackContent(
             onAction = { localReload += 1 },
         )
         is DetailLoad.Ready -> when {
-            // AI 推荐索引：第一版未迁移，展示能力说明（不伪造数据、不给无意义重试）。
-            destination is BrowseDestination.RecommendationCategory ->
-                LibraryEmptyState(stringResource(R.string.library_categories_ai_empty_title), emptyMessage(destination))
             state.tracks.isEmpty() -> LibraryEmptyState(stringResource(R.string.library_no_songs_title), emptyMessage(destination))
             else -> TrackListWithHeader(
                 graph = graph,
@@ -347,7 +337,7 @@ private fun emptyMessage(destination: BrowseDestination): String = when (destina
     is BrowseDestination.Genre -> stringResource(R.string.library_empty_genre)
     BrowseDestination.Random -> stringResource(R.string.library_empty_random)
     is BrowseDestination.Playlist -> stringResource(R.string.library_empty_playlist_detail)
-    is BrowseDestination.RecommendationCategory -> com.auralis.core.domain.Categories.NOT_PORTED_MESSAGE
+    is BrowseDestination.RecommendationCategory -> stringResource(R.string.library_category_empty)
     else -> stringResource(R.string.library_empty_misc)
 }
 
@@ -369,7 +359,6 @@ private fun TrackListWithHeader(
     var confirmingDownload by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var message by remember { mutableStateOf<String?>(null) }
-    // 歌单详情行级「从歌单移除」：选中行 index + busy（弹窗确认后执行）。
     val playlistDestination = destination as? BrowseDestination.Playlist
     var removingIndex by remember { mutableStateOf<Int?>(null) }
     var removingBusy by remember { mutableStateOf(false) }
@@ -464,7 +453,6 @@ private fun TrackListWithHeader(
         }
     }
 
-    // 「从歌单移除」二次确认（对齐 Swift removeFromPlaylist 守卫；远端先行）。
     if (playlistDestination != null) {
         removingIndex?.let { index ->
             AlertDialog(
@@ -529,7 +517,6 @@ private fun TrackListWithHeader(
 
 // ================================================================ 歌单总览与详情
 
-/** 歌单总览（.playlists）：本地歌单列表 + 排序 + 单行删除（二次确认）。 */
 @Composable
 private fun PlaylistOverview(
     graph: AuralisGraph,
@@ -546,7 +533,6 @@ private fun PlaylistOverview(
     val playlists by remember(serverId) { repo.observePlaylists(serverId) }.collectAsState(initial = null)
 
     Column(Modifier.fillMaxSize()) {
-        // 排序工具栏（对齐 Swift PlaylistSortOrder）。
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -668,7 +654,6 @@ private fun PlaylistManageMenu(
     var busy by remember { mutableStateOf(false) }
     var confirmingDelete by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
-    val playlist by remember(destination.playlistId) { mutableStateOf<Playlist?>(null) }
 
     Box {
         IconButton(onClick = { menuOpen = true }) {
@@ -940,4 +925,34 @@ private fun TopAlbumList(
             }
         }
     }
+}
+
+private fun recommendationCategoryTitleForContext(context: Context, category: RecommendationIndexCategory): String {
+    val dimensionRes = when (category.dimension) {
+        "mood" -> R.string.library_category_dimension_mood
+        "scene" -> R.string.library_category_dimension_scene
+        "theme" -> R.string.library_category_dimension_theme
+        "genre" -> R.string.library_category_dimension_genre
+        "style" -> R.string.library_category_dimension_style
+        "vocal" -> R.string.library_category_dimension_vocal
+        "instrument" -> R.string.library_category_dimension_instrument
+        "texture" -> R.string.library_category_dimension_texture
+        "rhythm" -> R.string.library_category_dimension_rhythm
+        "energy" -> R.string.library_category_dimension_energy
+        "tempo" -> R.string.library_category_dimension_tempo
+        "acousticness" -> R.string.library_category_dimension_acousticness
+        "danceability" -> R.string.library_category_dimension_danceability
+        "instrumentalness" -> R.string.library_category_dimension_instrumentalness
+        "liveness" -> R.string.library_category_dimension_liveness
+        "speechiness" -> R.string.library_category_dimension_speechiness
+        "valence" -> R.string.library_category_dimension_valence
+        "complexity" -> R.string.library_category_dimension_complexity
+        else -> R.string.library_scope_categories
+    }
+    val suffix = when (category.dimension) {
+        "energy" -> "${category.tagId}/10"
+        "tempo", "acousticness", "danceability", "instrumentalness", "liveness", "speechiness", "valence", "complexity" -> "${category.tagId}/5"
+        else -> category.tagId
+    }
+    return "${context.getString(dimensionRes)} · $suffix"
 }
