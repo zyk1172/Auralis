@@ -5,6 +5,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.serialization.json.Json
 
 /**
@@ -38,8 +40,10 @@ import kotlinx.serialization.json.Json
         SyncCheckpointEntity::class,
         SyncStagedTrackEntity::class,
         SyncMetaEntity::class,
+        RecommendationIndexStateEntity::class,
+        RecommendationIndexTagEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class AuralisDatabase : RoomDatabase() {
@@ -53,6 +57,52 @@ abstract class AuralisDatabase : RoomDatabase() {
     abstract fun annotationDao(): AnnotationDao
     abstract fun downloadDao(): DownloadDao
     abstract fun syncDao(): SyncDao
+    abstract fun recommendationIndexDao(): RecommendationIndexDao
+}
+
+/**
+ * v1 → v2 只增加 Recommendation Index 两张表，不改任何旧表。
+ *
+ * 迁移必须显式存在：Auralis 的本地目录含收藏、播放历史、不喜欢、下载等用户状态，
+ * 绝不能为了新增推荐索引而 destructive recreate。
+ */
+private val MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `recommendation_index_v2_state` (
+                `global_id` TEXT NOT NULL,
+                `server_id` TEXT NOT NULL,
+                `source_hash` TEXT NOT NULL,
+                `rules_version` TEXT NOT NULL,
+                `classifier` TEXT NOT NULL,
+                `classified_at` INTEGER NOT NULL,
+                `source_hash_version` INTEGER NOT NULL,
+                `semantic_tag_rules_version` INTEGER NOT NULL,
+                PRIMARY KEY(`global_id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_recommendation_index_v2_state_server_id` " +
+                "ON `recommendation_index_v2_state` (`server_id`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `recommendation_index_v2_tags` (
+                `global_id` TEXT NOT NULL,
+                `dimension` TEXT NOT NULL,
+                `value` TEXT NOT NULL,
+                `confidence` REAL NOT NULL,
+                PRIMARY KEY(`global_id`, `dimension`, `value`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_recommendation_index_v2_tags_dimension_value` " +
+                "ON `recommendation_index_v2_tags` (`dimension`, `value`)",
+        )
+    }
 }
 
 object AuralisDatabaseProvider {
@@ -69,6 +119,7 @@ object AuralisDatabaseProvider {
                 AuralisDatabase::class.java,
                 DATABASE_NAME,
             )
+                .addMigrations(MIGRATION_1_2)
                 // 有意不调用 fallbackToDestructiveMigration()：
                 // 正式 catalog 里存有收藏 / 不喜欢 / 播放历史 / 下载记录等本地状态，
                 // 迁移失败宁可让用户看到明确的数据库错误，也不能静默清空。
