@@ -58,6 +58,20 @@
     <string name="library_category_dimension_speechiness">Speechiness</string>
     <string name="library_category_dimension_valence">Valence</string>
     <string name="library_category_dimension_complexity">Complexity</string>
+    <string name="library_recommendation_index_title">Recommendation Index</string>
+    <string name="library_recommendation_index_running_format">Building: %1$d/%2$d tracks processed</string>
+    <string name="library_recommendation_index_error_format">Build failed: %1$s</string>
+    <string name="library_recommendation_index_no_tracks">No synced tracks yet</string>
+    <string name="library_recommendation_index_pending_format">%1$d pending of %2$d tracks</string>
+    <string name="library_recommendation_index_complete_format">Complete: %1$d tracks</string>
+    <string name="library_recommendation_index_start">Build / continue</string>
+    <string name="library_recommendation_index_refresh">Refresh</string>
+    <string name="library_recommendation_playlist">Create recommendation playlist</string>
+    <string name="library_recommendation_playlist_name_format">%1$s Recommendations</string>
+    <string name="library_recommendation_playlist_creating">Creating…</string>
+    <string name="library_recommendation_playlist_created_format">Created playlist “%1$s”</string>
+    <string name="library_recommendation_playlist_failed_format">Could not create recommendation playlist: %1$s</string>
+    <string name="library_recommendation_ranked">Sorted by category match</string>
     <!-- Count / subtitle formats -->
     <string name="library_track_count_format">%1$d songs</string>
     <string name="library_plays_count_format">%1$d plays</string>

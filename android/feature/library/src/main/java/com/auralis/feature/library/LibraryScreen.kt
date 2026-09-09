@@ -73,6 +73,7 @@ import com.auralis.core.domain.FavoriteKind
 import com.auralis.core.domain.Genre
 import com.auralis.core.domain.Playlist
 import com.auralis.core.domain.RecommendationIndexCategory
+import com.auralis.core.domain.RecommendationIndexUiState
 import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
 import com.auralis.core.image.AuralisArtwork
@@ -98,6 +99,10 @@ fun LibraryScreen(
     onPlayNext: (List<Track>) -> Unit,
     onAppendToQueue: (List<Track>) -> Unit,
     onBrowse: (BrowseDestination) -> Unit,
+    recommendationIndexState: RecommendationIndexUiState = RecommendationIndexUiState(),
+    onStartRecommendationIndex: () -> Unit = {},
+    onCancelRecommendationIndex: () -> Unit = {},
+    onRefreshRecommendationIndex: () -> Unit = {},
     bottomChromeClearance: Dp = AuralisChrome.expandedInteractionHeight,
     modifier: Modifier = Modifier,
 ) {
@@ -201,6 +206,10 @@ fun LibraryScreen(
                         graph = graph,
                         serverId = serverId,
                         onBrowse = onBrowse,
+                        recommendationIndexState = recommendationIndexState,
+                        onStartRecommendationIndex = onStartRecommendationIndex,
+                        onCancelRecommendationIndex = onCancelRecommendationIndex,
+                        onRefreshRecommendationIndex = onRefreshRecommendationIndex,
                         bottomPadding = bottomChromeClearance,
                     )
                 }
@@ -380,6 +389,10 @@ private fun CategoryScope(
     graph: AuralisGraph,
     serverId: ServerId?,
     onBrowse: (BrowseDestination) -> Unit,
+    recommendationIndexState: RecommendationIndexUiState,
+    onStartRecommendationIndex: () -> Unit,
+    onCancelRecommendationIndex: () -> Unit,
+    onRefreshRecommendationIndex: () -> Unit,
     bottomPadding: Dp,
 ) {
     if (serverId == null) return ServerPrompt()
@@ -394,6 +407,14 @@ private fun CategoryScope(
             .onSuccess { categories = it.sortedWith(compareByDescending<RecommendationIndexCategory> { item -> item.trackCount }.thenBy { item -> item.id }) }
             .onFailure { throwable -> error = throwable.message ?: throwable::class.java.simpleName }
     }
+    LaunchedEffect(recommendationIndexState.lastCompletedAtMillis) {
+        if (recommendationIndexState.lastCompletedAtMillis != null) reload += 1
+    }
+
+    val refreshIndexAndCategories = {
+        onRefreshRecommendationIndex()
+        reload += 1
+    }
 
     val loadError = error
     when {
@@ -404,27 +425,107 @@ private fun CategoryScope(
             onAction = { reload += 1 },
         )
         categories == null -> LibraryLoadingBox(stringResource(R.string.library_loading_categories))
-        categories!!.isEmpty() -> LibraryEmptyState(
-            stringResource(R.string.library_categories_ai_empty_title),
-            stringResource(R.string.library_categories_ai_empty_help),
-        )
-        else -> LazyVerticalGrid(
-            columns = GridCells.Adaptive(158.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-            contentPadding = PaddingValues(
-                start = 20.dp,
-                end = 20.dp,
-                top = 20.dp,
-                bottom = bottomPadding + 20.dp,
-            ),
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            items(categories!!, key = { it.id }) { category ->
-                RecommendationCategoryCard(category = category) {
-                    onBrowse(BrowseDestination.RecommendationCategory(category.id))
+        categories!!.isEmpty() -> Column(Modifier.fillMaxSize()) {
+            RecommendationIndexStatusCard(
+                state = recommendationIndexState,
+                onStart = onStartRecommendationIndex,
+                onCancel = onCancelRecommendationIndex,
+                onRefresh = refreshIndexAndCategories,
+            )
+            LibraryEmptyState(
+                stringResource(R.string.library_categories_ai_empty_title),
+                stringResource(R.string.library_categories_ai_empty_help),
+                modifier = Modifier.weight(1f),
+            )
+        }
+        else -> Column(Modifier.fillMaxSize()) {
+            RecommendationIndexStatusCard(
+                state = recommendationIndexState,
+                onStart = onStartRecommendationIndex,
+                onCancel = onCancelRecommendationIndex,
+                onRefresh = refreshIndexAndCategories,
+            )
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(158.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                contentPadding = PaddingValues(
+                    start = 20.dp,
+                    end = 20.dp,
+                    top = 12.dp,
+                    bottom = bottomPadding + 20.dp,
+                ),
+                modifier = Modifier.weight(1f),
+            ) {
+                items(categories!!, key = { it.id }) { category ->
+                    RecommendationCategoryCard(category = category) {
+                        onBrowse(BrowseDestination.RecommendationCategory(category.id))
+                    }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun RecommendationIndexStatusCard(
+    state: RecommendationIndexUiState,
+    onStart: () -> Unit,
+    onCancel: () -> Unit,
+    onRefresh: () -> Unit,
+) {
+    val colors = LocalAuralisTheme.current.colors
+    val error = state.error
+    val statusText = when {
+        state.isRunning -> stringResource(
+            R.string.library_recommendation_index_running_format,
+            state.indexedTracks,
+            state.totalTracks,
+        )
+        error != null -> stringResource(R.string.library_recommendation_index_error_format, error)
+        state.totalTracks == 0 -> stringResource(R.string.library_recommendation_index_no_tracks)
+        state.pendingTracks > 0 -> stringResource(
+            R.string.library_recommendation_index_pending_format,
+            state.pendingTracks,
+            state.totalTracks,
+        )
+        else -> stringResource(R.string.library_recommendation_index_complete_format, state.indexedTracks)
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 12.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(colors.surface)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.library_recommendation_index_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.primaryText,
+                )
+                Text(statusText, style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+            }
+            if (state.isRunning) {
+                TextButton(onClick = onCancel) { Text(stringResource(AuralisR.string.cancel)) }
+            } else if (state.pendingTracks > 0) {
+                TextButton(onClick = onStart) { Text(stringResource(R.string.library_recommendation_index_start)) }
+            } else if (state.error != null) {
+                TextButton(onClick = onStart) { Text(stringResource(AuralisR.string.retry)) }
+            } else {
+                TextButton(onClick = onRefresh) { Text(stringResource(R.string.library_recommendation_index_refresh)) }
+            }
+        }
+        if (state.isRunning && state.totalTracks > 0) {
+            androidx.compose.material3.LinearProgressIndicator(
+                progress = { (state.indexedTracks.toFloat() / state.totalTracks).coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+                color = colors.accent,
+            )
         }
     }
 }
@@ -483,7 +584,7 @@ internal fun recommendationCategoryTitle(category: RecommendationIndexCategory):
     val suffix = when (category.dimension) {
         "energy" -> "${category.tagId}/10"
         "tempo", "acousticness", "danceability", "instrumentalness", "liveness", "speechiness", "valence", "complexity" -> "${category.tagId}/5"
-        else -> category.tagId
+        else -> com.auralis.core.domain.RecommendationIndexTaxonomy.definition(category.tagId)?.displayName ?: category.tagId
     }
     return "$dimension · $suffix"
 }

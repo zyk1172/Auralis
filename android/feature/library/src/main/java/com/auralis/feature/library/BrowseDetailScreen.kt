@@ -64,6 +64,7 @@ import com.auralis.core.domain.Artist
 import com.auralis.core.domain.BrowseDestination
 import com.auralis.core.domain.Playlist
 import com.auralis.core.domain.RecommendationIndexCategory
+import com.auralis.core.domain.RecommendationIndexTaxonomy
 import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
 import com.auralis.core.domain.parseRecommendationCategoryId
@@ -255,7 +256,8 @@ private suspend fun loadDetail(context: Context, graph: AuralisGraph, destinatio
                 DetailLoad.Ready(
                     tracks = tracks,
                     headerTitle = recommendationCategoryTitleForContext(context, category),
-                    headerSubtitle = context.getString(R.string.library_track_count_format, tracks.size),
+                    headerSubtitle = context.getString(R.string.library_recommendation_ranked) + " · " +
+                        context.getString(R.string.library_track_count_format, tracks.size),
                 )
             }
             BrowseDestination.Playlists,
@@ -357,6 +359,7 @@ private fun TrackListWithHeader(
     val colors = LocalAuralisTheme.current.colors
     val context = LocalContext.current
     var confirmingDownload by remember { mutableStateOf(false) }
+    var creatingRecommendationPlaylist by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var message by remember { mutableStateOf<String?>(null) }
     val playlistDestination = destination as? BrowseDestination.Playlist
@@ -411,6 +414,55 @@ private fun TrackListWithHeader(
                             Icon(Icons.Filled.ArrowDownward, null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(AuralisSpacing.small))
                             Text(stringResource(R.string.library_download_action))
+                        }
+                        if (destination is BrowseDestination.RecommendationCategory) {
+                            OutlinedButton(
+                                onClick = {
+                                    if (!creatingRecommendationPlaylist) {
+                                        val targetServer = serverId ?: load.tracks.firstOrNull()?.serverId
+                                        if (targetServer == null) {
+                                            message = context.getString(R.string.library_server_prompt_help)
+                                        } else {
+                                            creatingRecommendationPlaylist = true
+                                            scope.launch {
+                                                runCatching {
+                                                    graph.playlistActions.createPlaylist(
+                                                        name = context.getString(
+                                                            R.string.library_recommendation_playlist_name_format,
+                                                            load.headerTitle ?: context.getString(R.string.library_dest_recommendation_category),
+                                                        ),
+                                                        serverId = targetServer,
+                                                        trackIds = load.tracks.map { it.id.value },
+                                                    )
+                                                }
+                                                    .onSuccess { playlist ->
+                                                        message = if (playlist == null) {
+                                                            context.getString(R.string.library_duplicate_server_failed)
+                                                        } else {
+                                                            context.getString(R.string.library_recommendation_playlist_created_format, playlist.name)
+                                                        }
+                                                    }
+                                                    .onFailure { error ->
+                                                        message = context.getString(R.string.library_recommendation_playlist_failed_format, error.message)
+                                                    }
+                                                creatingRecommendationPlaylist = false
+                                            }
+                                        }
+                                    }
+                                },
+                                enabled = load.tracks.isNotEmpty() && !creatingRecommendationPlaylist,
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = AuralisSpacing.medium, vertical = 6.dp),
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.QueueMusic, null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(AuralisSpacing.small))
+                                Text(
+                                    if (creatingRecommendationPlaylist) {
+                                        stringResource(R.string.library_recommendation_playlist_creating)
+                                    } else {
+                                        stringResource(R.string.library_recommendation_playlist)
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -952,7 +1004,7 @@ private fun recommendationCategoryTitleForContext(context: Context, category: Re
     val suffix = when (category.dimension) {
         "energy" -> "${category.tagId}/10"
         "tempo", "acousticness", "danceability", "instrumentalness", "liveness", "speechiness", "valence", "complexity" -> "${category.tagId}/5"
-        else -> category.tagId
+        else -> RecommendationIndexTaxonomy.definition(category.tagId)?.displayName ?: category.tagId
     }
     return "${context.getString(dimensionRes)} · $suffix"
 }

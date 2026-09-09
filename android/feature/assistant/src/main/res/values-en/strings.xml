@@ -85,6 +85,8 @@
     <string name="assistant_tool_save_queue_as_playlist">Save queue as playlist</string>
     <string name="assistant_tool_find_similar">Find similar songs</string>
     <string name="assistant_tool_replace_queue">Replace playback queue</string>
+    <string name="assistant_tool_recommendation_category">Read recommendation category</string>
+    <string name="assistant_tool_recommendation_playlist">Create recommendation playlist</string>
     <string name="assistant_tool_online_search">Search online</string>
     <string name="assistant_tool_search_tracks">Search tracks</string>
     <string name="assistant_tool_search_albums">Search albums</string>

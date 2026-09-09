@@ -239,6 +239,26 @@ class AssistantToolHost(
             }.toString()
         }
 
+        ro(
+            "recommendation_category_tracks",
+            "从已建立的本地 Recommendation Index 按固定分类返回歌曲；结果按分类置信度和标题稳定排序。",
+            """{"properties":{"dimension":{"type":"string"},"tagID":{"type":"string"},"limit":{"type":"integer"}},"required":["dimension","tagID"],"type":"object"}""",
+        ) { args ->
+            val serverId = activeServerId() ?: throw IllegalArgumentException("没有已连接的服务器")
+            val dimension = args.string("dimension")?.trim().orEmpty()
+            val tagId = args.string("tagID")?.trim().orEmpty()
+            if (dimension.isBlank() || tagId.isBlank()) throw IllegalArgumentException("dimension 和 tagID 不能为空")
+            val limit = args.int("limit")?.coerceIn(1, 100) ?: 30
+            val tracks = graph.recommendationIndex.tracksForCategory(serverId, dimension, tagId, limit)
+            buildJsonObject {
+                put("ok", true)
+                put("serverID", serverId.value)
+                put("category", "$dimension:$tagId")
+                put("count", tracks.size)
+                put("tracks", trackSummaries(tracks, limit))
+            }.toString()
+        }
+
         ro("searchTracks", "在本地音乐库中按名称搜索歌曲（返回结构化列表；无结果显示，可再用 server_search 在线搜索）。", """{"properties":{"q":{"type":"string"},"limit":{"type":"integer"}},"required":["q"],"type":"object"}""") { args ->
             val q = args.string("q") ?: ""
             val limit = args.int("limit")?.coerceIn(1, 50) ?: 20
@@ -415,6 +435,37 @@ class AssistantToolHost(
             val start = (args.int("startIndex") ?: 0).coerceIn(0, tracks.lastIndex)
             controller.playQueue(tracks.map { QueueEntry.of(it) }, start)
             "已替换播放队列：共 ${tracks.size} 首，从《${tracks[start].title}》开始播放。"
+        }
+
+        write(
+            "recommendation_create_playlist",
+            "将本地 Recommendation Index 的一个固定分类按置信度排序生成远端歌单。",
+            """{"properties":{"name":{"type":"string"},"dimension":{"type":"string"},"tagID":{"type":"string"},"limit":{"type":"integer"}},"required":["name","dimension","tagID"],"type":"object"}""",
+        ) { args ->
+            val serverId = activeServerId() ?: throw IllegalArgumentException("没有已连接的服务器")
+            val name = args.string("name")?.trim().orEmpty()
+            val dimension = args.string("dimension")?.trim().orEmpty()
+            val tagId = args.string("tagID")?.trim().orEmpty()
+            if (name.isBlank() || dimension.isBlank() || tagId.isBlank()) {
+                throw IllegalArgumentException("name、dimension 和 tagID 不能为空")
+            }
+            val limit = args.int("limit")?.coerceIn(1, 200) ?: 50
+            val tracks = graph.recommendationIndex.tracksForCategory(serverId, dimension, tagId, limit)
+            if (tracks.isEmpty()) throw IllegalArgumentException("该推荐分类没有可用歌曲")
+            val playlist = graph.playlistActions.createPlaylist(
+                name = name,
+                serverId = serverId,
+                trackIds = tracks.map { it.id.value },
+            ) ?: throw IllegalStateException("服务器没有返回新建歌单")
+            buildJsonObject {
+                put("ok", true)
+                put("name", playlist.name)
+                put("trackCount", tracks.size)
+                putJsonObject("globalID") {
+                    put("serverID", playlist.serverId.value)
+                    put("remoteID", playlist.id.value)
+                }
+            }.toString()
         }
 
         ro("server_list", "列出已连接的服务器。", emptyParams()) {
@@ -766,6 +817,8 @@ class AssistantToolHost(
             "queue_remove" -> R.string.assistant_tool_remove_queue_item
             "queue_save_as_playlist" -> R.string.assistant_tool_save_queue_as_playlist
             "library_get_similar_songs" -> R.string.assistant_tool_find_similar
+            "recommendation_category_tracks" -> R.string.assistant_tool_recommendation_category
+            "recommendation_create_playlist" -> R.string.assistant_tool_recommendation_playlist
             "queue_replace" -> R.string.assistant_tool_replace_queue
             "server_search" -> R.string.assistant_tool_online_search
             "searchTracks" -> R.string.assistant_tool_search_tracks

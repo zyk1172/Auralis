@@ -31,6 +31,7 @@ import com.auralis.core.designsystem.LocalReduceMotion
 import com.auralis.core.domain.BrowseDestination
 import com.auralis.core.domain.PlaybackState
 import com.auralis.core.domain.QueueEntry
+import com.auralis.core.domain.RecommendationIndexUiState
 import com.auralis.core.domain.Track
 import com.auralis.core.playback.LocalPlaybackHost
 import com.auralis.core.playback.PlaybackController
@@ -64,6 +65,9 @@ fun MobileShell(
     onOpenSettings: () -> Unit,
     onOpenAiSettings: () -> Unit,
     onOpenEditHomeLayout: () -> Unit,
+    recommendationIndexState: RecommendationIndexUiState = RecommendationIndexUiState(),
+    startRecommendationIndexToken: Int = 0,
+    onRecommendationIndexStartConsumed: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
@@ -95,6 +99,16 @@ fun MobileShell(
     LaunchedEffect(section) {
         // Apple resets the shared HomeChromeState whenever the top-level section changes.
         dockCompactTarget = false
+    }
+
+    LaunchedEffect(startRecommendationIndexToken) {
+        if (startRecommendationIndexToken > 0) {
+            section = AppSection.Assistant
+            browseDestination = null
+            nowPlayingOpen = false
+            assistantCoordinator.startRecommendationIndexBuild()
+            onRecommendationIndexStartConsumed()
+        }
     }
     LaunchedEffect(canCompactDock) {
         if (!canCompactDock) dockCompactTarget = false
@@ -223,6 +237,13 @@ fun MobileShell(
                     onPlayNext = ::playNextShelf,
                     onAppendToQueue = ::appendQueueShelf,
                     onBrowse = ::openBrowse,
+                    recommendationIndexState = recommendationIndexState,
+                    onStartRecommendationIndex = {
+                        section = AppSection.Assistant
+                        assistantCoordinator.startRecommendationIndexBuild()
+                    },
+                    onCancelRecommendationIndex = assistantCoordinator::cancelRecommendationIndexBuild,
+                    onRefreshRecommendationIndex = assistantCoordinator::refreshRecommendationIndexStatus,
                     bottomChromeClearance = scrollBottomClearance,
                     modifier = dockScrollModifier(),
                 )

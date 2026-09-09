@@ -59,6 +59,20 @@
     <string name="library_category_dimension_speechiness">人声密度</string>
     <string name="library_category_dimension_valence">情感正负</string>
     <string name="library_category_dimension_complexity">复杂度</string>
+    <string name="library_recommendation_index_title">推荐索引</string>
+    <string name="library_recommendation_index_running_format">正在建立：已处理 %1$d/%2$d 首</string>
+    <string name="library_recommendation_index_error_format">建立失败：%1$s</string>
+    <string name="library_recommendation_index_no_tracks">暂无已同步曲目</string>
+    <string name="library_recommendation_index_pending_format">待处理 %1$d 首（共 %2$d 首）</string>
+    <string name="library_recommendation_index_complete_format">已完成 %1$d 首</string>
+    <string name="library_recommendation_index_start">建立/继续</string>
+    <string name="library_recommendation_index_refresh">刷新</string>
+    <string name="library_recommendation_playlist">生成推荐歌单</string>
+    <string name="library_recommendation_playlist_name_format">%1$s 推荐</string>
+    <string name="library_recommendation_playlist_creating">正在生成…</string>
+    <string name="library_recommendation_playlist_created_format">已生成歌单「%1$s」</string>
+    <string name="library_recommendation_playlist_failed_format">生成推荐歌单失败：%1$s</string>
+    <string name="library_recommendation_ranked">按分类匹配度排序</string>
     <!-- 计数/副标题格式 -->
     <string name="library_track_count_format">%1$d 首歌曲</string>
     <string name="library_plays_count_format">%1$d 次播放</string>
