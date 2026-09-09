@@ -46,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -71,6 +72,7 @@ import com.auralis.core.domain.BrowseDestination
 import com.auralis.core.domain.FavoriteKind
 import com.auralis.core.domain.Genre
 import com.auralis.core.domain.Playlist
+import com.auralis.core.domain.RecommendationIndexCategory
 import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
 import com.auralis.core.image.AuralisArtwork
@@ -83,6 +85,9 @@ import kotlinx.coroutines.launch
  * single segmented picker and divider. Scrollable scopes reserve the same dynamic bottom-chrome
  * clearance as Apple's `reportsBottomDockScroll`, so the final row/card never sits underneath the
  * morphing dock while wide screens stay inside the shared 960pt readable width.
+ *
+ * R10: Categories 不再是占位页；直接读取与 Apple 同表语义的 Recommendation Index v3，
+ * 平铺所有有效分类并按歌曲数排序，点击后使用稳定 category id 进入真实歌曲详情。
  */
 @Composable
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -192,7 +197,12 @@ fun LibraryScreen(
                         onBrowse = onBrowse,
                         bottomPadding = bottomChromeClearance,
                     )
-                    LibraryScope.Categories -> CategoryScope()
+                    LibraryScope.Categories -> CategoryScope(
+                        graph = graph,
+                        serverId = serverId,
+                        onBrowse = onBrowse,
+                        bottomPadding = bottomChromeClearance,
+                    )
                 }
             }
         }
@@ -361,9 +371,142 @@ private fun GenreScope(
     }
 }
 
+/**
+ * Apple Categories = 所有固定 taxonomy 分类直接平铺，不先选维度。
+ * 只展示 RecommendationIndexStore 判定 content hash 仍有效的分类，旧元数据分类不会漏进 UI。
+ */
 @Composable
-private fun CategoryScope() {
-    LibraryEmptyState(stringResource(R.string.library_categories_ai_title), com.auralis.core.domain.Categories.NOT_PORTED_MESSAGE)
+private fun CategoryScope(
+    graph: AuralisGraph,
+    serverId: ServerId?,
+    onBrowse: (BrowseDestination) -> Unit,
+    bottomPadding: Dp,
+) {
+    if (serverId == null) return ServerPrompt()
+    var categories by remember(serverId) { mutableStateOf<List<RecommendationIndexCategory>?>(null) }
+    var error by remember(serverId) { mutableStateOf<String?>(null) }
+    var reload by remember(serverId) { mutableIntStateOf(0) }
+
+    LaunchedEffect(serverId, reload) {
+        categories = null
+        error = null
+        runCatching { graph.recommendationIndex.categories(serverId) }
+            .onSuccess { categories = it.sortedWith(compareByDescending<RecommendationIndexCategory> { item -> item.trackCount }.thenBy { item -> item.id }) }
+            .onFailure { throwable -> error = throwable.message ?: throwable::class.java.simpleName }
+    }
+
+    when {
+        error != null -> LibraryEmptyState(
+            stringResource(R.string.library_load_failed_title),
+            stringResource(R.string.library_load_failed_format, error),
+            actionLabel = stringResource(AuralisR.string.retry),
+            onAction = { reload += 1 },
+        )
+        categories == null -> LibraryLoadingBox(stringResource(R.string.library_loading_categories))
+        categories!!.isEmpty() -> LibraryEmptyState(
+            stringResource(R.string.library_categories_ai_empty_title),
+            stringResource(R.string.library_categories_ai_empty_help),
+        )
+        else -> LazyVerticalGrid(
+            columns = GridCells.Adaptive(158.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            contentPadding = PaddingValues(
+                start = 20.dp,
+                end = 20.dp,
+                top = 20.dp,
+                bottom = bottomPadding + 20.dp,
+            ),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            items(categories!!, key = { it.id }) { category ->
+                RecommendationCategoryCard(category = category) {
+                    onBrowse(BrowseDestination.RecommendationCategory(category.id))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecommendationCategoryCard(
+    category: RecommendationIndexCategory,
+    onClick: () -> Unit,
+) {
+    val colors = LocalAuralisTheme.current.colors
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 94.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(colors.surface)
+            .clickable(onClick = onClick)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // Android 没有 SF Symbols；使用音乐分类的稳定平台等价图标，不复制 Apple 字体资源。
+            Icon(
+                Icons.AutoMirrored.Filled.QueueMusic,
+                contentDescription = null,
+                tint = colors.accent,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                category.trackCount.toString(),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.secondaryText,
+            )
+        }
+        Text(
+            recommendationCategoryTitle(category),
+            style = MaterialTheme.typography.titleSmall,
+            color = colors.primaryText,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            stringResource(R.string.library_track_count_format, category.trackCount),
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.secondaryText,
+        )
+    }
+}
+
+@Composable
+internal fun recommendationCategoryTitle(category: RecommendationIndexCategory): String {
+    val dimension = stringResource(recommendationDimensionTitleRes(category.dimension))
+    val suffix = when (category.dimension) {
+        "energy" -> "${category.tagId}/10"
+        "tempo", "acousticness", "danceability", "instrumentalness", "liveness", "speechiness", "valence", "complexity" -> "${category.tagId}/5"
+        else -> category.tagId
+    }
+    return "$dimension · $suffix"
+}
+
+private fun recommendationDimensionTitleRes(dimension: String): Int = when (dimension) {
+    "mood" -> R.string.library_category_dimension_mood
+    "scene" -> R.string.library_category_dimension_scene
+    "theme" -> R.string.library_category_dimension_theme
+    "genre" -> R.string.library_category_dimension_genre
+    "style" -> R.string.library_category_dimension_style
+    "vocal" -> R.string.library_category_dimension_vocal
+    "instrument" -> R.string.library_category_dimension_instrument
+    "texture" -> R.string.library_category_dimension_texture
+    "rhythm" -> R.string.library_category_dimension_rhythm
+    "energy" -> R.string.library_category_dimension_energy
+    "tempo" -> R.string.library_category_dimension_tempo
+    "acousticness" -> R.string.library_category_dimension_acousticness
+    "danceability" -> R.string.library_category_dimension_danceability
+    "instrumentalness" -> R.string.library_category_dimension_instrumentalness
+    "liveness" -> R.string.library_category_dimension_liveness
+    "speechiness" -> R.string.library_category_dimension_speechiness
+    "valence" -> R.string.library_category_dimension_valence
+    "complexity" -> R.string.library_category_dimension_complexity
+    else -> R.string.library_scope_categories
 }
 
 @Composable
