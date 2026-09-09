@@ -110,11 +110,12 @@ internal fun NowPlayingArtworkGlow(
                     }
                     .blur(blurRadius)
                     .drawWithCache {
+                        val maskCenter = Offset(size.width / 2f, size.height / 2f)
                         val radialMask = Brush.radialGradient(
                             0.0f to Color.White,
                             0.56f to Color.White.copy(alpha = 0.72f),
                             1.0f to Color.Transparent,
-                            center = center,
+                            center = maskCenter,
                             radius = size.minDimension * 0.50f,
                         )
                         onDrawWithContent {
