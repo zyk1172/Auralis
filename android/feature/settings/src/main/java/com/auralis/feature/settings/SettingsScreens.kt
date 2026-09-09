@@ -129,13 +129,14 @@ private fun RecommendationIndexSettingsCard(
     onRefresh: () -> Unit,
 ) {
     val colors = LocalAuralisTheme.current.colors
+    val error = state.error
     val status = when {
         state.isRunning -> stringResource(
             R.string.settings_recommendation_index_running_format,
             state.indexedTracks,
             state.totalTracks,
         )
-        state.error != null -> stringResource(R.string.settings_recommendation_index_error_format, state.error)
+        error != null -> stringResource(R.string.settings_recommendation_index_error_format, error)
         state.totalTracks == 0 -> stringResource(R.string.settings_recommendation_index_no_tracks)
         state.pendingTracks > 0 -> stringResource(
             R.string.settings_recommendation_index_pending_format,
