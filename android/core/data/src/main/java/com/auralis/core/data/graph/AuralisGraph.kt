@@ -12,6 +12,7 @@ import com.auralis.core.data.connector.ServerClientRegistry
 import com.auralis.core.data.db.AuralisDatabase
 import com.auralis.core.data.db.AuralisDatabaseProvider
 import com.auralis.core.data.prefs.AuralisPreferences
+import com.auralis.core.data.repository.RecommendationIndexStore
 import com.auralis.core.data.repository.RoomCatalogRepository
 import com.auralis.core.data.repository.RoomLyricsRepository
 import com.auralis.core.domain.GlobalId
@@ -33,7 +34,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
@@ -42,8 +42,8 @@ import java.util.concurrent.TimeUnit
  * Auralis 组合根（对应 Apple `ApplicationComposition`）。
  *
  * 铁律：
- * - **数据库进程单例**：Connector / 仓储 / 搜索 / AI Tool Runtime 共用同一个
- *   [AuralisDatabaseProvider] 实例，杜绝 catalog split-brain；
+ * - **数据库进程单例**：Connector / 仓储 / Search / Recommendation Index / AI Tool Runtime
+ *   共用同一个 [AuralisDatabaseProvider] 实例，杜绝 catalog split-brain；
  * - **服务器客户端唯一来源是 [ServerClientRegistry]**（connector 持有）。Graph 不再
  *   维护第二份易漂移的 accountCache：resolveStream / download / cover 一律
  *   `registry.client(serverId)` 取当前真正可用的端点；
@@ -70,6 +70,9 @@ class AuralisGraph(context: Context) {
         downloadDao = database.downloadDao(),
         syncDao = database.syncDao(),
     )
+
+    /** 与 Catalog 使用同一个 Room 实例；Categories / Agent classifier 只能从这里访问索引。 */
+    val recommendationIndex = RecommendationIndexStore(database)
 
     val connector = ProductionServerConnector(vault, catalogRepository)
 
@@ -136,11 +139,14 @@ class AuralisGraph(context: Context) {
 
     /**
      * 忘记服务器：删除 server-scoped 目录/凭据/客户端，并处理 active 切换。
+     * Recommendation tag 表没有外键级 server_id，所以 connector 成功删除服务器后还必须
+     * 显式清掉对应 state/tags，否则会留下永远不可达的索引孤儿。
      * @return 切换后应激活的服务器（null = 无服务器）。
      */
     suspend fun forgetServer(serverId: ServerId): ServerId? {
         val wasActive = preferences.activeServerIdValue() == serverId.value
         connector.forgetServer(serverId)
+        recommendationIndex.clear(serverId)
         preferences.clearEndpointKind(serverId.value)
         val remaining = catalogRepository.servers()
         val next = if (wasActive) {
@@ -187,7 +193,6 @@ class AuralisGraph(context: Context) {
         streamUrlProvider = streamUrlProvider,
     )
 
-    /** 下载器：进程级，由 DownloadService 持有。 */
     /** 歌词：本地优先（Room），未命中才走当前服务器客户端（结构化 → 纯文本兜底）。 */
     val lyricsService: com.auralis.core.lyrics.LyricsServiceImpl by lazy {
         com.auralis.core.lyrics.LyricsServiceImpl(
@@ -196,6 +201,7 @@ class AuralisGraph(context: Context) {
         )
     }
 
+    /** 下载器：进程级，由 DownloadService 持有。 */
     val downloadManager: DownloadManager by lazy {
         DownloadManager(
             context = appContext,
