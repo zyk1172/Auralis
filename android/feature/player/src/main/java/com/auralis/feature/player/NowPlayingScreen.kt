@@ -6,6 +6,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -52,8 +53,6 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.filled.ThumbDown
-import androidx.compose.material.icons.outlined.ThumbDown
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -63,8 +62,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -82,8 +79,10 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -127,10 +126,7 @@ import kotlinx.coroutines.yield
  * - 宽屏内容封顶 680dp，保持 iPad/Android 平板与手机为同一套布局而不是横向拉伸；
  * - 顶部用模态下收语义而非返回导航语义，分段控件按系统 segmented geometry 收紧；
  * - 播放内容按 Apple 的 650pt 高度阈值在 10/15dp 间距和 56/64dp 主播放键之间切换；
- * - **标题·进度·传输区固定在最下方**（切页不跳动）：标题/艺人跑马灯、收藏心形、
- *   可拖动进度条（松手才 seek）、五键传输（模式循环/上一首/播放暂停/下一首/⋯）、音量、音频信息；
- * - 歌词页按真实播放位置高亮并以中心锚点滚动，无歌词给空态；
- * - 队列页复用 Apple TrackRow 密度和 42% surface 容器；编辑仍按 occurrence UUID 操作。
+ * - 标题、歌词、队列、ThinSlider 和更多菜单均以 Swift 当前实现为产品规格。
  */
 @Composable
 fun NowPlayingScreen(
@@ -220,7 +216,6 @@ fun NowPlayingScreen(
             PlayerPageSelector(selected = page, onSelect = { pageOrdinal = it.ordinal })
             Spacer(Modifier.height(AuralisSpacing.large))
 
-            // Swift 的 GeometryReader 同时包住上方内容和固定控制区：剩余高度 <650 时压缩节奏。
             BoxWithConstraints(
                 modifier = Modifier
                     .weight(1f)
@@ -247,7 +242,7 @@ fun NowPlayingScreen(
                                 track = track,
                                 isPlaying = playback.state is PlaybackState.Playing,
                             )
-                            PlayerTab.Queue -> QueueContent(graph, queue = queue, controller = controller)
+                            PlayerTab.Queue -> QueueContent(queue = queue, controller = controller)
                         }
                     }
 
@@ -401,7 +396,6 @@ private fun LyricsContent(graph: AuralisGraph, track: Track, positionMs: Long) {
                 null
             }
 
-            // Swift `.scrollPosition(anchor: .center)`：等待一次布局，再把活动行尽量放到视口中心。
             LaunchedEffect(activeIndex, doc.globalId, reduceMotion) {
                 val target = activeIndex ?: return@LaunchedEffect
                 if (target !in doc.lines.indices) return@LaunchedEffect
@@ -490,7 +484,6 @@ private fun EmptyLyricsHint(primary: Color, secondary: Color) {
 
 @Composable
 private fun QueueContent(
-    graph: AuralisGraph,
     queue: QueueSnapshot,
     controller: PlaybackController,
 ) {
@@ -520,7 +513,6 @@ private fun QueueContent(
             itemsIndexed(entries, key = { _, entry -> entry.id.value }) { windowIndex, entry ->
                 val isCurrent = queue.currentEntryId == entry.id
                 QueueRow(
-                    graph = graph,
                     entry = entry,
                     logicalIndex = queue.windowStartLogicalIndex + windowIndex,
                     isCurrent = isCurrent,
@@ -553,7 +545,6 @@ private fun QueueContent(
 
 @Composable
 private fun QueueRow(
-    graph: AuralisGraph,
     entry: QueueEntry,
     logicalIndex: Int,
     isCurrent: Boolean,
@@ -669,7 +660,8 @@ private fun PlaybackControlsArea(
     val scope = rememberCoroutineScope()
     var menuOpen by remember { mutableStateOf(false) }
     var addToPlaylist by remember { mutableStateOf(false) }
-    var showInfo by remember { mutableStateOf(false) }
+    var showAudioInfo by remember { mutableStateOf(false) }
+    var showTrackInfo by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     val download by remember(track.globalId) { graph.catalogRepository.observe(track.globalId) }.collectAsState(initial = null)
     var albumGlobalId by remember { mutableStateOf<GlobalId?>(null) }
@@ -721,11 +713,9 @@ private fun PlaybackControlsArea(
                     },
                     modifier = Modifier.size(44.dp),
                 ) {
-                    Icon(
-                        if (isDisliked) Icons.Filled.ThumbDown else Icons.Outlined.ThumbDown,
-                        contentDescription = stringResource(if (isDisliked) AuralisR.string.undislike else AuralisR.string.dislike),
+                    DislikeIcon(
+                        active = isDisliked,
                         tint = if (isDisliked) colors.accent else colors.secondaryText,
-                        modifier = Modifier.size(24.dp),
                     )
                 }
                 IconButton(
@@ -748,16 +738,20 @@ private fun PlaybackControlsArea(
         }
 
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(AuralisSpacing.xSmall)) {
-            Slider(
-                value = if (dragging) dragFraction else if (durationMs > 0) (displayMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f,
-                onValueChange = onDragFraction,
-                onValueChangeFinished = onDragEnd,
+            val progress = if (dragging) {
+                dragFraction
+            } else if (durationMs > 0) {
+                (displayMs.toFloat() / durationMs).coerceIn(0f, 1f)
+            } else {
+                0f
+            }
+            AuralisThinSlider(
+                value = progress,
+                accent = colors.accent,
+                track = colors.separator.copy(alpha = 0.4f),
                 enabled = durationMs > 0,
-                colors = SliderDefaults.colors(
-                    thumbColor = Color.White,
-                    activeTrackColor = colors.accent,
-                    inactiveTrackColor = colors.separator.copy(alpha = 0.4f),
-                ),
+                onEditingChanged = { editing -> if (!editing) onDragEnd() },
+                onValueChanged = onDragFraction,
             )
             Row(Modifier.fillMaxWidth()) {
                 Text(formatClock(displayMs), style = MaterialTheme.typography.labelSmall, color = colors.secondaryText)
@@ -879,7 +873,6 @@ private fun PlaybackControlsArea(
                         },
                     )
                     if (onTrackAction != null) {
-                        HorizontalDivider(color = colors.separator)
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.player_continue_from_track)) },
                             leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) },
@@ -891,6 +884,11 @@ private fun PlaybackControlsArea(
                             onClick = { menuOpen = false; onTrackAction(track, PlayerTrackAction.Appreciate) },
                         )
                     }
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.player_track_info_menu)) },
+                        leadingIcon = { Icon(Icons.Filled.GraphicEq, null) },
+                        onClick = { menuOpen = false; showTrackInfo = true },
+                    )
                 }
             }
         }
@@ -904,15 +902,13 @@ private fun PlaybackControlsArea(
             horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.medium),
         ) {
             Icon(Icons.AutoMirrored.Filled.VolumeDown, null, tint = colors.secondaryText, modifier = Modifier.size(18.dp))
-            Slider(
+            AuralisThinSlider(
                 value = playback.volume.coerceIn(0f, 1f),
-                onValueChange = { controller.setVolume(it) },
+                accent = colors.accent,
+                track = colors.separator.copy(alpha = 0.4f),
+                onEditingChanged = {},
+                onValueChanged = controller::setVolume,
                 modifier = Modifier.weight(1f),
-                colors = SliderDefaults.colors(
-                    thumbColor = Color.White,
-                    activeTrackColor = colors.accent,
-                    inactiveTrackColor = colors.separator.copy(alpha = 0.4f),
-                ),
             )
             Icon(Icons.AutoMirrored.Filled.VolumeUp, null, tint = colors.secondaryText, modifier = Modifier.size(18.dp))
         }
@@ -923,10 +919,10 @@ private fun PlaybackControlsArea(
                 .padding(horizontal = AuralisSpacing.medium),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(onClick = { showInfo = !showInfo }) {
+            TextButton(onClick = { showAudioInfo = !showAudioInfo }) {
                 Icon(Icons.Filled.GraphicEq, null, tint = colors.secondaryText, modifier = Modifier.size(14.dp))
                 Spacer(Modifier.width(AuralisSpacing.xSmall))
-                Text(audioTechnicalLabel(context, track, showInfo), style = MaterialTheme.typography.labelSmall, color = colors.secondaryText)
+                Text(audioTechnicalLabel(context, track, showAudioInfo), style = MaterialTheme.typography.labelSmall, color = colors.secondaryText)
             }
         }
     }
@@ -942,12 +938,41 @@ private fun PlaybackControlsArea(
             },
         )
     }
+    if (showTrackInfo) {
+        TrackInformationDialog(
+            graph = graph,
+            track = track,
+            onDismiss = { showTrackInfo = false },
+        )
+    }
     message?.let {
         AlertDialog(
             onDismissRequest = { message = null },
             confirmButton = { TextButton(onClick = { message = null }) { Text(stringResource(AuralisR.string.got_it)) } },
             text = { Text(it) },
         )
+    }
+}
+
+@Composable
+private fun DislikeIcon(active: Boolean, tint: Color) {
+    Box(modifier = Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+        Icon(
+            if (active) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(22.dp),
+        )
+        Canvas(Modifier.fillMaxSize()) {
+            val inset = size.minDimension * 0.16f
+            drawLine(
+                color = tint,
+                start = Offset(inset, size.height - inset),
+                end = Offset(size.width - inset, inset),
+                strokeWidth = 2.dp.toPx(),
+                cap = StrokeCap.Round,
+            )
+        }
     }
 }
 
