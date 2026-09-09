@@ -9,9 +9,15 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
+    <!--
+        Private Navidrome/OpenSubsonic servers may expose HTTP. The server
+        connector's ServerURLPolicy rejects public HTTP server URLs before a
+        request is made; this opt-in enables supported local/private services.
+    -->
     <application
         android:name=".AuralisApp"
         android:allowBackup="true"
+        android:usesCleartextTraffic="true"
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@android:drawable/ic_media_play"

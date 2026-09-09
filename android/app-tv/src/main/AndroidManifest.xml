@@ -17,9 +17,15 @@
         android:name="android.hardware.touchscreen"
         android:required="false" />
 
+    <!--
+        Private Navidrome/OpenSubsonic servers may expose HTTP. The server
+        connector's ServerURLPolicy rejects public HTTP server URLs before a
+        request is made; this opt-in enables supported local/private services.
+    -->
     <application
         android:name=".AuralisTvApp"
         android:allowBackup="true"
+        android:usesCleartextTraffic="true"
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:banner="@drawable/tv_banner"
