@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -54,6 +55,8 @@ internal fun AuralisThinSlider(
     modifier: Modifier = Modifier,
 ) {
     val reduceMotion = LocalReduceMotion.current
+    val currentOnEditingChanged by rememberUpdatedState(onEditingChanged)
+    val currentOnValueChanged by rememberUpdatedState(onValueChanged)
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(value.coerceIn(0f, 1f)) }
     val fraction = if (dragging) dragValue else value.coerceIn(0f, 1f)
@@ -66,7 +69,7 @@ internal fun AuralisThinSlider(
     fun updateFraction(raw: Float) {
         val next = raw.coerceIn(0f, 1f)
         dragValue = next
-        onValueChanged(next)
+        currentOnValueChanged(next)
     }
 
     Box(
@@ -78,19 +81,21 @@ internal fun AuralisThinSlider(
                 if (enabled) {
                     setProgress { target ->
                         val next = target.coerceIn(0f, 1f)
-                        onEditingChanged(true)
-                        onValueChanged(next)
-                        onEditingChanged(false)
+                        currentOnEditingChanged(true)
+                        currentOnValueChanged(next)
+                        currentOnEditingChanged(false)
                         true
                     }
                 }
             }
-            .pointerInput(enabled, onEditingChanged, onValueChanged) {
+            // Callback lambdas are intentionally not pointerInput keys. Dragging updates parent state every frame;
+            // restarting this gesture detector on every recomposition would cancel the gesture mid-drag.
+            .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     dragging = true
-                    onEditingChanged(true)
+                    currentOnEditingChanged(true)
                     updateFraction(down.position.x / max(size.width.toFloat(), 1f))
                     down.consume()
 
@@ -103,7 +108,7 @@ internal fun AuralisThinSlider(
                         if (released) break
                     }
                     dragging = false
-                    onEditingChanged(false)
+                    currentOnEditingChanged(false)
                 }
             },
     ) {
