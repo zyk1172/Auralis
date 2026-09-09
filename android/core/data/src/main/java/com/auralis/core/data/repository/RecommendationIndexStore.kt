@@ -16,6 +16,7 @@ import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import java.util.Locale
 
 /**
  * Recommendation Index v3 的本地事务边界。
@@ -43,13 +44,17 @@ class RecommendationIndexStore(
     suspend fun categories(serverId: ServerId): List<RecommendationIndexCategory> {
         val valid = validTrackIds(serverId)
         if (valid.isEmpty()) return emptyList()
-        return dao.categoriesForValidTracks(valid).map { row ->
-            RecommendationIndexCategory(
-                dimension = row.dimension,
-                tagId = row.value,
-                trackCount = row.trackCount,
-            )
-        }
+        return valid.chunked(SQLITE_IN_CHUNK_SIZE)
+            .flatMap { dao.categoriesForValidTracks(it) }
+            .groupingBy { it.dimension to it.value }
+            .fold(0) { count, row -> count + row.trackCount }
+            .map { (key, count) ->
+                RecommendationIndexCategory(
+                    dimension = key.first,
+                    tagId = key.second,
+                    trackCount = count,
+                )
+            }
     }
 
     suspend fun tracksForCategory(
@@ -62,12 +67,26 @@ class RecommendationIndexStore(
         require(tagId.isNotBlank()) { "推荐索引 TagID 不能为空" }
         val valid = validTrackIds(serverId)
         if (valid.isEmpty()) return emptyList()
-        return dao.trackPayloadsForCategory(
-            validGlobalIds = valid,
-            dimension = dimension,
-            value = tagId,
-            limit = limit.coerceIn(1, 2_000),
-        ).mapNotNull { payload -> decodeTrack(payload, expectedServer = serverId) }
+        return valid.chunked(SQLITE_IN_CHUNK_SIZE)
+            .flatMap { ids ->
+                dao.trackPayloadsForCategory(
+                    validGlobalIds = ids,
+                    dimension = dimension,
+                    value = tagId,
+                )
+            }
+            .mapNotNull { row ->
+                decodeTrack(row.payload, expectedServer = serverId)?.let { track ->
+                    RankedTrack(track, row.confidence)
+                }
+            }
+            .sortedWith(
+                compareByDescending<RankedTrack> { it.confidence }
+                    .thenBy { it.track.title.lowercase(Locale.ROOT) }
+                    .thenBy { it.track.globalId.serialized },
+            )
+            .take(limit.coerceIn(1, 2_000))
+            .map(RankedTrack::track)
     }
 
     /**
@@ -164,4 +183,14 @@ class RecommendationIndexStore(
         runCatching { json.decodeFromString<Track>(payload) }
             .getOrNull()
             ?.takeIf { it.serverId == expectedServer }
+
+    private data class RankedTrack(
+        val track: Track,
+        val confidence: Double,
+    )
+
+    private companion object {
+        // Android SQLite 默认最多 999 个 bind 参数；保留余量，防止 Room 后续加筛选参数。
+        const val SQLITE_IN_CHUNK_SIZE = 900
+    }
 }
