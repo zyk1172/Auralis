@@ -3,6 +3,9 @@ package com.auralis.feature.player
 
 import android.content.Context
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -81,18 +84,24 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.AuralisChrome
+import com.auralis.core.designsystem.AuralisMotion
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.designsystem.LocalReduceMotion
 import com.auralis.core.designsystem.R as AuralisR
 import com.auralis.core.domain.BrowseDestination
 import com.auralis.core.domain.DownloadStatus
@@ -109,6 +118,7 @@ import com.auralis.core.playback.PlaybackController
 import com.auralis.core.playback.PlaybackSnapshot
 import com.auralis.core.playback.QueueSnapshot
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 
 /**
  * 正在播放全屏页（对齐 Swift `NowPlayingView`，S5/R9）。
@@ -116,11 +126,11 @@ import kotlinx.coroutines.launch
  * - 使用与 iOS 相同的 42% accent / background / 22% secondary-accent 环境渐变；
  * - 宽屏内容封顶 680dp，保持 iPad/Android 平板与手机为同一套布局而不是横向拉伸；
  * - 顶部用模态下收语义而非返回导航语义，分段控件按系统 segmented geometry 收紧；
+ * - 播放内容按 Apple 的 650pt 高度阈值在 10/15dp 间距和 56/64dp 主播放键之间切换；
  * - **标题·进度·传输区固定在最下方**（切页不跳动）：标题/艺人跑马灯、收藏心形、
  *   可拖动进度条（松手才 seek）、五键传输（模式循环/上一首/播放暂停/下一首/⋯）、音量、音频信息；
- * - 歌词页按真实播放位置高亮并自动滚动，无歌词给空态；
- * - 队列页点行=播放该 occurrence；「编辑」模式可移除/上移/下移（真实 removeOccurrence/moveOccurrence）。
- * 所有动作都是真实调用；播放引擎未就绪时不渲染本页（由 Shell 保证只在播放中打开）。
+ * - 歌词页按真实播放位置高亮并以中心锚点滚动，无歌词给空态；
+ * - 队列页复用 Apple TrackRow 密度和 42% surface 容器；编辑仍按 occurrence UUID 操作。
  */
 @Composable
 fun NowPlayingScreen(
@@ -137,14 +147,12 @@ fun NowPlayingScreen(
     val tickPosition by controller.position.collectAsState(initial = playback.positionMs)
 
     val track = playback.track
-    // 队列被清空/引擎复位时自动退出全屏页（不渲染空壳）。
     LaunchedEffect(track) { if (track == null) onClose() }
     if (track == null) return
 
     var pageOrdinal by rememberSaveable { mutableStateOf(PlayerTab.Player.ordinal) }
     val page = PlayerTab.entries[pageOrdinal]
 
-    // 拖动中的暂定 seek（Apple Music 行为：拖动只更新显示，松手才 seek）。
     var dragging by remember { mutableStateOf(false) }
     var dragFraction by remember { mutableStateOf(0f) }
     val durationMs = playback.durationMs
@@ -172,7 +180,6 @@ fun NowPlayingScreen(
                 .padding(AuralisSpacing.large),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // iOS sheet 靠下拉关闭；Android 保留一个 44dp 下收入口，但不再伪装成层级返回箭头。
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -210,57 +217,69 @@ fun NowPlayingScreen(
             }
 
             Spacer(Modifier.height(AuralisSpacing.large))
-
-            // 分段：歌词 / 正在播放 / 队列（对齐 NowPlayingPage + iOS segmented picker）。
             PlayerPageSelector(selected = page, onSelect = { pageOrdinal = it.ordinal })
-
             Spacer(Modifier.height(AuralisSpacing.large))
 
-            // 中部内容区（随页切换；控制区固定在下方不跳）。
-            Box(
+            // Swift 的 GeometryReader 同时包住上方内容和固定控制区：剩余高度 <650 时压缩节奏。
+            BoxWithConstraints(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxWidth()
-                    .padding(horizontal = AuralisSpacing.medium),
+                    .fillMaxWidth(),
             ) {
-                when (page) {
-                    PlayerTab.Lyrics -> LyricsContent(graph, track, positionMs = displayMs)
-                    PlayerTab.Player -> HeroContent(
-                        track = track,
-                        isPlaying = playback.state is PlaybackState.Playing,
-                    )
-                    PlayerTab.Queue -> QueueContent(graph, queue = queue, controller = controller)
+                val compactHeight = maxHeight < 650.dp
+                val sectionSpacing = if (compactHeight) 10.dp else 15.dp
+                val playButtonSize = if (compactHeight) 56.dp else 64.dp
+
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(sectionSpacing),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(horizontal = AuralisSpacing.medium),
+                    ) {
+                        when (page) {
+                            PlayerTab.Lyrics -> LyricsContent(graph, track, positionMs = displayMs)
+                            PlayerTab.Player -> HeroContent(
+                                track = track,
+                                isPlaying = playback.state is PlaybackState.Playing,
+                            )
+                            PlayerTab.Queue -> QueueContent(graph, queue = queue, controller = controller)
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = AuralisSpacing.medium),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        PlaybackControlsArea(
+                            graph = graph,
+                            controller = controller,
+                            playback = playback,
+                            queue = queue,
+                            track = track,
+                            displayMs = displayMs,
+                            durationMs = durationMs,
+                            dragging = dragging,
+                            dragFraction = dragFraction,
+                            sectionSpacing = sectionSpacing,
+                            playButtonSize = playButtonSize,
+                            onDragFraction = { dragging = true; dragFraction = it },
+                            onDragEnd = {
+                                if (durationMs > 0) controller.seekTo((dragFraction * durationMs).toLong())
+                                dragging = false
+                            },
+                            onOpenBrowse = onOpenBrowse,
+                            onTrackAction = onTrackAction,
+                        )
+                    }
                 }
             }
-
-            Spacer(Modifier.height(AuralisSpacing.medium))
-
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = AuralisSpacing.medium),
-                contentAlignment = Alignment.Center,
-            ) {
-                PlaybackControlsArea(
-                    graph = graph,
-                    controller = controller,
-                    playback = playback,
-                    queue = queue,
-                    track = track,
-                    displayMs = displayMs,
-                    durationMs = durationMs,
-                    dragging = dragging,
-                    dragFraction = dragFraction,
-                    onDragFraction = { dragging = true; dragFraction = it },
-                    onDragEnd = {
-                        if (durationMs > 0) controller.seekTo((dragFraction * durationMs).toLong())
-                        dragging = false
-                    },
-                    onOpenBrowse = onOpenBrowse,
-                    onTrackAction = onTrackAction,
-                )
-            }
-            Spacer(Modifier.height(AuralisSpacing.small))
         }
     }
 }
@@ -316,7 +335,6 @@ private fun HeroContent(track: Track, isPlaying: Boolean) {
         val glowSide = minOf(side * 1.10f, maxWidth, maxHeight)
         val shape = RoundedCornerShape(AuralisRadius.large)
 
-        // Apple 使用真实封面的模糊副本做环境光；Android 同样复用封面而不是额外叠一层纯色 shadow。
         AuralisArtwork(
             serverId = track.serverId,
             artworkKey = track.artworkKey,
@@ -347,6 +365,8 @@ private fun HeroContent(track: Track, isPlaying: Boolean) {
 private fun LyricsContent(graph: AuralisGraph, track: Track, positionMs: Long) {
     val colors = LocalAuralisTheme.current.colors
     val context = LocalContext.current
+    val reduceMotion = LocalReduceMotion.current
+    val density = LocalDensity.current
     var loadState by remember { mutableStateOf<LyricsLoad>(LyricsLoad.Loading) }
     var reloadKey by remember { mutableStateOf(0) }
     LaunchedEffect(track.globalId, reloadKey) {
@@ -380,32 +400,59 @@ private fun LyricsContent(graph: AuralisGraph, track: Track, positionMs: Long) {
             } else {
                 null
             }
-            // 当前行自动滚动到中部（对齐 scrollPosition anchor: .center）。
-            LaunchedEffect(activeIndex, doc.globalId) {
-                val target = activeIndex
-                if (target != null && target >= 0) {
-                    val info = listState.layoutInfo
-                    if (target < info.totalItemsCount) listState.animateScrollToItem(target.coerceAtLeast(0))
+
+            // Swift `.scrollPosition(anchor: .center)`：等待一次布局，再把活动行尽量放到视口中心。
+            LaunchedEffect(activeIndex, doc.globalId, reduceMotion) {
+                val target = activeIndex ?: return@LaunchedEffect
+                if (target !in doc.lines.indices) return@LaunchedEffect
+                yield()
+                val viewportHeight = listState.layoutInfo.viewportSize.height
+                val estimatedHalfLine = with(density) { 12.dp.roundToPx() }
+                val centerOffset = if (viewportHeight > 0) {
+                    -(viewportHeight / 2 - estimatedHalfLine).coerceAtLeast(0)
+                } else {
+                    0
+                }
+                if (reduceMotion) {
+                    listState.scrollToItem(target, centerOffset)
+                } else {
+                    listState.animateScrollToItem(target, centerOffset)
                 }
             }
+
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = AuralisSpacing.large),
+                verticalArrangement = Arrangement.spacedBy(AuralisSpacing.large),
+                contentPadding = PaddingValues(vertical = AuralisSpacing.huge),
             ) {
                 itemsIndexed(doc.lines) { index, line ->
                     val isCurrent = index == activeIndex
+                    val lineScale by animateFloatAsState(
+                        targetValue = if (isCurrent) 1f else 0.92f,
+                        animationSpec = if (reduceMotion) snap() else tween(AuralisMotion.CARD_DURATION_MS),
+                        label = "lyric-scale-$index",
+                    )
+                    val lineAlpha by animateFloatAsState(
+                        targetValue = if (isCurrent) 1f else 0.62f,
+                        animationSpec = if (reduceMotion) snap() else tween(AuralisMotion.CARD_DURATION_MS),
+                        label = "lyric-alpha-$index",
+                    )
                     Text(
                         text = line.text,
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
-                        ),
-                        color = if (isCurrent) colors.accent else colors.secondaryText.copy(alpha = 0.9f),
+                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = if (isCurrent) colors.accent else colors.secondaryText,
                         textAlign = TextAlign.Center,
                         modifier = Modifier
+                            .widthIn(max = 600.dp)
                             .fillMaxWidth()
-                            .padding(vertical = AuralisSpacing.medium, horizontal = AuralisSpacing.large),
+                            .padding(horizontal = AuralisSpacing.large)
+                            .graphicsLayer {
+                                scaleX = lineScale
+                                scaleY = lineScale
+                                alpha = lineAlpha
+                            },
                     )
                 }
             }
@@ -451,45 +498,26 @@ private fun QueueContent(
     var editing by rememberSaveable { mutableStateOf(false) }
     val entries = queue.entries
     val scope = rememberCoroutineScope()
+    val shape = RoundedCornerShape(AuralisRadius.large)
 
-    Column(Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = AuralisSpacing.small, vertical = AuralisSpacing.xSmall),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            val windowed = queue.totalCount > entries.size
-            Text(
-                if (windowed) {
-                    stringResource(
-                        R.string.player_queue_window_format,
-                        queue.windowStartLogicalIndex + 1,
-                        queue.windowStartLogicalIndex + entries.size,
-                        queue.totalCount,
-                    )
-                } else {
-                    stringResource(R.string.player_queue_total_format, queue.totalCount)
-                },
-                style = MaterialTheme.typography.labelMedium,
-                color = colors.secondaryText,
-                modifier = Modifier.weight(1f),
-            )
-            if (entries.isNotEmpty()) {
-                TextButton(onClick = { editing = !editing }) {
-                    Text(stringResource(if (editing) AuralisR.string.done else AuralisR.string.edit))
-                }
-            }
-        }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .clip(shape)
+            .background(colors.surface.copy(alpha = 0.42f)),
+    ) {
         if (entries.isEmpty()) {
-            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(stringResource(R.string.player_queue_empty), style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText)
             }
-            return@Column
+            return@Box
         }
-        LazyColumn(Modifier.fillMaxSize()) {
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(top = 38.dp, bottom = AuralisSpacing.small),
+        ) {
             itemsIndexed(entries, key = { _, entry -> entry.id.value }) { windowIndex, entry ->
-                val track = entry.track
                 val isCurrent = queue.currentEntryId == entry.id
                 QueueRow(
                     graph = graph,
@@ -501,11 +529,24 @@ private fun QueueContent(
                     canMoveDown = queue.windowStartLogicalIndex + windowIndex < queue.totalCount - 1,
                     onPlay = { scope.launch { controller.playOccurrence(entry.id) } },
                     onRemove = { controller.removeOccurrence(entry.id) },
-                    onMove = { targetLogical ->
-                        controller.moveOccurrence(entry.id, targetLogical)
-                    },
+                    onMove = { targetLogical -> controller.moveOccurrence(entry.id, targetLogical) },
                 )
             }
+        }
+
+        TextButton(
+            onClick = { editing = !editing },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 4.dp, end = 4.dp)
+                .clip(RoundedCornerShape(AuralisRadius.small))
+                .background(colors.surface),
+        ) {
+            Text(
+                stringResource(if (editing) AuralisR.string.done else AuralisR.string.edit),
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
+                color = colors.primaryText,
+            )
         }
     }
 }
@@ -529,23 +570,23 @@ private fun QueueRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(enabled = !editing, onClick = onPlay)
-            .padding(horizontal = AuralisSpacing.small, vertical = 3.dp),
+            .padding(horizontal = AuralisSpacing.medium, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.small),
+        horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.medium),
     ) {
         AuralisArtwork(
             serverId = track.serverId,
             artworkKey = track.artworkKey,
             contentDescription = track.albumTitle,
             titleForFallback = track.albumTitle,
-            targetSizeDp = 44,
-            shape = RoundedCornerShape(AuralisRadius.small),
-            modifier = Modifier.size(44.dp),
+            targetSizeDp = AuralisChrome.trackRowArtwork.value.toInt(),
+            shape = RoundedCornerShape(AuralisChrome.trackRowArtworkRadius),
+            modifier = Modifier.size(AuralisChrome.trackRowArtwork),
         )
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(
                 track.title,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodyLarge,
                 fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
                 color = if (isCurrent) colors.accent else colors.primaryText,
                 maxLines = 1,
@@ -553,25 +594,30 @@ private fun QueueRow(
             )
             Text(
                 "${track.artistName} · ${track.albumTitle}",
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Normal),
                 color = colors.secondaryText,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
         if (!editing) {
-            Text(formatClock((track.durationSeconds * 1000).toLong()), style = MaterialTheme.typography.labelSmall, color = colors.secondaryText)
-            if (isCurrent) {
-                Icon(Icons.Filled.GraphicEq, contentDescription = stringResource(R.string.player_now_playing_indicator), tint = colors.accent, modifier = Modifier.size(16.dp))
-            }
+            Text(
+                formatClock((track.durationSeconds * 1000).toLong()),
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    fontFeatureSettings = "tnum",
+                ),
+                color = colors.secondaryText,
+            )
         } else {
-            IconButton(onClick = { if (canMoveUp) onMove(logicalIndex - 1) }) {
+            IconButton(onClick = { if (canMoveUp) onMove(logicalIndex - 1) }, modifier = Modifier.size(44.dp)) {
                 Icon(Icons.Filled.KeyboardArrowUp, contentDescription = stringResource(AuralisR.string.move_up), tint = if (canMoveUp) colors.primaryText else colors.secondaryText.copy(alpha = 0.35f))
             }
-            IconButton(onClick = { if (canMoveDown) onMove(logicalIndex + 1) }) {
+            IconButton(onClick = { if (canMoveDown) onMove(logicalIndex + 1) }, modifier = Modifier.size(44.dp)) {
                 Icon(Icons.Filled.KeyboardArrowDown, contentDescription = stringResource(AuralisR.string.move_down), tint = if (canMoveDown) colors.primaryText else colors.secondaryText.copy(alpha = 0.35f))
             }
-            IconButton(onClick = onRemove) {
+            IconButton(onClick = onRemove, modifier = Modifier.size(44.dp)) {
                 Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.player_remove_from_queue), tint = colors.error)
             }
         }
@@ -592,6 +638,8 @@ private fun PlaybackControlsArea(
     durationMs: Long,
     dragging: Boolean,
     dragFraction: Float,
+    sectionSpacing: Dp,
+    playButtonSize: Dp,
     onDragFraction: (Float) -> Unit,
     onDragEnd: () -> Unit,
     onOpenBrowse: (BrowseDestination) -> Unit,
@@ -604,7 +652,6 @@ private fun PlaybackControlsArea(
     val isBusy = state is PlaybackState.Buffering || state is PlaybackState.Stalled || state is PlaybackState.Preparing
     val canPrev = (queue.currentLogicalIndex ?: 0) > 0
     val canNext = queue.totalCount > (queue.currentLogicalIndex ?: -1) + 1
-    // 真实收藏状态（计数信号驱动；可空 = 首帧未就绪，避免闪烁成未收藏）。
     var favIds by remember { mutableStateOf<Set<GlobalId>?>(null) }
     LaunchedEffect(track.serverId) {
         graph.catalogRepository.observeFavoriteTracks(track.serverId).collect { list ->
@@ -612,7 +659,6 @@ private fun PlaybackControlsArea(
         }
     }
     val isFavorite = favIds?.contains(track.globalId) == true
-    // R4：不喜欢集合（本地状态，Room 表信号驱动；与收藏镜像）。
     var dislikedIds by remember { mutableStateOf<Set<GlobalId>?>(null) }
     LaunchedEffect(track.serverId) {
         graph.catalogRepository.observeDislikedIds(track.serverId).collect { ids ->
@@ -626,7 +672,6 @@ private fun PlaybackControlsArea(
     var showInfo by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     val download by remember(track.globalId) { graph.catalogRepository.observe(track.globalId) }.collectAsState(initial = null)
-    // 前往专辑/艺术家可用性：真实本地目录里找得到才可用。
     var albumGlobalId by remember { mutableStateOf<GlobalId?>(null) }
     var artistGlobalId by remember { mutableStateOf<GlobalId?>(null) }
     LaunchedEffect(track) {
@@ -639,14 +684,15 @@ private fun PlaybackControlsArea(
             .widthIn(max = 560.dp)
             .fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(sectionSpacing),
     ) {
-        // Apple 用 ZStack：文本中心不受左右按钮宽度影响，左右各留 56pt 的安全区。
         Box(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 56.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(AuralisSpacing.xSmall),
             ) {
                 AutoMarqueeText(
                     text = track.title,
@@ -656,7 +702,7 @@ private fun PlaybackControlsArea(
                 )
                 AutoMarqueeText(
                     text = track.artistName,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = colors.secondaryText,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -701,8 +747,7 @@ private fun PlaybackControlsArea(
             }
         }
 
-        // 进度：拖动只改显示，松手 seek；Apple ThinSlider 使用白色 thumb 和更弱的未播放轨道。
-        Column(Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(AuralisSpacing.xSmall)) {
             Slider(
                 value = if (dragging) dragFraction else if (durationMs > 0) (displayMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f,
                 onValueChange = onDragFraction,
@@ -720,9 +765,7 @@ private fun PlaybackControlsArea(
                 Text("-" + formatClock((durationMs - displayMs).coerceAtLeast(0)), style = MaterialTheme.typography.labelSmall, color = colors.secondaryText)
             }
         }
-        Spacer(Modifier.height(AuralisSpacing.small))
 
-        // 五键传输区（对齐 Swift transportControls：等宽五键）。
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             TransportButton(
                 weight = 1f,
@@ -748,21 +791,25 @@ private fun PlaybackControlsArea(
             Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
                 if (isBusy) {
                     Box(
-                        modifier = Modifier.size(62.dp).clip(CircleShape).background(colors.accent),
+                        modifier = Modifier.size(playButtonSize).clip(CircleShape).background(colors.accent),
                         contentAlignment = Alignment.Center,
                     ) {
-                        CircularProgressIndicator(modifier = Modifier.size(26.dp), strokeWidth = 3.dp, color = colors.background)
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(playButtonSize * 0.42f),
+                            strokeWidth = 3.dp,
+                            color = colors.background,
+                        )
                     }
                 } else {
                     IconButton(
                         onClick = { controller.togglePlayPause() },
-                        modifier = Modifier.size(62.dp).clip(CircleShape).background(colors.accent),
+                        modifier = Modifier.size(playButtonSize).clip(CircleShape).background(colors.accent),
                     ) {
                         Icon(
                             if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                             contentDescription = stringResource(if (isPlaying) AuralisR.string.pause else AuralisR.string.play),
                             tint = colors.background,
-                            modifier = Modifier.size(34.dp),
+                            modifier = Modifier.size(playButtonSize * 0.40f),
                         )
                     }
                 }
@@ -820,8 +867,7 @@ private fun PlaybackControlsArea(
                         enabled = albumGlobalId != null,
                         onClick = {
                             menuOpen = false
-                            val gid = albumGlobalId
-                            if (gid != null) onOpenBrowse(BrowseDestination.Album(gid))
+                            albumGlobalId?.let { onOpenBrowse(BrowseDestination.Album(it)) }
                         },
                     )
                     DropdownMenuItem(
@@ -829,12 +875,9 @@ private fun PlaybackControlsArea(
                         enabled = artistGlobalId != null,
                         onClick = {
                             menuOpen = false
-                            val gid = artistGlobalId
-                            if (gid != null) onOpenBrowse(BrowseDestination.Artist(gid))
+                            artistGlobalId?.let { onOpenBrowse(BrowseDestination.Artist(it)) }
                         },
                     )
-                    // R4（对齐 Swift moreMenu）：由此继续播放 → 相似队列引导会话；
-                    // 歌曲鉴赏 → 干净新会话鉴赏。壳层提供 onTrackAction 时才显示（TV 无助理则隐藏）。
                     if (onTrackAction != null) {
                         HorizontalDivider(color = colors.separator)
                         DropdownMenuItem(
@@ -852,14 +895,13 @@ private fun PlaybackControlsArea(
             }
         }
 
-        // 音量（真实 setVolume；视觉继续复用 Apple ThinSlider 的白色 thumb 语义）。
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .widthIn(max = 420.dp)
                 .padding(horizontal = AuralisSpacing.medium),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.small),
+            horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.medium),
         ) {
             Icon(Icons.AutoMirrored.Filled.VolumeDown, null, tint = colors.secondaryText, modifier = Modifier.size(18.dp))
             Slider(
@@ -875,7 +917,6 @@ private fun PlaybackControlsArea(
             Icon(Icons.AutoMirrored.Filled.VolumeUp, null, tint = colors.secondaryText, modifier = Modifier.size(18.dp))
         }
 
-        // 底部：音频信息（点击切换 codec / 采样率详情）。输出设备选择（AirPlay）Android 无对应。
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -929,9 +970,7 @@ private fun androidx.compose.foundation.layout.RowScope.TransportButton(
 ) {
     Box(Modifier.weight(weight), contentAlignment = Alignment.Center) {
         IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(44.dp)) {
-            Box(contentAlignment = Alignment.Center) {
-                content()
-            }
+            Box(contentAlignment = Alignment.Center) { content() }
         }
     }
 }
@@ -952,7 +991,6 @@ private fun PlayMode.modeTitleRes(): Int = when (this) {
 
 // ================================================================ 添加到歌单
 
-/** 正在播放页「添加到歌单」（对齐 Swift AddToPlaylistSheet）：选已有或新建，真实远端先行。 */
 @Composable
 private fun PlayerAddToPlaylistDialog(
     graph: AuralisGraph,
@@ -1040,7 +1078,7 @@ private fun PlayerAddToPlaylistDialog(
                     onClick = {
                         val name = newName.trim()
                         submit(name) {
-                            val created = graph.playlistActions.createPlaylist(name, serverId, listOf(track.id.value))
+                            graph.playlistActions.createPlaylist(name, serverId, listOf(track.id.value))
                                 ?: error(context.getString(AuralisR.string.server_no_new_playlist))
                         }
                     },
