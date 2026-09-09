@@ -121,7 +121,7 @@ class RecommendationIndexStore(
             .distinctBy { it.dimension to it.value }
 
         // 事务前确认曲目真实存在且 payload 可解码；孤儿 ID / 损坏 payload 整条拒绝。
-        val entity = database.trackDao().byGlobalId(globalId.serialized)
+        val entity = database.trackDao().get(globalId.serialized)
             ?: throw IllegalArgumentException("Recommendation Index 曲目不存在: ${globalId.serialized}")
         require(entity.serverId == serverId.value) { "Recommendation Index 曲目服务器不一致" }
         val currentTrack = decodeTrack(entity.payload, expectedServer = serverId)
