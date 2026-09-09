@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- R5f English overlay for feature:library. -->
+<!-- R10 English overlay for feature:library. -->
 <resources>
     <!-- Top bar and scope segments -->
     <string name="library_scope_genres">Genres</string>
     <string name="library_scope_categories">Categories</string>
-    <!-- Loading (LibraryLoadingBox default and per-scope placeholders) -->
+    <!-- Loading -->
     <string name="library_loading">Loading…</string>
     <string name="library_loading_albums">Loading albums…</string>
     <string name="library_loading_artists">Loading artists…</string>
@@ -12,6 +12,7 @@
     <string name="library_loading_playlists">Loading playlists…</string>
     <string name="library_loading_favorites">Loading favorites…</string>
     <string name="library_loading_genres">Loading genres…</string>
+    <string name="library_loading_categories">Reading local categories…</string>
     <string name="library_stats_loading_top_artists">Tallying top artists…</string>
     <string name="library_stats_loading_top_albums">Tallying top albums…</string>
     <!-- Generic empty/error titles -->
@@ -31,10 +32,32 @@
     <string name="library_empty_genres_title">No Genres Yet</string>
     <string name="library_empty_genres_help">Genres returned by the server (from tags embedded in your music files) will appear here. After connecting and syncing you can browse by genre.</string>
     <string name="library_genres_refresh_action">Refresh Genres from Server</string>
-    <string name="library_categories_ai_title">Categories (AI Recommendation Index)</string>
-    <string name="library_categories_ai_empty_title">AI Recommendation Index</string>
+    <string name="library_categories_ai_title">Categories</string>
+    <string name="library_categories_ai_empty_title">No Categories Yet</string>
+    <string name="library_categories_ai_empty_help">Build the Recommendation Index under Settings → AI &amp; Public Data. Categories will then be shown by song count.</string>
+    <string name="library_category_invalid">This category is no longer valid. Return to Categories and choose it again.</string>
+    <string name="library_category_empty">There are currently no songs in this category.</string>
     <string name="library_server_prompt_title">No Server Connected</string>
     <string name="library_server_prompt_help">Add and sync a music server under Settings → Servers, then browse your library.</string>
+    <!-- Recommendation dimensions; mirrors Apple RecommendationIndexCategory display names -->
+    <string name="library_category_dimension_mood">Mood</string>
+    <string name="library_category_dimension_scene">Scene</string>
+    <string name="library_category_dimension_theme">Theme</string>
+    <string name="library_category_dimension_genre">Genre</string>
+    <string name="library_category_dimension_style">Style</string>
+    <string name="library_category_dimension_vocal">Vocal</string>
+    <string name="library_category_dimension_instrument">Instrument</string>
+    <string name="library_category_dimension_texture">Texture</string>
+    <string name="library_category_dimension_rhythm">Rhythm</string>
+    <string name="library_category_dimension_energy">Energy</string>
+    <string name="library_category_dimension_tempo">Tempo</string>
+    <string name="library_category_dimension_acousticness">Acousticness</string>
+    <string name="library_category_dimension_danceability">Danceability</string>
+    <string name="library_category_dimension_instrumentalness">Instrumentalness</string>
+    <string name="library_category_dimension_liveness">Liveness</string>
+    <string name="library_category_dimension_speechiness">Speechiness</string>
+    <string name="library_category_dimension_valence">Valence</string>
+    <string name="library_category_dimension_complexity">Complexity</string>
     <!-- Count / subtitle formats -->
     <string name="library_track_count_format">%1$d songs</string>
     <string name="library_plays_count_format">%1$d plays</string>
@@ -53,7 +76,7 @@
     <string name="library_artist_no_local_tracks">This artist has no local songs</string>
     <!-- Browse-detail destination titles -->
     <string name="library_dest_genre_format">Genre: %1$s</string>
-    <string name="library_dest_recommendation_category">Recommendation Categories</string>
+    <string name="library_dest_recommendation_category">Recommendation Category</string>
     <!-- Browse-detail load errors / empty copy -->
     <string name="library_detail_not_found_album">Could not find this album</string>
     <string name="library_detail_not_found_artist">Could not find this artist</string>
@@ -123,6 +146,6 @@
     <string name="library_add_to_queue">Add to Queue</string>
     <string name="library_delete_local_cache">Delete Local Cache</string>
     <string name="library_cancel_download">Cancel Download</string>
-    <!-- Batch add-to-playlist dialog (library-specific count hint) -->
+    <!-- Batch add-to-playlist dialog -->
     <string name="library_add_count_hint">%1$d songs will be added to the new playlist.</string>
 </resources>
