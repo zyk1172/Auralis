@@ -21,6 +21,12 @@ data class RecommendationCategoryRow(
     val trackCount: Int,
 )
 
+/** 分类详情候选。排序在 Store 端完成，以便跨 SQLite IN 参数分块后仍保持全局顺序。 */
+data class RecommendationTrackPayloadRow(
+    val payload: String,
+    val confidence: Double,
+)
+
 /**
  * Recommendation Index 的唯一 Room 访问边界。
  *
@@ -72,23 +78,21 @@ interface RecommendationIndexDao {
 
     @Query(
         """
-        SELECT track.payload
+        SELECT track.payload AS payload,
+               tag.confidence AS confidence
         FROM tracks track
         INNER JOIN recommendation_index_v2_tags tag
             ON tag.global_id = track.global_id
         WHERE tag.global_id IN (:validGlobalIds)
           AND tag.dimension = :dimension
           AND tag.value = :value
-        ORDER BY tag.confidence DESC, track.title COLLATE NOCASE ASC
-        LIMIT :limit
         """,
     )
     suspend fun trackPayloadsForCategory(
         validGlobalIds: List<String>,
         dimension: String,
         value: String,
-        limit: Int,
-    ): List<String>
+    ): List<RecommendationTrackPayloadRow>
 
     @Query("SELECT * FROM recommendation_index_v2_state WHERE global_id = :globalId LIMIT 1")
     suspend fun state(globalId: String): RecommendationIndexStateEntity?
