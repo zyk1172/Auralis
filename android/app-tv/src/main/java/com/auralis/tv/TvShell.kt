@@ -39,10 +39,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -70,14 +70,14 @@ import com.auralis.feature.player.NowPlayingScreen
 import com.auralis.feature.search.SearchScreen
 import com.auralis.tv.R
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 
 /**
- * TV 壳（S9）。对齐基准 = 移动端核心能力（页面层零改动复用 feature）+ Android TV 惯例：
- * - 顶栏横向一级分区：首页 / 音乐库 / 搜索（无 Assistant）；右上设置入口；
- * - 播放中时底部常驻「正在播放条」（封面/标题 + 上一首/播放暂停/下一首，点条身开全屏）；
- * - 正在播放全屏页覆盖整个壳；Browse 详情在音乐库分区上覆盖（同移动端语义）；
- * - D-pad 全程可操作：复用页面 item 焦点环由根部 ProvideTvIndication 提供，
- *   自有控件用 tvFocusVisual。
+ * TV 壳（S9/R10）。
+ *
+ * 除了所有可操作项必须有明确焦点环，还必须保证 overlay 关闭后焦点回到一个确定的、
+ * 用户可理解的位置。Android TV/Compose 在移除当前焦点节点后并不会可靠替我们选择下一个
+ * 节点；不主动恢复就会出现“按方向键没有任何可见焦点”的假死体验。
  */
 @Composable
 fun TvShell(
@@ -88,10 +88,9 @@ fun TvShell(
 ) {
     val colors = LocalAuralisTheme.current.colors
     var section by rememberSaveable { mutableStateOf(TvSection.Home) }
-    // 浏览详情（同移动端 S4）：非 null 时在音乐库分区上方覆盖真实浏览页。
     var browseDestination by remember { mutableStateOf<BrowseDestination?>(null) }
-    // 正在播放全屏页：覆盖整个壳。
     var nowPlayingOpen by remember { mutableStateOf(false) }
+    var pendingFocusRestore by remember { mutableStateOf<TvFocusRestoreTarget?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -115,14 +114,40 @@ fun TvShell(
         }
     }
 
-    // 冷启动给「首页」导航项初始焦点（TV 无触摸，首次 D-pad 即能操作）。
     val homeFocus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { homeFocus.requestFocus() } }
+    val libraryFocus = remember { FocusRequester() }
+    val searchFocus = remember { FocusRequester() }
+    val nowPlayingStripFocus = remember { FocusRequester() }
 
-    /**
-     * P0-1 统一取控制器：引擎未就绪则启动播放服务并等待就绪（最多 8s），
-     * 保证用户第一次点击一定执行原意图；超时用 Toast 如实告知失败（可重试），不静默丢弃。
-     */
+    // TV 冷启动没有触摸入口；等待首帧节点真正挂载后再请求首页焦点。
+    LaunchedEffect(Unit) {
+        yield()
+        runCatching { homeFocus.requestFocus() }
+    }
+
+    // Overlay 被移出 Composition 后下一帧再恢复焦点，避免 requestFocus 命中尚未重新挂载的节点。
+    LaunchedEffect(nowPlayingOpen, browseDestination, pendingFocusRestore, playback.track) {
+        val target = pendingFocusRestore ?: return@LaunchedEffect
+        val canRestore = when (target) {
+            TvFocusRestoreTarget.HomeTab -> !nowPlayingOpen && browseDestination == null
+            TvFocusRestoreTarget.LibraryTab -> !nowPlayingOpen && browseDestination == null
+            TvFocusRestoreTarget.SearchTab -> !nowPlayingOpen && browseDestination == null
+            TvFocusRestoreTarget.NowPlayingStrip ->
+                !nowPlayingOpen && browseDestination == null && playback.track != null
+        }
+        if (!canRestore) return@LaunchedEffect
+        yield()
+        val requester = when (target) {
+            TvFocusRestoreTarget.HomeTab -> homeFocus
+            TvFocusRestoreTarget.LibraryTab -> libraryFocus
+            TvFocusRestoreTarget.SearchTab -> searchFocus
+            TvFocusRestoreTarget.NowPlayingStrip -> nowPlayingStripFocus
+        }
+        if (runCatching { requester.requestFocus() }.isSuccess) {
+            pendingFocusRestore = null
+        }
+    }
+
     suspend fun awaitControllerOrNotify(): PlaybackController? =
         runCatching { awaitPlaybackController(startService = { graph.startPlaybackService() }) }
             .onFailure {
@@ -134,7 +159,6 @@ fun TvShell(
             }
             .getOrNull()
 
-    /** 整组作为新队列并从点中的那首开始播放（真实动作，P0-1：首击不丢）。 */
     fun playShelf(tracks: List<Track>, startIndex: Int) {
         scope.launch {
             val ready = awaitControllerOrNotify() ?: return@launch
@@ -144,7 +168,6 @@ fun TvShell(
         }
     }
 
-    /** 「下一首播放」：整组插到当前曲之后（P0-1：首击不丢）。 */
     fun playNextShelf(tracks: List<Track>) {
         scope.launch {
             val ready = awaitControllerOrNotify() ?: return@launch
@@ -152,7 +175,6 @@ fun TvShell(
         }
     }
 
-    /** 「加入队列」：整组追加到队尾（P0-1：首击不丢）。 */
     fun appendQueueShelf(tracks: List<Track>) {
         scope.launch {
             val ready = awaitControllerOrNotify() ?: return@launch
@@ -160,8 +182,24 @@ fun TvShell(
         }
     }
 
+    fun closeNowPlaying(restoreToStrip: Boolean = true) {
+        if (restoreToStrip && playback.track != null) {
+            pendingFocusRestore = TvFocusRestoreTarget.NowPlayingStrip
+        }
+        nowPlayingOpen = false
+    }
+
+    fun closeBrowse(restoreToLibrary: Boolean = true) {
+        if (restoreToLibrary) {
+            pendingFocusRestore = TvFocusRestoreTarget.LibraryTab
+        }
+        browseDestination = null
+    }
+
     /** 浏览请求 → 切音乐库分区并打开覆盖浏览页。 */
     fun openBrowse(destination: BrowseDestination) {
+        // 从 Now Playing 跳转到专辑/艺人时，目标是浏览页而不是底部播放器条，不能排队错误恢复。
+        pendingFocusRestore = null
         nowPlayingOpen = false
         browseDestination = destination
         section = TvSection.Library
@@ -169,20 +207,20 @@ fun TvShell(
 
     /** 切一级分区：关闭覆盖层；音乐库再点 = 回库根。 */
     fun selectSection(target: TvSection) {
+        pendingFocusRestore = null
         nowPlayingOpen = false
         if (target == TvSection.Library && section == TvSection.Library && browseDestination != null) {
-            browseDestination = null
+            closeBrowse(restoreToLibrary = true)
             return
         }
         browseDestination = null
         section = target
     }
 
-    // 系统返回：正在播放全屏页 > 浏览详情（单处理器保证正确优先级）。
     BackHandler(enabled = nowPlayingOpen || browseDestination != null) {
         when {
-            nowPlayingOpen -> nowPlayingOpen = false
-            browseDestination != null -> browseDestination = null
+            nowPlayingOpen -> closeNowPlaying()
+            browseDestination != null -> closeBrowse()
         }
     }
 
@@ -193,10 +231,11 @@ fun TvShell(
                 onSelectSection = ::selectSection,
                 onOpenSettings = onOpenSettings,
                 homeFocusRequester = homeFocus,
+                libraryFocusRequester = libraryFocus,
+                searchFocusRequester = searchFocus,
             )
             HorizontalDivider(color = colors.separator)
 
-            // 一级分区内容。
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (section) {
                     TvSection.Home -> HomeScreen(
@@ -219,7 +258,7 @@ fun TvShell(
                             BrowseDetailScreen(
                                 graph = graph,
                                 initial = destination,
-                                onBack = { browseDestination = null },
+                                onBack = { closeBrowse() },
                                 onPlayTracks = ::playShelf,
                                 onPlayNext = ::playNextShelf,
                                 onAppendToQueue = ::appendQueueShelf,
@@ -237,7 +276,6 @@ fun TvShell(
                 }
             }
 
-            // 正在播放条：TV 惯例常驻底部（有播放内容时）。
             val track = playback.track
             if (engineAvailable && track != null) {
                 TvNowPlayingStrip(
@@ -250,10 +288,14 @@ fun TvShell(
                     canGoNext = queue.totalCount > (queue.currentLogicalIndex ?: -1) + 1,
                     controlsEnabled = playback.state is PlaybackState.Playing ||
                         playback.state is PlaybackState.Paused,
-                    onOpen = { nowPlayingOpen = true },
+                    onOpen = {
+                        pendingFocusRestore = null
+                        nowPlayingOpen = true
+                    },
                     onPrevious = { controller.previous() },
                     onTogglePlayPause = { controller.togglePlayPause() },
                     onNext = { controller.next() },
+                    openFocusRequester = nowPlayingStripFocus,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.small),
@@ -261,12 +303,11 @@ fun TvShell(
             }
         }
 
-        // 正在播放全屏页：覆盖整个壳。
         if (nowPlayingOpen && playback.track != null) {
             NowPlayingScreen(
                 graph = graph,
                 controller = controller,
-                onClose = { nowPlayingOpen = false },
+                onClose = { closeNowPlaying() },
                 onOpenBrowse = ::openBrowse,
                 modifier = Modifier.fillMaxSize().background(colors.background),
             )
@@ -281,6 +322,8 @@ private fun TvTopBar(
     onSelectSection: (TvSection) -> Unit,
     onOpenSettings: () -> Unit,
     homeFocusRequester: FocusRequester,
+    libraryFocusRequester: FocusRequester,
+    searchFocusRequester: FocusRequester,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
@@ -303,15 +346,18 @@ private fun TvTopBar(
             TvSection.entries.forEach { entry ->
                 val selected = entry == section
                 val shape = RoundedCornerShape(AuralisRadius.large)
+                val requester = when (entry) {
+                    TvSection.Home -> homeFocusRequester
+                    TvSection.Library -> libraryFocusRequester
+                    TvSection.Search -> searchFocusRequester
+                }
                 Surface(
                     shape = shape,
                     color = if (selected) colors.accent.copy(alpha = 0.22f) else colors.elevated,
-                    modifier = if (entry == TvSection.Home) {
-                        Modifier.tvFocusVisual(shape).tvClick { onSelectSection(entry) }
-                            .focusRequester(homeFocusRequester)
-                    } else {
-                        Modifier.tvFocusVisual(shape).tvClick { onSelectSection(entry) }
-                    },
+                    modifier = Modifier
+                        .focusRequester(requester)
+                        .tvFocusVisual(shape)
+                        .tvClick { onSelectSection(entry) },
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 22.dp, vertical = 12.dp),
@@ -365,6 +411,7 @@ private fun TvNowPlayingStrip(
     onPrevious: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onNext: () -> Unit,
+    openFocusRequester: FocusRequester,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
@@ -376,11 +423,11 @@ private fun TvNowPlayingStrip(
             .padding(start = AuralisSpacing.small, end = AuralisSpacing.small),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 封面 + 标题区：点击展开正在播放。
         Row(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxHeight()
+                .focusRequester(openFocusRequester)
                 .tvFocusVisual(RoundedCornerShape(AuralisRadius.large))
                 .tvClick(onClick = onOpen)
                 .padding(horizontal = AuralisSpacing.small),
@@ -470,4 +517,11 @@ private fun TvTransportButton(
             icon(if (enabled) colors.primaryText else colors.secondaryText.copy(alpha = 0.5f))
         }
     }
+}
+
+private enum class TvFocusRestoreTarget {
+    HomeTab,
+    LibraryTab,
+    SearchTab,
+    NowPlayingStrip,
 }
