@@ -10,6 +10,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -21,7 +22,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.progressBarRangeInfo
@@ -85,7 +85,7 @@ internal fun AuralisThinSlider(
                     }
                 }
             }
-            .pointerInput(enabled) {
+            .pointerInput(enabled, onEditingChanged, onValueChanged) {
                 if (!enabled) return@pointerInput
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -98,8 +98,9 @@ internal fun AuralisThinSlider(
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                         updateFraction(change.position.x / max(size.width.toFloat(), 1f))
+                        val released = !change.pressed
                         change.consume()
-                        if (change.changedToUpIgnoreConsumed()) break
+                        if (released) break
                     }
                     dragging = false
                     onEditingChanged(false)
@@ -127,7 +128,7 @@ internal fun AuralisThinSlider(
                 size = Size((size.width * clamped).coerceAtLeast(0f), trackHeight),
                 cornerRadius = androidx.compose.ui.geometry.CornerRadius(radius, radius),
             )
-            // Swift 阴影在 Android Canvas 中用一圈低透明描边近似，避免引入独立图层模糊成本。
+            // Swift 阴影在 Android Canvas 中用低透明外圈近似，避免引入独立图层模糊成本。
             drawCircle(
                 color = Color.Black.copy(alpha = if (dragging) 0.18f else 0.10f),
                 radius = thumbRadius + if (dragging) 2.dp.toPx() else 1.dp.toPx(),
