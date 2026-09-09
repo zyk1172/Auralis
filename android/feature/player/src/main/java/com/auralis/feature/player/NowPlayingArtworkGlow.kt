@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.auralis.feature.player
 
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
@@ -12,6 +9,8 @@ import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -39,7 +38,7 @@ import kotlin.math.max
  * - Glow 画布约为封面 1.5 倍，主光副本约 1.28 倍；
  * - blur = max(12dp, artworkSize * 0.10)；
  * - 播放中以 0.99↔1.04、0.30↔0.44 做低速呼吸；暂停保持 1.0 / 0.30；
- * - Reduce Motion 时完全静止；
+ * - Reduce Motion 时完全静止，并且不保留后台 infinite transition 的帧回调；
  * - 用离屏径向 DstIn mask 把真实封面光晕淡出到透明，避免形成矩形底板；
  * - artworkKey 缺失时退化为主题 accent / accentSecondary 的极轻径向补光。
  *
@@ -64,28 +63,20 @@ internal fun NowPlayingArtworkGlow(
     val blurRadius = max(12f, artworkSize.value * 0.10f).dp
 
     val animates = isPlaying && !reduceMotion
-    val infinite = rememberInfiniteTransition(label = "now-playing-artwork-glow")
-    val animatedScale = infinite.animateFloat(
-        initialValue = 0.99f,
-        targetValue = 1.04f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1_800),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "now-playing-artwork-glow-scale",
-    ).value
-    val animatedAlpha = infinite.animateFloat(
-        initialValue = 0.30f,
-        targetValue = 0.44f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1_800),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "now-playing-artwork-glow-alpha",
-    ).value
+    val pulse = remember(track.globalId) { Animatable(0f) }
+    LaunchedEffect(animates, track.globalId) {
+        if (!animates) {
+            pulse.snapTo(0f)
+            return@LaunchedEffect
+        }
+        while (true) {
+            pulse.animateTo(1f, animationSpec = tween(durationMillis = 1_800))
+            pulse.animateTo(0f, animationSpec = tween(durationMillis = 1_800))
+        }
+    }
 
-    val glowScale = if (animates) animatedScale else 1f
-    val glowAlpha = if (animates) animatedAlpha else 0.30f
+    val glowScale = if (animates) 0.99f + 0.05f * pulse.value else 1f
+    val glowAlpha = if (animates) 0.30f + 0.14f * pulse.value else 0.30f
     val shape = RoundedCornerShape(artworkSize * 0.0514f) // 350dp artwork ≈ Apple 18pt artwork radius.
 
     Box(
@@ -145,7 +136,6 @@ internal fun NowPlayingArtworkGlow(
             }
         }
 
-        // Swift 的低透明方向补光椭圆：只提供环境亮度，不形成独立卡片。
         Canvas(
             Modifier
                 .requiredSize(canvasSize)
