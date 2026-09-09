@@ -56,6 +56,7 @@
     <string name="settings_ai_saved_notice">Saved to this device.</string>
     <string name="settings_ai_incomplete">Base URL, API path, or model is incomplete — cannot test.</string>
     <string name="settings_ai_openai_compatible">OpenAI-compatible</string>
+    <string name="settings_ai_auto_protocol">Auto-detected protocol</string>
     <string name="settings_ai_diagnostics_format">Streaming: %1$s Native tools: %2$s</string>
     <string name="settings_ai_connect_success">Connected: model %1$s · latency %2$dms. %3$s</string>
     <string name="settings_ai_error_auth">Authentication failed (invalid API key?)</string>
@@ -72,6 +73,7 @@
     <string name="settings_ai_api_section">Model API</string>
     <string name="settings_ai_base_url_label">Base URL</string>
     <string name="settings_ai_api_path_label">API path</string>
+    <string name="settings_ai_api_path_hint">The API path selects the protocol automatically: /chat/completions, /responses, or Anthropic /messages. Connection testing and the Assistant use the same protocol.</string>
     <string name="settings_ai_model_label">Model</string>
     <string name="settings_ai_key_placeholder_saved">Saved (leave blank to keep)</string>
     <string name="settings_ai_key_placeholder_new">Enter API Key</string>
