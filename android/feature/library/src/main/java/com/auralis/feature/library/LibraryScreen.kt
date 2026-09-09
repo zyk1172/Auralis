@@ -395,10 +395,11 @@ private fun CategoryScope(
             .onFailure { throwable -> error = throwable.message ?: throwable::class.java.simpleName }
     }
 
+    val loadError = error
     when {
-        error != null -> LibraryEmptyState(
+        loadError != null -> LibraryEmptyState(
             stringResource(R.string.library_load_failed_title),
-            stringResource(R.string.library_load_failed_format, error),
+            stringResource(R.string.library_load_failed_format, loadError),
             actionLabel = stringResource(AuralisR.string.retry),
             onAction = { reload += 1 },
         )
