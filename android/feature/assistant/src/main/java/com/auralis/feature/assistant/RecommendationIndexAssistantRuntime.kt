@@ -17,6 +17,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -160,7 +161,9 @@ class RecommendationIndexAssistantRuntime(
         put("album", track.albumTitle)
         track.year?.let { put("year", it) }
         if (track.genres.isNotEmpty()) {
-            putJsonArray("genres") { track.genres.take(MAX_GENRES).forEach { genre -> add(genre) } }
+            putJsonArray("genres") {
+                track.genres.take(MAX_GENRES).forEach { genre -> add(JsonPrimitive(genre)) }
+            }
         }
         track.language?.takeIf { it.isNotBlank() }?.let { put("language", it) }
         put("durationSeconds", track.durationSeconds)
