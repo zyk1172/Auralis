@@ -30,9 +30,44 @@
     <string name="player_view_artist">View Artist</string>
     <string name="player_continue_from_track">Continue from This Track</string>
     <string name="player_appreciate_song">Appreciate Song</string>
+    <string name="player_track_info_menu">Song Information</string>
     <!-- Audio technical info -->
     <string name="player_unknown">Unknown</string>
     <string name="player_sample_rate_unknown">Unknown sample rate</string>
+    <!-- Track information -->
+    <string name="player_track_info_title">Song Information</string>
+    <string name="player_track_info_basic">Basic Information</string>
+    <string name="player_track_info_song">Song</string>
+    <string name="player_track_info_artist">Artist</string>
+    <string name="player_track_info_album">Album</string>
+    <string name="player_track_info_duration">Duration</string>
+    <string name="player_track_info_year">Year</string>
+    <string name="player_track_info_genre">Genre</string>
+    <string name="player_track_info_language">Language</string>
+    <string name="player_track_info_position">Track Position</string>
+    <string name="player_track_info_disc">Disc</string>
+    <string name="player_track_info_track_number">Track</string>
+    <string name="player_track_info_quality">Audio Quality</string>
+    <string name="player_track_info_format">Format</string>
+    <string name="player_track_info_sample_rate">Sample Rate</string>
+    <string name="player_track_info_bit_depth">Bit Depth</string>
+    <string name="player_track_info_bit_rate">Bit Rate</string>
+    <string name="player_track_info_channels">Channels</string>
+    <string name="player_track_info_status">Status</string>
+    <string name="player_track_info_favorite">Favorite</string>
+    <string name="player_track_info_favorited">Favorited</string>
+    <string name="player_track_info_not_favorited">Not Favorited</string>
+    <string name="player_track_info_rating">Rating</string>
+    <string name="player_track_info_rating_value">%1$d/5</string>
+    <string name="player_track_info_unrated">Unrated</string>
+    <string name="player_track_info_play_count">Play Count</string>
+    <string name="player_track_info_play_count_value">%1$d plays</string>
+    <string name="player_track_info_download">Local Download</string>
+    <string name="player_track_info_downloaded">Downloaded</string>
+    <string name="player_track_info_not_downloaded">Not Downloaded</string>
+    <string name="player_track_info_lyrics">Lyrics</string>
+    <string name="player_track_info_lyrics_available">Available</string>
+    <string name="player_track_info_lyrics_none">None</string>
     <!-- Add to playlist dialog (shared copy lives in core:designsystem; only the player-specific hint stays here) -->
     <string name="player_new_playlist_hint">“%1$s” will be added to the new playlist.</string>
 </resources>

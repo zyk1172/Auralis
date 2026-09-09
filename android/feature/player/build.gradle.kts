@@ -27,6 +27,9 @@ dependencies {
     implementation(project(":core:playback"))
     implementation(project(":core:lyrics"))
     implementation(project(":core:offline"))
+    // AuralisGraph exposes the concrete Room-backed database type; player track-info reads
+    // local annotations from that graph, so RoomDatabase must be on this module's compile classpath.
+    implementation(libs.androidx.room.runtime)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
@@ -39,4 +42,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     debugImplementation(libs.androidx.compose.ui.tooling)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.truth)
 }

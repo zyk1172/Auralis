@@ -33,9 +33,44 @@
     <string name="player_view_artist">前往艺术家</string>
     <string name="player_continue_from_track">由此继续播放</string>
     <string name="player_appreciate_song">歌曲鉴赏</string>
+    <string name="player_track_info_menu">歌曲信息</string>
     <!-- 音频技术信息 -->
     <string name="player_unknown">未知</string>
     <string name="player_sample_rate_unknown">采样率未知</string>
+    <!-- 歌曲信息 -->
+    <string name="player_track_info_title">歌曲信息</string>
+    <string name="player_track_info_basic">基本信息</string>
+    <string name="player_track_info_song">歌曲</string>
+    <string name="player_track_info_artist">艺术家</string>
+    <string name="player_track_info_album">专辑</string>
+    <string name="player_track_info_duration">时长</string>
+    <string name="player_track_info_year">年份</string>
+    <string name="player_track_info_genre">流派</string>
+    <string name="player_track_info_language">语言</string>
+    <string name="player_track_info_position">曲目位置</string>
+    <string name="player_track_info_disc">碟片</string>
+    <string name="player_track_info_track_number">曲目</string>
+    <string name="player_track_info_quality">音频质量</string>
+    <string name="player_track_info_format">格式</string>
+    <string name="player_track_info_sample_rate">采样率</string>
+    <string name="player_track_info_bit_depth">位深</string>
+    <string name="player_track_info_bit_rate">码率</string>
+    <string name="player_track_info_channels">声道</string>
+    <string name="player_track_info_status">状态</string>
+    <string name="player_track_info_favorite">收藏</string>
+    <string name="player_track_info_favorited">已收藏</string>
+    <string name="player_track_info_not_favorited">未收藏</string>
+    <string name="player_track_info_rating">评分</string>
+    <string name="player_track_info_rating_value">%1$d/5</string>
+    <string name="player_track_info_unrated">未评分</string>
+    <string name="player_track_info_play_count">播放次数</string>
+    <string name="player_track_info_play_count_value">%1$d 次</string>
+    <string name="player_track_info_download">本地下载</string>
+    <string name="player_track_info_downloaded">已下载</string>
+    <string name="player_track_info_not_downloaded">未下载</string>
+    <string name="player_track_info_lyrics">歌词</string>
+    <string name="player_track_info_lyrics_available">已获取</string>
+    <string name="player_track_info_lyrics_none">无</string>
     <!-- 添加到歌单对话框（共享词在 core:designsystem；此处仅播放页独有提示） -->
     <string name="player_new_playlist_hint">《%1$s》将加入新歌单。</string>
 </resources>

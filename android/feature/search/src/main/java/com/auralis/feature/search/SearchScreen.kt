@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,12 +26,12 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -58,6 +59,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
@@ -73,11 +75,10 @@ import kotlinx.coroutines.launch
 /**
  * 统一搜索（对齐 Swift `SearchView`，Apple 入口：Assistant 顶栏放大镜 →「搜索音乐库」）。
  *
- * - 歌曲 / 专辑 / 艺术家 / 歌单四类**本地持久化资料库**结果（离线可用）；
- * - 150ms 防抖后触发本地查询（Room FTS/索引，不在内存全表遍历）；
- * - 本地无结果时可**在线搜索服务器**（OpenSubsonic search3，只返回歌曲）；
- * - 搜索历史：最近在前、去重、最多 10 条（DataStore），可一键清空；
- * - 服务器在线结果带查询词绑定 + 失败如实呈现（R15：不把网络失败伪装成空结果）。
+ * - 歌曲 / 专辑 / 艺术家 / 歌单四类本地持久化结果（离线可用）；
+ * - 150ms 防抖后触发 Room FTS / 索引查询；
+ * - 本地无结果时可使用 OpenSubsonic `search3` 在线搜索；
+ * - 搜索框、历史、List Section 密度与当前 iOS `SearchView` 保持同一视觉规则。
  */
 @Composable
 fun SearchScreen(
@@ -92,13 +93,10 @@ fun SearchScreen(
     val context = LocalContext.current
 
     var query by rememberSaveable { mutableStateOf("") }
-    /** 防抖后的查询词：输入停顿约 150ms 后才真正查询，避免逐键全量扫描。 */
     var debounced by remember { mutableStateOf("") }
-    /** null = 当前防抖词尚未完成本地查询（显示进行中，不把旧词结果误当新词空结果）。 */
     var local by remember { mutableStateOf<SearchResults?>(SearchResults()) }
     var localError by remember { mutableStateOf<String?>(null) }
 
-    // ---- 服务器在线搜索状态（Swift `serverSearchResults/isServerSearching/serverSearchQuery`）----
     var serverSongs by remember { mutableStateOf<List<Track>>(emptyList()) }
     var serverSearching by remember { mutableStateOf(false) }
     var serverQuery by remember { mutableStateOf("") }
@@ -108,7 +106,6 @@ fun SearchScreen(
     val activeRaw by graph.preferences.activeServerIdFlow.collectAsState(initial = null)
     val activeServer = activeRaw?.let { ServerId(it) }
 
-    /** 新查询开始：服务器结果立即取消/清空（Swift `clearServerSearch`）。 */
     fun resetServerSearch() {
         serverSongs = emptyList()
         serverSearching = false
@@ -116,7 +113,6 @@ fun SearchScreen(
         serverError = null
     }
 
-    /** 防抖：输入停顿 150ms 后才更新实际查询词；清空立即生效。 */
     LaunchedEffect(query) {
         resetServerSearch()
         val trimmed = query.trim()
@@ -130,7 +126,6 @@ fun SearchScreen(
         debounced = trimmed
     }
 
-    /** 本地搜索：真正走 Room FTS/索引。词变或激活服务器变才重查。 */
     LaunchedEffect(debounced, activeServer) {
         if (debounced.isBlank()) {
             local = SearchResults()
@@ -149,7 +144,6 @@ fun SearchScreen(
         }
     }
 
-    /** 「在线搜索服务器」：真实 search3，只在当前激活服务器上执行。 */
     fun runServerSearch() {
         val term = query.trim()
         if (term.isEmpty()) return
@@ -168,7 +162,6 @@ fun SearchScreen(
             runCatching { graph.serverSearch(server, term, SERVER_RESULT_LIMIT) }
                 .onSuccess { if (serverQuery == term) serverSongs = it }
                 .onFailure { e ->
-                    // R15：网络失败如实呈现（可重试），不伪装成「无结果」。
                     if (serverQuery == term) serverError = e.message ?: context.getString(R.string.search_error_server)
                 }
             if (serverQuery == term) serverSearching = false
@@ -194,14 +187,22 @@ fun SearchScreen(
             .background(colors.background)
             .statusBarsPadding(),
     ) {
-        // 顶栏（对齐 Swift NavigationStack inline「搜索音乐库」）。
+        // Swift NavigationStack 的 inline 标题高度接近 44pt；返回保持 Android 系统语义。
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(48.dp),
+                .height(44.dp),
         ) {
-            IconButton(onClick = onBack, modifier = Modifier.align(Alignment.CenterStart)) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(AuralisR.string.back), tint = colors.primaryText)
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.align(Alignment.CenterStart).size(44.dp),
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(AuralisR.string.back),
+                    tint = colors.primaryText,
+                    modifier = Modifier.size(20.dp),
+                )
             }
             Text(
                 stringResource(R.string.search_library_title),
@@ -219,7 +220,7 @@ fun SearchScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = AuralisSpacing.large)
-                .padding(bottom = AuralisSpacing.small),
+                .padding(top = AuralisSpacing.large, bottom = AuralisSpacing.small),
         )
 
         when {
@@ -227,14 +228,13 @@ fun SearchScreen(
                 recents = recents,
                 onPick = { term ->
                     query = term
-                    debounced = term // 点击历史立即搜索（跳过防抖），对齐 Swift
+                    debounced = term
                     recordSearch(term)
                 },
                 onClear = ::clearHistory,
                 modifier = Modifier.weight(1f),
             )
 
-            // 本地搜索进行中（防抖词已定但结果未回）。
             local == null -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = colors.accent)
             }
@@ -256,7 +256,11 @@ fun SearchScreen(
                         serverSearching -> {
                             CircularProgressIndicator(color = colors.accent)
                             Spacer(Modifier.height(AuralisSpacing.medium))
-                            Text(stringResource(R.string.search_server_progress), style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText)
+                            Text(
+                                stringResource(R.string.search_server_progress),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = colors.secondaryText,
+                            )
                         }
 
                         !hasServerSongs -> {
@@ -323,8 +327,6 @@ fun SearchScreen(
 private const val LOCAL_RESULT_LIMIT = 60
 private const val SERVER_RESULT_LIMIT = 50
 
-// ================================================================== 搜索框
-
 @Composable
 private fun SearchField(
     query: String,
@@ -336,13 +338,20 @@ private fun SearchField(
     val colors = LocalAuralisTheme.current.colors
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(AuralisRadius.medium))
+            // Swift 用的是 AuralisSpacing.medium (=12) 作为搜索框圆角，不是卡片 radius token。
+            .clip(RoundedCornerShape(AuralisSpacing.medium))
             .background(colors.surface)
-            .padding(horizontal = AuralisSpacing.medium),
+            .padding(AuralisSpacing.medium),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.small),
     ) {
-        Icon(Icons.Filled.Search, contentDescription = null, tint = colors.secondaryText)
-        Box(Modifier.weight(1f).padding(horizontal = AuralisSpacing.medium)) {
+        Icon(
+            Icons.Filled.Search,
+            contentDescription = null,
+            tint = colors.secondaryText,
+            modifier = Modifier.size(18.dp),
+        )
+        Box(Modifier.weight(1f)) {
             if (query.isEmpty()) {
                 Text(
                     stringResource(R.string.search_field_placeholder),
@@ -364,14 +373,17 @@ private fun SearchField(
             )
         }
         if (query.isNotEmpty()) {
-            IconButton(onClick = onClear, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Filled.Clear, contentDescription = stringResource(AuralisR.string.clear_search), tint = colors.secondaryText)
+            IconButton(onClick = onClear, modifier = Modifier.size(44.dp)) {
+                Icon(
+                    Icons.Filled.Cancel,
+                    contentDescription = stringResource(AuralisR.string.clear_search),
+                    tint = colors.secondaryText,
+                    modifier = Modifier.size(18.dp),
+                )
             }
         }
     }
 }
-
-// ================================================================== 搜索历史
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -383,7 +395,7 @@ private fun RecentSearchesContent(
 ) {
     val colors = LocalAuralisTheme.current.colors
     if (recents.isEmpty()) {
-        Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             SearchMessageCard(
                 icon = {
                     Icon(
@@ -404,7 +416,8 @@ private fun RecentSearchesContent(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = AuralisSpacing.large, bottom = AuralisSpacing.small),
+                    .padding(horizontal = AuralisSpacing.large)
+                    .padding(top = AuralisSpacing.medium, bottom = AuralisSpacing.small),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -415,21 +428,29 @@ private fun RecentSearchesContent(
                     modifier = Modifier.weight(1f),
                 )
                 TextButton(onClick = onClear) {
-                    Text(stringResource(AuralisR.string.clear), style = MaterialTheme.typography.labelMedium, color = colors.accent)
+                    Text(
+                        stringResource(AuralisR.string.clear),
+                        style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
+                        color = colors.accent,
+                    )
                 }
             }
-            HorizontalDivider(color = colors.separator)
         }
         item(key = "history-chips") {
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.small),
-                modifier = Modifier.padding(top = AuralisSpacing.medium),
+                verticalArrangement = Arrangement.spacedBy(AuralisSpacing.small),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = AuralisSpacing.large),
             ) {
                 recents.forEach { term ->
                     Surface(
                         shape = RoundedCornerShape(AuralisRadius.small),
                         color = colors.surface,
-                        modifier = Modifier.clip(RoundedCornerShape(AuralisRadius.small)),
+                        modifier = Modifier
+                            .widthIn(min = 120.dp, max = 220.dp)
+                            .clip(RoundedCornerShape(AuralisRadius.small)),
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -437,15 +458,19 @@ private fun RecentSearchesContent(
                                 .clickable { onPick(term) }
                                 .padding(horizontal = AuralisSpacing.medium, vertical = AuralisSpacing.small),
                         ) {
-                            Icon(Icons.Filled.History, contentDescription = null, tint = colors.secondaryText, modifier = Modifier.size(14.dp))
+                            Icon(
+                                Icons.Filled.History,
+                                contentDescription = null,
+                                tint = colors.secondaryText,
+                                modifier = Modifier.size(14.dp),
+                            )
                             Spacer(Modifier.width(AuralisSpacing.small))
                             Text(
                                 term,
-                                style = MaterialTheme.typography.bodySmall,
+                                style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp, lineHeight = 16.sp),
                                 color = colors.primaryText,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.widthIn(max = 220.dp),
                             )
                         }
                     }
@@ -454,8 +479,6 @@ private fun RecentSearchesContent(
         }
     }
 }
-
-// ================================================================== 结果列表
 
 /** 本地四类结果列表；服务器在线结果为空壳时仅渲染歌曲段。 */
 @Composable
@@ -466,15 +489,16 @@ private fun LocalResultList(
     modifier: Modifier = Modifier,
     serverSectionTitle: String? = null,
 ) {
-    LazyColumn(modifier = modifier.fillMaxWidth()) {
+    LazyColumn(
+        modifier = modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(horizontal = AuralisSpacing.large),
+    ) {
         if (results.songs.isNotEmpty()) {
             item(key = "header-songs") {
                 SearchSectionHeader(serverSectionTitle ?: stringResource(AuralisR.string.song))
             }
             items(count = results.songs.size, key = { index -> "song-${results.songs[index].globalId.serialized}" }) { index ->
                 val track = results.songs[index]
-                // 对齐 Swift：搜索结果点歌 = selectAndPlay(track) 单曲播放
-                // （组上下文由专辑/歌单详情页承载），不把整个搜索结果排成队列。
                 SearchTrackRow(
                     track = track,
                     onClick = { onPlayTracks(listOf(track), 0) },
@@ -510,8 +534,6 @@ private fun LocalResultList(
         }
     }
 }
-
-// ================================================================== 空态卡片
 
 /** 对齐 Swift `AuralisEmptyState`：icon + 标题 + 说明 + 可选动作。 */
 @Composable
