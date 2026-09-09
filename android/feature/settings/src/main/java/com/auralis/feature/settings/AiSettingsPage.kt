@@ -33,9 +33,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.auralis.core.ai.AiProviderConfiguration
+import com.auralis.core.ai.AiProviderFactory
 import com.auralis.core.ai.AiProviderFailureKind
 import com.auralis.core.ai.AiProviderException
-import com.auralis.core.ai.OpenAiCompatibleProvider
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.data.prefs.AiConnectionSettings
 import com.auralis.core.designsystem.AuralisSpacing
@@ -51,7 +51,8 @@ import kotlinx.coroutines.launch
  * - API Key 只存系统安全存储（Keystore，reference 对齐 Swift credentialID
  *   "ai.provider.api-key"），绝不写入 DataStore；
  * - 「保存」写本地偏好（对齐 Swift 实时绑定，Android 用显式保存避免半输入态）；
- * - 「测试连接」真实调用 OpenAI 兼容端点 testConnection，绿勾/红叉如实呈现。
+ * - apiPath 同时是协议选择器：Chat Completions / Responses / Anthropic Messages 均由
+ *   [AiProviderFactory] 自动路由；「测试连接」与真正 Assistant run 使用同一 wire codec。
  */
 @Composable
 fun AiSettingsPage(
@@ -133,7 +134,7 @@ fun AiSettingsPage(
             runCatching {
                 val config = AiProviderConfiguration(
                     id = "ai.provider.test",
-                    name = context.getString(R.string.settings_ai_openai_compatible),
+                    name = context.getString(R.string.settings_ai_auto_protocol),
                     baseUrl = settings.baseUrl,
                     apiPath = settings.apiPath,
                     credentialId = AiConnectionSettings.API_KEY_REFERENCE,
@@ -145,7 +146,7 @@ fun AiSettingsPage(
                     supportsToolCalling = settings.supportsToolCalling,
                 )
                 val apiKey = graph.vault.retrieve(AiConnectionSettings.API_KEY_REFERENCE)
-                val provider = OpenAiCompatibleProvider(config, apiKeyProvider = { apiKey })
+                val provider = AiProviderFactory.create(config, apiKeyProvider = { apiKey })
                 provider.testConnection()
             }.onSuccess { result ->
                 val diagnostic = result.diagnostics?.let {
@@ -197,6 +198,7 @@ fun AiSettingsPage(
             item {
                 OutlinedTextField(value = apiPath, onValueChange = { apiPath = it; savedNotice = null }, singleLine = true, modifier = Modifier.fillMaxWidth())
             }
+            item { SettingsCaption(stringResource(R.string.settings_ai_api_path_hint)) }
             item { FieldLabel(stringResource(R.string.settings_ai_model_label)) }
             item {
                 OutlinedTextField(value = model, onValueChange = { model = it; savedNotice = null }, singleLine = true, modifier = Modifier.fillMaxWidth())

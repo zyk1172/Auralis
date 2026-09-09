@@ -23,6 +23,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
@@ -32,6 +34,7 @@ import androidx.compose.ui.node.DelegatableNode
 import androidx.compose.ui.node.DrawModifierNode
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.LocalAuralisTheme
 import com.auralis.core.designsystem.LocalReduceMotion
@@ -45,7 +48,12 @@ import kotlinx.coroutines.launch
  * 目标是任何 D-pad 可操作元素都同时具备：明确焦点、足够命中范围、按下反馈。
  */
 
-/** 全局 TV 焦点指示：聚焦 → 3dp accent 描边；按下 → accent 淡底。 */
+/**
+ * 全局 TV 焦点指示：聚焦 → 3dp accent 描边；按下 → accent 淡底。
+ *
+ * 描边向内偏移半个 stroke，避免电视 OEM/Compose 图层把外半圈裁掉；按下背景也使用
+ * 同一圆角而不是方形 rect，保证复用手机卡片时焦点视觉不会破坏原组件轮廓。
+ */
 class TvIndication(
     private val focusColor: Color,
     private val stroke: Dp = 3.dp,
@@ -83,15 +91,29 @@ private class TvIndicationNode(
 
     override fun ContentDrawScope.draw() {
         drawContent()
+        val radius = 12.dp.toPx()
         if (pressed) {
-            drawRect(color = focusColor.copy(alpha = 0.14f))
+            drawRoundRect(
+                color = focusColor.copy(alpha = 0.14f),
+                cornerRadius = CornerRadius(radius, radius),
+            )
         }
         if (focused) {
             val strokePx = stroke.toPx()
+            val inset = strokePx / 2f
+            val ringSize = Size(
+                width = (size.width - strokePx).coerceAtLeast(0f),
+                height = (size.height - strokePx).coerceAtLeast(0f),
+            )
             drawRoundRect(
                 color = focusColor,
+                topLeft = Offset(inset, inset),
+                size = ringSize,
                 style = Stroke(width = strokePx),
-                cornerRadius = CornerRadius(12.dp.toPx(), 12.dp.toPx()),
+                cornerRadius = CornerRadius(
+                    x = (radius - inset).coerceAtLeast(0f),
+                    y = (radius - inset).coerceAtLeast(0f),
+                ),
             )
         }
     }
@@ -111,7 +133,8 @@ fun ProvideTvIndication(content: @Composable () -> Unit) {
  * TV 自有控件的焦点视觉。
  *
  * 聚焦后 140ms 放大至 1.05，并叠加 3dp accent 描边；系统 Reduce Motion 开启时
- * 立即切换，不做缩放过渡。这样保持电视远距观看时焦点足够明显，又避免突兀跳变。
+ * 立即切换，不做缩放过渡。聚焦控件同时提升 z-order，避免放大后的描边被相邻 Row/Card
+ * 覆盖——这在密集横向货架和底部 transport controls 上尤其明显。
  */
 @Composable
 fun Modifier.tvFocusVisual(
@@ -128,6 +151,7 @@ fun Modifier.tvFocusVisual(
     )
     return this
         .onFocusChanged { focused = it.isFocused }
+        .zIndex(if (focused) 1f else 0f)
         .graphicsLayer {
             scaleX = scale
             scaleY = scale

@@ -1,14 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- R5f：feature:library 独有文案（默认=中文；英文见 values-en）。key 一律 library_ 前缀。
-     跨模块通用词（返回/取消/删除/重试/歌曲/专辑/艺术家/歌单/收藏/添加到歌单/知道了/
-     下载到本地/操作失败/收藏操作失败/下载失败/新建歌单并加入/歌单名称/创建中…/创建并加入/
-     新建歌单/只读歌单提示/服务器未返回新歌单 等）放 core:designsystem 共享层，经 AuralisR 引用；
-     此处只放资料库各 scope/浏览详情/歌单管理/常听列表等模块特有词。 -->
+<!-- R10：feature:library 独有文案（默认=中文；英文见 values-en）。key 一律 library_ 前缀。
+     跨模块通用词放 core:designsystem 共享层，经 AuralisR 引用。 -->
 <resources>
     <!-- 顶栏与 scope 分段 -->
     <string name="library_scope_genres">流派</string>
     <string name="library_scope_categories">分类</string>
-    <!-- 加载中（LibraryLoadingBox 默认与各级占位） -->
+    <!-- 加载中 -->
     <string name="library_loading">正在加载…</string>
     <string name="library_loading_albums">正在加载专辑…</string>
     <string name="library_loading_artists">正在加载艺术家…</string>
@@ -16,6 +13,7 @@
     <string name="library_loading_playlists">正在加载歌单…</string>
     <string name="library_loading_favorites">正在加载收藏…</string>
     <string name="library_loading_genres">正在加载流派…</string>
+    <string name="library_loading_categories">正在读取本地分类…</string>
     <string name="library_stats_loading_top_artists">正在统计常听艺术家…</string>
     <string name="library_stats_loading_top_albums">正在统计常听专辑…</string>
     <!-- 通用空态/错误标题 -->
@@ -35,10 +33,32 @@
     <string name="library_empty_genres_title">还没有流派</string>
     <string name="library_empty_genres_help">服务器返回的流派（来自音乐文件内嵌标签）会显示在这里；连接并同步后即可按流派浏览。</string>
     <string name="library_genres_refresh_action">从服务器刷新流派</string>
-    <string name="library_categories_ai_title">分类（AI 推荐索引）</string>
-    <string name="library_categories_ai_empty_title">AI 推荐索引</string>
+    <string name="library_categories_ai_title">分类</string>
+    <string name="library_categories_ai_empty_title">还没有分类</string>
+    <string name="library_categories_ai_empty_help">在 Assistant 中输入“建立推荐索引”完成分类后，这里会按歌曲数量展示分类。</string>
+    <string name="library_category_invalid">这个分类已失效，请返回分类列表重新选择。</string>
+    <string name="library_category_empty">这个分类目前没有歌曲。</string>
     <string name="library_server_prompt_title">还没有连接服务器</string>
     <string name="library_server_prompt_help">请在「设置 → 服务器」中添加并同步音乐服务器后浏览资料库。</string>
+    <!-- 推荐分类维度；与 Apple RecommendationIndexCategory 展示名保持一致 -->
+    <string name="library_category_dimension_mood">情绪</string>
+    <string name="library_category_dimension_scene">场景</string>
+    <string name="library_category_dimension_theme">主题</string>
+    <string name="library_category_dimension_genre">类型</string>
+    <string name="library_category_dimension_style">风格</string>
+    <string name="library_category_dimension_vocal">人声</string>
+    <string name="library_category_dimension_instrument">乐器</string>
+    <string name="library_category_dimension_texture">质感</string>
+    <string name="library_category_dimension_rhythm">节奏</string>
+    <string name="library_category_dimension_energy">能量</string>
+    <string name="library_category_dimension_tempo">速度</string>
+    <string name="library_category_dimension_acousticness">原声感</string>
+    <string name="library_category_dimension_danceability">舞动性</string>
+    <string name="library_category_dimension_instrumentalness">器乐性</string>
+    <string name="library_category_dimension_liveness">现场感</string>
+    <string name="library_category_dimension_speechiness">人声密度</string>
+    <string name="library_category_dimension_valence">情感正负</string>
+    <string name="library_category_dimension_complexity">复杂度</string>
     <!-- 计数/副标题格式 -->
     <string name="library_track_count_format">%1$d 首歌曲</string>
     <string name="library_plays_count_format">%1$d 次播放</string>
@@ -127,6 +147,6 @@
     <string name="library_add_to_queue">加入队列</string>
     <string name="library_delete_local_cache">删除本地缓存</string>
     <string name="library_cancel_download">取消下载</string>
-    <!-- 批量加入歌单对话框（library 特有计数提示） -->
+    <!-- 批量加入歌单对话框 -->
     <string name="library_add_count_hint">共 %1$d 首歌曲将加入新歌单。</string>
 </resources>

@@ -38,6 +38,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -50,11 +51,11 @@ import com.auralis.core.designsystem.R as AuralisR
 /**
  * AI 助手页（对齐 Swift `AssistantView`）。
  *
- * - Header：左状态标签（live = 绿勾+模型；否则黄三角「未配置模型接口」+ 配置入口），
- *   右侧：搜索音乐库（S6 兜底能力）、会话列表；
- * - 消息流：用户气泡右对齐 / 助手气泡左对齐 + 复制；运行中插入瞬态工具状态行；
+ * - Header：一行展示 Provider 状态/模型；按钮统一 44dp 命中框、19dp 光学图标；
+ * - 消息流：用户主动上翻后不会被流式输出强行拉回底部，重新滑到底部后恢复跟随；
+ * - 空会话不再常驻占据首屏的示例/标题文案，与 Apple 当前空态策略一致；
  * - 输入区：发送/停止随运行切换；AI 未配置时如实禁用发送并引导配置；
- * - AI 失败/未授权如实红字呈现，绝不伪装本地模式。
+ * - AI 失败/未授权如实呈现，绝不伪装本地模式。
  */
 @Composable
 fun AssistantScreen(
@@ -85,11 +86,36 @@ fun AssistantScreen(
     var sessionsOpen by remember { mutableStateOf(false) }
     var actionLogOpen by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    var isFollowingOutput by remember { mutableStateOf(true) }
 
-    // 新消息/运行状态变化时滚到底部。
-    val scrollTarget = activeMessages.size + (if (run.isRunning) run.liveItems.size + 1 else 0) + (if (lastError != null) 1 else 0)
+    /*
+     * Apple AssistantView 只在用户仍靠近会话底部时跟随流式输出。
+     * 这里不能简单在消息数变化时无条件 animateScrollToItem：用户上翻读旧消息时，
+     * token/tool progress 的每次更新都会把阅读位置抢回底部。
+     *
+     * 只有“用户正在滚动”时才允许把 following 从 true 改成 false；普通的新消息导致
+     * totalItemsCount 增长时不应误判用户离开底部。重新滑回末尾后自动恢复 following。
+     */
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            Triple(listState.isScrollInProgress, info.totalItemsCount, lastVisible)
+        }.collect { (scrolling, total, lastVisible) ->
+            val atBottom = total == 0 || lastVisible >= total - 2
+            if (scrolling) {
+                isFollowingOutput = atBottom
+            } else if (atBottom) {
+                isFollowingOutput = true
+            }
+        }
+    }
+
+    val scrollTarget = activeMessages.size +
+        (if (run.isRunning) run.liveItems.size + 1 else 0) +
+        (if (lastError != null) 1 else 0)
     LaunchedEffect(scrollTarget) {
-        if (scrollTarget > 0) {
+        if (scrollTarget > 0 && isFollowingOutput) {
             runCatching { listState.animateScrollToItem(scrollTarget - 1) }
         }
     }
@@ -98,56 +124,91 @@ fun AssistantScreen(
 
     Box(modifier = modifier.fillMaxSize().background(colors.background)) {
         Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
-            // ---------------- Header（对齐 AssistantView.swift:641-674） ----------------
+            // ---------------- Header（对齐 Apple AssistantView.header） ----------------
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.small),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.small),
             ) {
                 if (aiStatus.isLive) {
-                    Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = colors.success, modifier = Modifier.size(18.dp))
+                    Icon(
+                        Icons.Filled.CheckCircle,
+                        contentDescription = null,
+                        tint = colors.success,
+                        modifier = Modifier.size(18.dp),
+                    )
                     Spacer(Modifier.width(AuralisSpacing.small))
                     Text(
                         aiStatus.model,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = colors.primaryText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.success,
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
                         modifier = Modifier.weight(1f),
                     )
                 } else {
-                    Icon(Icons.Filled.Warning, contentDescription = null, tint = colors.warning, modifier = Modifier.size(18.dp))
+                    Icon(
+                        Icons.Filled.Warning,
+                        contentDescription = null,
+                        tint = colors.warning,
+                        modifier = Modifier.size(18.dp),
+                    )
                     Spacer(Modifier.width(AuralisSpacing.small))
                     Text(
                         if (aiStatus.enabled) stringResource(R.string.assistant_not_configured) else stringResource(R.string.assistant_disabled),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = colors.primaryText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.warning,
                         fontWeight = FontWeight.Medium,
+                        maxLines = 1,
                         modifier = Modifier.weight(1f),
                     )
                 }
                 if (!aiStatus.isLive) {
-                    IconButton(onClick = onOpenAiSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.assistant_configure), tint = colors.primaryText)
+                    TextButton(
+                        onClick = onOpenAiSettings,
+                        modifier = Modifier.height(44.dp),
+                    ) {
+                        Icon(
+                            Icons.Filled.Settings,
+                            contentDescription = null,
+                            tint = colors.primaryText,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(AuralisSpacing.xSmall))
+                        Text(
+                            stringResource(R.string.assistant_configure),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colors.primaryText,
+                        )
                     }
                 }
-                IconButton(onClick = onOpenSearch) {
-                    Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.assistant_search_library), tint = colors.primaryText)
+                IconButton(onClick = onOpenSearch, modifier = Modifier.size(44.dp)) {
+                    Icon(
+                        Icons.Filled.Search,
+                        contentDescription = stringResource(R.string.assistant_search_library),
+                        tint = colors.primaryText,
+                        modifier = Modifier.size(19.dp),
+                    )
                 }
-                IconButton(onClick = { sessionsOpen = true }) {
-                    Icon(Icons.AutoMirrored.Filled.List, contentDescription = stringResource(R.string.assistant_sessions), tint = colors.primaryText)
+                IconButton(onClick = { sessionsOpen = true }, modifier = Modifier.size(44.dp)) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.List,
+                        contentDescription = stringResource(R.string.assistant_sessions),
+                        tint = colors.primaryText,
+                        modifier = Modifier.size(19.dp),
+                    )
                 }
             }
 
             // ---------------- 消息流 ----------------
             LazyColumn(
                 state = listState,
-                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = AuralisSpacing.large),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = AuralisSpacing.large),
             ) {
-                if (activeMessages.isEmpty() && !run.isRunning && lastError == null) {
-                    item {
-                        EmptyState(isLive = aiStatus.isLive)
-                    }
-                }
                 items(activeMessages.size) { index ->
                     val message = activeMessages[index]
                     when (message.role) {
@@ -171,7 +232,12 @@ fun AssistantScreen(
             }
 
             // ---------------- 输入区 ----------------
-            Column(modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.small)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.small),
+            ) {
                 if (run.isRunning) {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                         Text(
@@ -203,22 +269,29 @@ fun AssistantScreen(
                     )
                     Spacer(Modifier.width(AuralisSpacing.small))
                     if (run.isRunning) {
-                        IconButton(onClick = { coordinator.stop() }) {
-                            Icon(Icons.Filled.Stop, contentDescription = stringResource(R.string.assistant_stop), tint = colors.error, modifier = Modifier.size(28.dp))
+                        IconButton(onClick = { coordinator.stop() }, modifier = Modifier.size(44.dp)) {
+                            Icon(
+                                Icons.Filled.Stop,
+                                contentDescription = stringResource(R.string.assistant_stop),
+                                tint = colors.error,
+                                modifier = Modifier.size(24.dp),
+                            )
                         }
                     } else {
                         IconButton(
                             onClick = {
+                                isFollowingOutput = true
                                 coordinator.send(draft)
                                 draft = ""
                             },
                             enabled = canSend,
+                            modifier = Modifier.size(44.dp),
                         ) {
                             Icon(
                                 Icons.AutoMirrored.Filled.Send,
                                 contentDescription = stringResource(R.string.assistant_send),
                                 tint = if (canSend) colors.accent else colors.secondaryText.copy(alpha = 0.4f),
-                                modifier = Modifier.size(28.dp),
+                                modifier = Modifier.size(24.dp),
                             )
                         }
                     }
@@ -232,8 +305,15 @@ fun AssistantScreen(
                 sessions = visibleSessions,
                 showArchived = showArchived,
                 onToggleShowArchived = { coordinator.showArchived.value = !coordinator.showArchived.value },
-                onNew = { coordinator.newSession() },
-                onSelect = { coordinator.selectSession(it); sessionsOpen = false },
+                onNew = {
+                    isFollowingOutput = true
+                    coordinator.newSession()
+                },
+                onSelect = {
+                    isFollowingOutput = true
+                    coordinator.selectSession(it)
+                    sessionsOpen = false
+                },
                 onRename = { id, title -> coordinator.renameSession(id, title) },
                 onTogglePin = { coordinator.togglePin(it) },
                 onToggleArchived = { coordinator.toggleArchived(it) },
@@ -265,24 +345,5 @@ fun AssistantScreen(
                 onReject = { coordinator.rejectConfirm() },
             )
         }
-    }
-}
-
-/** 空态（对齐 Swift：无目录/无会话时的引导；本地搜索与播放不依赖模型，照常可用）。 */
-@Composable
-private fun EmptyState(isLive: Boolean, modifier: Modifier = Modifier) {
-    val colors = LocalAuralisTheme.current.colors
-    Column(modifier = modifier.fillMaxWidth().padding(top = AuralisSpacing.huge)) {
-        Text(
-            stringResource(AuralisR.string.ai_assistant),
-            style = MaterialTheme.typography.titleLarge,
-            color = colors.primaryText,
-        )
-        Spacer(Modifier.height(AuralisSpacing.small))
-        Text(
-            if (isLive) stringResource(R.string.assistant_empty_live_hint) else stringResource(R.string.assistant_empty_offline_hint),
-            style = MaterialTheme.typography.bodyMedium,
-            color = colors.secondaryText,
-        )
     }
 }

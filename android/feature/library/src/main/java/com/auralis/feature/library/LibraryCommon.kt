@@ -54,8 +54,8 @@ fun formatDurationSeconds(seconds: Double): String {
 
 /**
  * 资料库 7 个 scope（对齐 Swift `LibraryScope`，默认 = Albums）。
- * Categories（AI 推荐索引分类）在 Android 第一版不提供数据源（见
- * [com.auralis.core.domain.Categories]），scope 保留但显示能力说明，不拿假数据。
+ * Categories（AI 推荐索引分类）读取本地 Recommendation Index；索引由 Assistant 的
+ * “建立/重建推荐索引”闭环生成，未生成时保持空状态，不拿假数据。
  */
 enum class LibraryScope {
     Albums, Tracks, Artists, Playlists, Favorites, Genres, Categories;
