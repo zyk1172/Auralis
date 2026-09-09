@@ -33,9 +33,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.auralis.core.ai.AiProviderConfiguration
+import com.auralis.core.ai.AiProviderFactory
 import com.auralis.core.ai.AiProviderFailureKind
 import com.auralis.core.ai.AiProviderException
-import com.auralis.core.ai.OpenAiCompatibleProvider
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.data.prefs.AiConnectionSettings
 import com.auralis.core.designsystem.AuralisSpacing
@@ -51,7 +51,8 @@ import kotlinx.coroutines.launch
  * - API Key 只存系统安全存储（Keystore，reference 对齐 Swift credentialID
  *   "ai.provider.api-key"），绝不写入 DataStore；
  * - 「保存」写本地偏好（对齐 Swift 实时绑定，Android 用显式保存避免半输入态）；
- * - 「测试连接」真实调用 OpenAI 兼容端点 testConnection，绿勾/红叉如实呈现。
+ * - 「测试连接」按 apiPath 真实选择 Chat Completions / Responses 协议，避免
+ *   `/v1/responses` 被错误地送进 Chat provider 后误报“不支持”。
  */
 @Composable
 fun AiSettingsPage(
@@ -145,7 +146,7 @@ fun AiSettingsPage(
                     supportsToolCalling = settings.supportsToolCalling,
                 )
                 val apiKey = graph.vault.retrieve(AiConnectionSettings.API_KEY_REFERENCE)
-                val provider = OpenAiCompatibleProvider(config, apiKeyProvider = { apiKey })
+                val provider = AiProviderFactory.create(config, apiKeyProvider = { apiKey })
                 provider.testConnection()
             }.onSuccess { result ->
                 val diagnostic = result.diagnostics?.let {
