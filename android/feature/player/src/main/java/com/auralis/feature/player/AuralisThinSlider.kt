@@ -8,9 +8,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -112,7 +112,10 @@ internal fun AuralisThinSlider(
                 }
             },
     ) {
-        Canvas(Modifier.matchParentSize()) {
+        // `matchParentSize` is a BoxScope extension that is not exported by the
+        // Compose foundation version pinned in this project. `fillMaxSize` is
+        // equivalent here because the Canvas is the only child of this fixed-height Box.
+        Canvas(Modifier.fillMaxSize()) {
             val centerY = size.height / 2f
             val trackHeight = 3.dp.toPx()
             val radius = trackHeight / 2f
