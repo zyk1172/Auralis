@@ -58,6 +58,7 @@
     <string name="settings_ai_saved_notice">已保存到本机。</string>
     <string name="settings_ai_incomplete">接口地址/接口路径/模型不完整，无法测试。</string>
     <string name="settings_ai_openai_compatible">OpenAI 兼容</string>
+    <string name="settings_ai_auto_protocol">自动协议</string>
     <string name="settings_ai_diagnostics_format">流式:%1$s 原生工具:%2$s</string>
     <string name="settings_ai_connect_success">连接成功：模型 %1$s · 延迟 %2$dms。%3$s</string>
     <string name="settings_ai_error_auth">鉴权失败（API Key 无效？）</string>
@@ -74,6 +75,7 @@
     <string name="settings_ai_api_section">模型接口</string>
     <string name="settings_ai_base_url_label">接口地址 baseURL</string>
     <string name="settings_ai_api_path_label">接口路径 apiPath</string>
+    <string name="settings_ai_api_path_hint">按接口路径自动选择协议：/chat/completions、/responses 或 Anthropic /messages。测试连接与实际助手会使用同一协议。</string>
     <string name="settings_ai_model_label">模型 model</string>
     <string name="settings_ai_key_placeholder_saved">已保存（留空则不修改）</string>
     <string name="settings_ai_key_placeholder_new">输入 API Key</string>
