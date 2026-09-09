@@ -7,8 +7,8 @@ import com.auralis.core.ai.AgentToolLoop
 import com.auralis.core.ai.AiProvider
 import com.auralis.core.ai.AiProviderConfiguration
 import com.auralis.core.ai.AiProviderException
+import com.auralis.core.ai.AiProviderFactory
 import com.auralis.core.ai.AiProviderFailureKind
-import com.auralis.core.ai.OpenAiCompatibleProvider
 import com.auralis.core.ai.ToolSideEffect
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.data.prefs.AiConnectionSettings
@@ -361,7 +361,7 @@ class AssistantCoordinator(
     private fun updateToolStatus(runId: String, toolName: String, state: AssistantLiveItem.ToolStatus.State, detail: String? = null) {
         if (currentRunId != runId) return
         val current = _run.value
-        val items = current.liveItems.mapIndexed { index, item ->
+        val items = current.liveItems.mapIndexed { _, item ->
             if (item is AssistantLiveItem.ToolStatus && item.toolName == toolName && item.state == AssistantLiveItem.ToolStatus.State.Running) {
                 AssistantLiveItem.ToolStatus(item.toolName, item.label, state, detail ?: item.detail)
             } else {
@@ -460,6 +460,11 @@ class AssistantCoordinator(
 
     // ------------------------------------------------------------- 组装 Provider
 
+    /**
+     * apiPath 是协议选择的一部分，不能无条件构造 Chat Completions provider。
+     * `/v1/responses` 与设置页测试连接共用 [AiProviderFactory]，确保“测试成功”与真正
+     * Assistant run 使用完全一致的 wire protocol。
+     */
     private suspend fun buildProvider(settings: AiConnectionSettings): AiProvider {
         val apiKey = vault.retrieve(AiConnectionSettings.API_KEY_REFERENCE)
         val configuration = AiProviderConfiguration(
@@ -477,7 +482,7 @@ class AssistantCoordinator(
             supportsParallelTools = false,
             supportsToolChoice = false,
         )
-        return OpenAiCompatibleProvider(configuration, apiKeyProvider = { apiKey })
+        return AiProviderFactory.create(configuration, apiKeyProvider = { apiKey })
     }
 
     private fun describeProviderFailure(e: AiProviderException): String {
