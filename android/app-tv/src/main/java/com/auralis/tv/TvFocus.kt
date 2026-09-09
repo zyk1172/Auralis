@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.auralis.tv
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.IndicationNodeFactory
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.FocusInteraction
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -30,21 +34,18 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.designsystem.LocalReduceMotion
 import kotlinx.coroutines.launch
 
 /**
- * TV 焦点视觉体系（S9）。
+ * TV 焦点视觉体系。
  *
- * 移动端页面（feature 层）在 TV 上零改动复用：它们的 `clickable` 默认读取
- * `LocalIndication.current`，因此在 TV Activity 根部用 [ProvideTvIndication]
- * 全局替换为 [TvIndication] —— 复用页面里的行/卡/按钮在 D-pad 聚焦时即获得
- * accent 描边焦点环，无需逐项改 feature 代码。
- *
- * TV 自有控件（导航项、正在播放条等）另提供 [Modifier.tvFocusVisual] 显式
- * 叠加「聚焦放大 + accent 描边」，与 indication 环视觉一致。
+ * 移动端 feature 页面在 TV 上复用时，其普通 `clickable` 从 [LocalIndication]
+ * 获得统一 accent 焦点环；TV 自有导航、播放器条等则使用 [tvFocusVisual] + [tvClick]。
+ * 目标是任何 D-pad 可操作元素都同时具备：明确焦点、足够命中范围、按下反馈。
  */
 
-/** 全局替换用的 TV 焦点指示：聚焦 → accent 描边圆角环；按下 → accent 淡底。 */
+/** 全局 TV 焦点指示：聚焦 → 3dp accent 描边；按下 → accent 淡底。 */
 class TvIndication(
     private val focusColor: Color,
     private val stroke: Dp = 3.dp,
@@ -96,7 +97,7 @@ private class TvIndicationNode(
     }
 }
 
-/** 在子树根部提供 TV 焦点指示（对齐当前主题 accent 色；主题切换时重建）。 */
+/** 在 TV 子树根部提供随主题 accent 变化的统一焦点指示。 */
 @Composable
 fun ProvideTvIndication(content: @Composable () -> Unit) {
     val colors = LocalAuralisTheme.current.colors
@@ -107,8 +108,10 @@ fun ProvideTvIndication(content: @Composable () -> Unit) {
 }
 
 /**
- * 自有 TV 控件的焦点视觉：D-pad 聚焦时轻微放大并画 accent 描边。
- * 元素自身需可聚焦（自带 clickable / 前置 focusable）。
+ * TV 自有控件的焦点视觉。
+ *
+ * 聚焦后 140ms 放大至 1.05，并叠加 3dp accent 描边；系统 Reduce Motion 开启时
+ * 立即切换，不做缩放过渡。这样保持电视远距观看时焦点足够明显，又避免突兀跳变。
  */
 @Composable
 fun Modifier.tvFocusVisual(
@@ -117,10 +120,15 @@ fun Modifier.tvFocusVisual(
 ): Modifier {
     var focused by remember { mutableStateOf(false) }
     val colors = LocalAuralisTheme.current.colors
+    val reduceMotion = LocalReduceMotion.current
+    val scale by animateFloatAsState(
+        targetValue = if (focused) 1.05f else 1f,
+        animationSpec = if (reduceMotion) snap() else tween(durationMillis = 140),
+        label = "tv-focus-scale",
+    )
     return this
         .onFocusChanged { focused = it.isFocused }
         .graphicsLayer {
-            val scale = if (focused) 1.05f else 1f
             scaleX = scale
             scaleY = scale
         }
@@ -128,15 +136,20 @@ fun Modifier.tvFocusVisual(
 }
 
 /**
- * TV 自有控件的点击：不叠加 indication（焦点视觉由 [Modifier.tvFocusVisual] 自绘），
- * 避免与全局 [TvIndication] 焦点环双画。元素需先经 tvFocusVisual/可聚焦来源获得焦点能力。
+ * TV 自有控件点击入口。
+ *
+ * 显式加入 [focusable]，不依赖 `clickable` 在不同 Compose/设备组合下隐式建立键盘焦点；
+ * Focus 与 Press 共用一个 interaction source，D-pad OK/Enter 可以稳定触发，且不与
+ * [tvFocusVisual] 再叠一层默认 indication。
  */
 @Composable
 fun Modifier.tvClick(onClick: () -> Unit): Modifier {
     val interactionSource = remember { MutableInteractionSource() }
-    return this.clickable(
-        interactionSource = interactionSource,
-        indication = null,
-        onClick = onClick,
-    )
+    return this
+        .focusable(interactionSource = interactionSource)
+        .clickable(
+            interactionSource = interactionSource,
+            indication = null,
+            onClick = onClick,
+        )
 }
