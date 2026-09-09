@@ -20,6 +20,14 @@
     <string name="settings_home_layout_subtitle">Module visibility and order</string>
     <string name="settings_theme_title">Theme</string>
     <string name="settings_about">About</string>
+    <string name="settings_recommendation_index_title">Recommendation Index</string>
+    <string name="settings_recommendation_index_running_format">Building: %1$d/%2$d tracks processed</string>
+    <string name="settings_recommendation_index_error_format">Build failed: %1$s</string>
+    <string name="settings_recommendation_index_no_tracks">No synced tracks yet</string>
+    <string name="settings_recommendation_index_pending_format">%1$d pending of %2$d tracks</string>
+    <string name="settings_recommendation_index_complete_format">Complete: %1$d tracks</string>
+    <string name="settings_recommendation_index_start">Build / continue</string>
+    <string name="settings_recommendation_index_refresh">Refresh</string>
     <string name="settings_version">Version</string>
     <!-- Playback & quality page -->
     <string name="settings_network_quality">Network Quality</string>

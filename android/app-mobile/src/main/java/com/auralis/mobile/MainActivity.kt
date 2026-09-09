@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -78,9 +79,11 @@ private sealed interface Route {
 @Composable
 private fun AppRoot(graph: AuralisGraph) {
     var route by remember { mutableStateOf<Route>(Route.Boot) }
+    var startRecommendationIndexToken by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
     // AI 助手协调器：AppRoot 持有（跨分区/路由不中断运行中的对话）。
     val assistantCoordinator = remember(graph, scope) { AssistantCoordinator(graph, scope) }
+    val recommendationIndexState by assistantCoordinator.recommendationIndex.collectAsState()
 
     LaunchedEffect(graph) {
         // Application 同时在后台恢复；这里用幂等本地 bootstrap 作为 Shell 的确定性屏障，
@@ -125,6 +128,13 @@ private fun AppRoot(graph: AuralisGraph) {
             onOpenServers = { route = Route.ManageServers(showBack = true) },
             onEditHomeLayout = { route = Route.HomeLayoutEdit },
             onOpenAiSettings = { route = Route.AiSettings },
+            recommendationIndexState = recommendationIndexState,
+            onStartRecommendationIndex = {
+                startRecommendationIndexToken += 1
+                route = Route.Shell
+            },
+            onCancelRecommendationIndex = assistantCoordinator::cancelRecommendationIndexBuild,
+            onRefreshRecommendationIndex = assistantCoordinator::refreshRecommendationIndexStatus,
         )
 
         Route.AiSettings -> AiSettingsPage(
@@ -144,6 +154,9 @@ private fun AppRoot(graph: AuralisGraph) {
             onOpenSettings = { route = Route.Settings },
             onOpenAiSettings = { route = Route.AiSettings },
             onOpenEditHomeLayout = { route = Route.HomeLayoutEdit },
+            recommendationIndexState = recommendationIndexState,
+            startRecommendationIndexToken = startRecommendationIndexToken,
+            onRecommendationIndexStartConsumed = { startRecommendationIndexToken = 0 },
         )
     }
 }

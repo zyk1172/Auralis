@@ -107,6 +107,34 @@ data class RecommendationIndexStatus(
     val rulesVersion: String = RecommendationIndex.RULES_VERSION,
 )
 
+/** Progress emitted by the bounded Assistant classifier workflow. */
+data class RecommendationIndexProgress(
+    val batchNumber: Int,
+    val batchSize: Int,
+    val indexedTracks: Int,
+    val totalTracks: Int,
+    val pendingTracks: Int,
+)
+
+data class RecommendationIndexRunResult(
+    val totalTracks: Int,
+    val indexedTracks: Int,
+    val pendingTracks: Int,
+)
+
+/** Cross-screen presentation state. The classifier itself remains owned by Assistant. */
+data class RecommendationIndexUiState(
+    val status: RecommendationIndexStatus? = null,
+    val progress: RecommendationIndexProgress? = null,
+    val isRunning: Boolean = false,
+    val error: String? = null,
+    val lastCompletedAtMillis: Long? = null,
+) {
+    val totalTracks: Int get() = status?.totalTracks ?: progress?.totalTracks ?: 0
+    val indexedTracks: Int get() = status?.indexedTracks ?: progress?.indexedTracks ?: 0
+    val pendingTracks: Int get() = status?.pendingTracks ?: progress?.pendingTracks ?: 0
+}
+
 /** One bounded classifier request. Unreadable payloads are reported so a caller cannot loop forever. */
 data class RecommendationIndexBatch(
     val serverId: ServerId,

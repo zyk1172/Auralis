@@ -22,6 +22,14 @@
     <string name="settings_home_layout_subtitle">模块显示与排序</string>
     <string name="settings_theme_title">主题</string>
     <string name="settings_about">关于</string>
+    <string name="settings_recommendation_index_title">推荐索引</string>
+    <string name="settings_recommendation_index_running_format">正在建立：已处理 %1$d/%2$d 首</string>
+    <string name="settings_recommendation_index_error_format">建立失败：%1$s</string>
+    <string name="settings_recommendation_index_no_tracks">暂无已同步曲目</string>
+    <string name="settings_recommendation_index_pending_format">待处理 %1$d 首（共 %2$d 首）</string>
+    <string name="settings_recommendation_index_complete_format">已完成 %1$d 首</string>
+    <string name="settings_recommendation_index_start">建立/继续</string>
+    <string name="settings_recommendation_index_refresh">刷新</string>
     <string name="settings_version">版本</string>
     <!-- 播放与音质页 -->
     <string name="settings_network_quality">网络音质</string>

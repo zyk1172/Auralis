@@ -13,6 +13,10 @@ import com.auralis.core.ai.ToolSideEffect
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.data.prefs.AiConnectionSettings
 import com.auralis.core.designsystem.R as AuralisR
+import com.auralis.core.domain.RecommendationIndexProgress
+import com.auralis.core.domain.RecommendationIndexStatus
+import com.auralis.core.domain.RecommendationIndexUiState
+import com.auralis.core.domain.ServerId
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -96,6 +100,10 @@ class AssistantCoordinator(
     private val _lastError = MutableStateFlow<String?>(null)
     val lastError: StateFlow<String?> = _lastError.asStateFlow()
 
+    /** Library / Settings 可观察的索引状态；不依附 Assistant 页面是否当前可见。 */
+    private val _recommendationIndex = MutableStateFlow(RecommendationIndexUiState())
+    val recommendationIndex: StateFlow<RecommendationIndexUiState> = _recommendationIndex.asStateFlow()
+
     private var consentDeferred: CompletableDeferred<ConsentChoice>? = null
     private var confirmDeferred: CompletableDeferred<Boolean>? = null
     private var currentRunId: String? = null
@@ -115,6 +123,16 @@ class AssistantCoordinator(
             prefs.aiEnabledFlow.collect { enabled ->
                 val settings = prefs.aiConnectionValue()
                 _aiStatus.value = AssistantAiStatus(enabled = enabled, complete = settings.isComplete, model = settings.model)
+            }
+        }
+        scope.launch {
+            prefs.activeServerIdFlow.collect { rawServerId ->
+                val serverId = rawServerId?.takeIf { it.isNotBlank() }?.let(::ServerId)
+                if (serverId == null) {
+                    _recommendationIndex.value = RecommendationIndexUiState()
+                } else {
+                    refreshRecommendationIndexStatus(serverId)
+                }
             }
         }
     }
@@ -235,6 +253,54 @@ class AssistantCoordinator(
         _lastError.value = null
     }
 
+    /** Library / Settings 的一键入口，仍使用 Assistant 的外发授权与闭合分类流程。 */
+    fun startRecommendationIndexBuild() {
+        if (!_aiStatus.value.enabled) {
+            _recommendationIndex.value = _recommendationIndex.value.copy(error = stringRes(R.string.assistant_err_disabled))
+            return
+        }
+        if (!_aiStatus.value.complete) {
+            _recommendationIndex.value = _recommendationIndex.value.copy(error = stringRes(R.string.assistant_err_config_incomplete))
+            return
+        }
+        send(RECOMMENDATION_INDEX_COMMAND)
+    }
+
+    /** 取消当前索引批次；已提交的完整批次保留，下一次建立会从 pending 继续。 */
+    fun cancelRecommendationIndexBuild() {
+        if (_recommendationIndex.value.isRunning) stop()
+    }
+
+    fun refreshRecommendationIndexStatus() {
+        scope.launch {
+            val rawServerId = runCatching { prefs.activeServerIdValue() }.getOrNull()
+            val serverId = rawServerId?.takeIf { it.isNotBlank() }?.let(::ServerId)
+            if (serverId == null) {
+                _recommendationIndex.value = RecommendationIndexUiState()
+            } else {
+                refreshRecommendationIndexStatus(serverId)
+            }
+        }
+    }
+
+    private suspend fun refreshRecommendationIndexStatus(serverId: ServerId) {
+        runCatching { graph.recommendationIndex.status(serverId) }
+            .onSuccess { status ->
+                val current = _recommendationIndex.value
+                _recommendationIndex.value = current.copy(
+                    status = status,
+                    progress = if (current.isRunning) current.progress else null,
+                    error = if (current.isRunning) current.error else null,
+                )
+            }
+            .onFailure { throwable ->
+                _recommendationIndex.value = _recommendationIndex.value.copy(
+                    status = null,
+                    error = throwable.message,
+                )
+            }
+    }
+
     private suspend fun runSend(text: String) {
         _lastError.value = null
         val status = _aiStatus.value
@@ -279,11 +345,18 @@ class AssistantCoordinator(
         val runId = UUID.randomUUID().toString()
         currentRunId = runId
         _run.value = AssistantRunPresentation(running = true, phase = AssistantRunPhase.Connecting)
+        var recommendationIndexRun = false
         try {
             val provider = buildProvider(settings)
             if (isRecommendationIndexRequest(text)) {
+                recommendationIndexRun = true
                 val serverId = activeServerIdForRecommendationIndex()
                     ?: throw IllegalArgumentException("请先同步并选择一个音乐服务器")
+                val before = graph.recommendationIndex.status(serverId)
+                _recommendationIndex.value = RecommendationIndexUiState(
+                    status = before,
+                    isRunning = true,
+                )
                 val result = RecommendationIndexAssistantRuntime(
                     graph = graph,
                     provider = provider,
@@ -295,6 +368,10 @@ class AssistantCoordinator(
                 appendAssistantMessage(
                     sessionId,
                     "推荐索引已完成：已覆盖 ${result.indexedTracks}/${result.totalTracks} 首曲目。",
+                )
+                _recommendationIndex.value = RecommendationIndexUiState(
+                    status = graph.recommendationIndex.status(serverId),
+                    lastCompletedAtMillis = System.currentTimeMillis(),
                 )
             } else {
                 val loop = AgentToolLoop(provider, host.registry(), maxRounds = 8)
@@ -314,10 +391,30 @@ class AssistantCoordinator(
             }
         } catch (c: CancellationException) {
             // 用户停止：不落盘任何半成品。
+            if (recommendationIndexRun) {
+                val rawServerId = runCatching { prefs.activeServerIdValue() }.getOrNull()
+                val serverId = rawServerId?.takeIf { it.isNotBlank() }?.let(::ServerId)
+                val status = serverId?.let { runCatching { graph.recommendationIndex.status(it) }.getOrNull() }
+                _recommendationIndex.value = RecommendationIndexUiState(status = status)
+            }
         } catch (e: AiProviderException) {
-            _lastError.value = describeProviderFailure(e)
+            val detail = describeProviderFailure(e)
+            _lastError.value = detail
+            if (recommendationIndexRun) {
+                _recommendationIndex.value = _recommendationIndex.value.copy(
+                    isRunning = false,
+                    error = detail,
+                )
+            }
         } catch (e: Exception) {
-            _lastError.value = e.message ?: stringRes(R.string.assistant_err_request_failed)
+            val detail = e.message ?: stringRes(R.string.assistant_err_request_failed)
+            _lastError.value = detail
+            if (recommendationIndexRun) {
+                _recommendationIndex.value = _recommendationIndex.value.copy(
+                    isRunning = false,
+                    error = detail,
+                )
+            }
         } finally {
             if (currentRunId == runId) {
                 currentRunId = null
@@ -384,6 +481,21 @@ class AssistantCoordinator(
             it is AssistantLiveItem.ToolStatus && it.toolName == status.toolName
         } + status
         _run.value = current.copy(phase = AssistantRunPhase.Working, liveItems = items)
+        val indexState = _recommendationIndex.value
+        _recommendationIndex.value = indexState.copy(
+            isRunning = true,
+            progress = progress,
+            status = indexState.status?.copy(
+                totalTracks = progress.totalTracks,
+                indexedTracks = progress.indexedTracks,
+                pendingTracks = progress.pendingTracks,
+            ) ?: RecommendationIndexStatus(
+                totalTracks = progress.totalTracks,
+                indexedTracks = progress.indexedTracks,
+                pendingTracks = progress.pendingTracks,
+            ),
+            error = null,
+        )
     }
 
     private fun isRecommendationIndexRequest(text: String): Boolean {
@@ -567,6 +679,8 @@ class AssistantCoordinator(
     }
 
     companion object {
+        private const val RECOMMENDATION_INDEX_COMMAND = "建立推荐索引"
+
         private val SYSTEM_PROMPT = """
             你是 Auralis（本地音乐库）的 AI 助手，通过工具操作真实的音乐库数据。
             规则：
@@ -577,6 +691,7 @@ class AssistantCoordinator(
             5. 涉及歌曲请标注歌手与专辑；列表过长时只展示前几条并说明总数；
             6. 使用简体中文，简洁直接。
             7. 用户要建立或重建推荐索引时，说明需要在 Assistant 中使用“建立推荐索引”闭环；分类结果只来自本地已同步曲目。
+            8. 用户要求按推荐分类推荐歌曲或生成推荐歌单时，优先使用 recommendation_category_tracks；生成歌单使用 recommendation_create_playlist，并如实说明结果。
         """.trimIndent()
     }
 }

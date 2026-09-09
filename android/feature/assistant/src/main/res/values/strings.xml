@@ -85,6 +85,8 @@
     <string name="assistant_tool_save_queue_as_playlist">队列存为歌单</string>
     <string name="assistant_tool_find_similar">查找相似歌曲</string>
     <string name="assistant_tool_replace_queue">替换播放队列</string>
+    <string name="assistant_tool_recommendation_category">读取推荐分类</string>
+    <string name="assistant_tool_recommendation_playlist">生成推荐歌单</string>
     <string name="assistant_tool_online_search">在线搜索</string>
     <string name="assistant_tool_search_tracks">搜索歌曲</string>
     <string name="assistant_tool_search_albums">搜索专辑</string>

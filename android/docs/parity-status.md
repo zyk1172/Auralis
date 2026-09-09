@@ -164,6 +164,19 @@
 | AI 连接设置页：baseURL/apiPath/model/API Key(Keystore)/上下文/输出/原生工具/测试连接 | AIProviderSettingsPage + AIConnectionSettings | feature:settings AiSettingsPage（保存即 DataStore；Key 走 Keystore reference ai.provider.api-key） | Done（S8） |
 | 历史回灌只取文本、丢弃 transient | AgentHistoryPolicy | Coordinator 消息过滤 | Done（S8） |
 
+## 5h. Recommendation Index / Categories（R10–R11）
+
+| 能力 | Android 实现 | 状态 |
+|---|---|---|
+| 固定 taxonomy + 内容指纹 fail-closed | core:domain RecommendationIndex + core:data RecommendationIndexStore | Done（R10） |
+| Assistant 闭合批处理分类（完整覆盖、批次原子提交） | feature:assistant RecommendationIndexAssistantRuntime + strict response parser | Done（R10/R11 测试） |
+| Library/Settings 索引入口、覆盖状态、进度、取消后继续 | AssistantCoordinator recommendationIndex StateFlow + Library/Settings status card | Done（R11） |
+| 分类结果按置信度稳定排序 | RecommendationIndexStore.tracksForCategory | Done（R10/R11） |
+| 从分类详情生成远端推荐歌单 | BrowseDetailScreen + recommendation_create_playlist tool | Done（R11） |
+| 分类标题使用 taxonomy 展示名与中英文维度文案 | Library/BrowseDetail category title helpers + resources | Done（R11） |
+
+> R11 代码完成后，统一进行 Android 手机与 Android TV 实机验收；开发阶段不重复触发 CI。
+
 ## 6. 离线 / 歌词 / 封面（audit 07）
 
 | 能力 | Android 实现 | 状态 |

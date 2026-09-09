@@ -61,6 +61,7 @@ import com.auralis.core.designsystem.BuiltInThemes
 import com.auralis.core.designsystem.LocalAuralisTheme
 import com.auralis.core.designsystem.R as AuralisR
 import com.auralis.core.domain.ReplayGainMode
+import com.auralis.core.domain.RecommendationIndexUiState
 import com.auralis.core.domain.ServerId
 import com.auralis.core.image.clearArtworkCaches
 import com.auralis.core.opensubsonic.StreamQualitySettings
@@ -86,6 +87,10 @@ fun SettingsScreen(
     onOpenServers: () -> Unit,
     onEditHomeLayout: () -> Unit,
     onOpenAiSettings: () -> Unit,
+    recommendationIndexState: RecommendationIndexUiState = RecommendationIndexUiState(),
+    onStartRecommendationIndex: () -> Unit = {},
+    onCancelRecommendationIndex: () -> Unit = {},
+    onRefreshRecommendationIndex: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var page by remember { mutableStateOf<SettingsPage?>(null) }
@@ -98,6 +103,10 @@ fun SettingsScreen(
             onOpenServers = onOpenServers,
             onEditHomeLayout = onEditHomeLayout,
             onOpenAiSettings = onOpenAiSettings,
+            recommendationIndexState = recommendationIndexState,
+            onStartRecommendationIndex = onStartRecommendationIndex,
+            onCancelRecommendationIndex = onCancelRecommendationIndex,
+            onRefreshRecommendationIndex = onRefreshRecommendationIndex,
             onOpenQuality = { page = SettingsPage.Quality },
             onOpenData = { page = SettingsPage.Data },
             onOpenTheme = { page = SettingsPage.Theme },
@@ -112,6 +121,66 @@ fun SettingsScreen(
 
 private enum class SettingsPage { Quality, Data, Theme }
 
+@Composable
+private fun RecommendationIndexSettingsCard(
+    state: RecommendationIndexUiState,
+    onStart: () -> Unit,
+    onCancel: () -> Unit,
+    onRefresh: () -> Unit,
+) {
+    val colors = LocalAuralisTheme.current.colors
+    val status = when {
+        state.isRunning -> stringResource(
+            R.string.settings_recommendation_index_running_format,
+            state.indexedTracks,
+            state.totalTracks,
+        )
+        state.error != null -> stringResource(R.string.settings_recommendation_index_error_format, state.error)
+        state.totalTracks == 0 -> stringResource(R.string.settings_recommendation_index_no_tracks)
+        state.pendingTracks > 0 -> stringResource(
+            R.string.settings_recommendation_index_pending_format,
+            state.pendingTracks,
+            state.totalTracks,
+        )
+        else -> stringResource(R.string.settings_recommendation_index_complete_format, state.indexedTracks)
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.small)
+            .background(colors.surface, RoundedCornerShape(12.dp))
+            .padding(horizontal = AuralisSpacing.medium, vertical = AuralisSpacing.small),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.settings_recommendation_index_title),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = colors.primaryText,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(status, style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+            }
+            when {
+                state.isRunning -> TextButton(onClick = onCancel) { Text(stringResource(AuralisR.string.cancel)) }
+                state.pendingTracks > 0 || state.error != null -> TextButton(onClick = onStart) {
+                    Text(stringResource(R.string.settings_recommendation_index_start))
+                }
+                else -> TextButton(onClick = onRefresh) {
+                    Text(stringResource(R.string.settings_recommendation_index_refresh))
+                }
+            }
+        }
+        if (state.isRunning && state.totalTracks > 0) {
+            androidx.compose.material3.LinearProgressIndicator(
+                progress = { (state.indexedTracks.toFloat() / state.totalTracks).coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+                color = colors.accent,
+            )
+        }
+    }
+}
+
 // ================================================================== 根页
 
 @Composable
@@ -121,6 +190,10 @@ private fun SettingsRootPage(
     onOpenServers: () -> Unit,
     onEditHomeLayout: () -> Unit,
     onOpenAiSettings: () -> Unit,
+    recommendationIndexState: RecommendationIndexUiState,
+    onStartRecommendationIndex: () -> Unit,
+    onCancelRecommendationIndex: () -> Unit,
+    onRefreshRecommendationIndex: () -> Unit,
     onOpenQuality: () -> Unit,
     onOpenData: () -> Unit,
     onOpenTheme: () -> Unit,
@@ -188,6 +261,14 @@ private fun SettingsRootPage(
                     onClick = onOpenAiSettings,
                 )
                 SettingsCaption(stringResource(R.string.settings_ai_caption))
+            }
+            item {
+                RecommendationIndexSettingsCard(
+                    state = recommendationIndexState,
+                    onStart = onStartRecommendationIndex,
+                    onCancel = onCancelRecommendationIndex,
+                    onRefresh = onRefreshRecommendationIndex,
+                )
             }
             item {
                 SettingsCategoryRow(
