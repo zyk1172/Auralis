@@ -75,8 +75,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
@@ -120,12 +118,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 
 /**
- * 正在播放全屏页（对齐 Swift `NowPlayingView`，S5/R9）。
+ * 正在播放全屏页（对齐 Swift `NowPlayingView`，S5/R10）。
  *
  * - 使用与 iOS 相同的 42% accent / background / 22% secondary-accent 环境渐变；
  * - 宽屏内容封顶 680dp，保持 iPad/Android 平板与手机为同一套布局而不是横向拉伸；
  * - 顶部用模态下收语义而非返回导航语义，分段控件按系统 segmented geometry 收紧；
  * - 播放内容按 Apple 的 650pt 高度阈值在 10/15dp 间距和 56/64dp 主播放键之间切换；
+ * - Hero 使用独立 `NowPlayingArtworkGlow`，真实封面作为环境光源并支持播放态低速呼吸；
  * - 标题、歌词、队列、ThinSlider 和更多菜单均以 Swift 当前实现为产品规格。
  */
 @Composable
@@ -327,20 +326,14 @@ private fun PlayerPageSelector(selected: PlayerTab, onSelect: (PlayerTab) -> Uni
 private fun HeroContent(track: Track, isPlaying: Boolean) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         val side = minOf(maxWidth * 0.84f, maxHeight * 0.88f, 350.dp)
-        val glowSide = minOf(side * 1.10f, maxWidth, maxHeight)
+        val maxGlowCanvas = minOf(maxWidth, maxHeight)
         val shape = RoundedCornerShape(AuralisRadius.large)
 
-        AuralisArtwork(
-            serverId = track.serverId,
-            artworkKey = track.artworkKey,
-            contentDescription = null,
-            titleForFallback = track.albumTitle,
-            targetSizeDp = glowSide.value.toInt(),
-            shape = shape,
-            modifier = Modifier
-                .size(glowSide)
-                .alpha(if (isPlaying) 0.30f else 0.20f)
-                .blur(30.dp),
+        NowPlayingArtworkGlow(
+            track = track,
+            artworkSize = side,
+            maxCanvasSize = maxGlowCanvas,
+            isPlaying = isPlaying,
         )
         AuralisArtwork(
             serverId = track.serverId,
