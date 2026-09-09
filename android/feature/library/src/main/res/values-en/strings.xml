@@ -34,7 +34,7 @@
     <string name="library_genres_refresh_action">Refresh Genres from Server</string>
     <string name="library_categories_ai_title">Categories</string>
     <string name="library_categories_ai_empty_title">No Categories Yet</string>
-    <string name="library_categories_ai_empty_help">Build the Recommendation Index under Settings → AI &amp; Public Data. Categories will then be shown by song count.</string>
+    <string name="library_categories_ai_empty_help">In Assistant, say “Build the Recommendation Index”. Categories will then be shown by song count.</string>
     <string name="library_category_invalid">This category is no longer valid. Return to Categories and choose it again.</string>
     <string name="library_category_empty">There are currently no songs in this category.</string>
     <string name="library_server_prompt_title">No Server Connected</string>

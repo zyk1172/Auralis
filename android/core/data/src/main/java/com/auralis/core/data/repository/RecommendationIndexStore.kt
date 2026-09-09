@@ -10,12 +10,16 @@ import com.auralis.core.data.db.RecommendationIndexTagEntity
 import com.auralis.core.domain.GlobalId
 import com.auralis.core.domain.RecommendationIndex
 import com.auralis.core.domain.RecommendationIndexCategory
+import com.auralis.core.domain.RecommendationIndexBatch
+import com.auralis.core.domain.RecommendationIndexClassificationInput
 import com.auralis.core.domain.RecommendationIndexStatus
 import com.auralis.core.domain.RecommendationIndexTag
+import com.auralis.core.domain.RecommendationIndexTaxonomy
 import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.flow.first
 import java.util.Locale
 
 /**
@@ -38,6 +42,29 @@ class RecommendationIndexStore(
             totalTracks = total,
             indexedTracks = valid.size.coerceAtMost(total),
             pendingTracks = (total - valid.size).coerceAtLeast(0),
+        )
+    }
+
+    /**
+     * Returns the next bounded closed-transform batch. The caller must classify exactly these
+     * IDs and submit them through [replaceClassifications]; no arbitrary track IDs are accepted.
+     */
+    suspend fun nextBatch(serverId: ServerId, limit: Int = 80): RecommendationIndexBatch {
+        require(limit in 1..100) { "Recommendation Index batch size 必须在 1...100" }
+        val entities = database.trackDao().observeAll(serverId.value).first()
+        val entityIds = entities.map { it.globalId }.toHashSet()
+        val valid = validTrackIds(serverId).toHashSet()
+        val pendingEntities = entities.filterNot { it.globalId in valid }
+        val pendingTracks = pendingEntities.mapNotNull { entity ->
+            decodeTrack(entity.payload, expectedServer = serverId)
+        }.sortedBy { it.globalId.serialized }
+        return RecommendationIndexBatch(
+            serverId = serverId,
+            tracks = pendingTracks.take(limit),
+            totalTracks = entities.size,
+            indexedTracks = valid.count { it in entityIds },
+            pendingTracks = pendingEntities.size,
+            unreadableTracks = pendingEntities.size - pendingTracks.size,
         )
     }
 
@@ -103,60 +130,129 @@ class RecommendationIndexStore(
         classifier: String = "configured-agent",
         classifiedAtMillis: Long = System.currentTimeMillis(),
     ) {
-        require(globalId.serverId == serverId) { "Recommendation Index server/global-id 不一致" }
+        replaceClassifications(
+            serverId = serverId,
+            classifications = listOf(RecommendationIndexClassificationInput(globalId, tags)),
+            classifier = classifier,
+            classifiedAtMillis = classifiedAtMillis,
+        )
+    }
+
+    /**
+     * Atomically replaces a complete classifier batch. Validation happens for every item before
+     * opening the transaction, so a malformed or partial model response cannot commit a subset.
+     */
+    suspend fun replaceClassifications(
+        serverId: ServerId,
+        classifications: List<RecommendationIndexClassificationInput>,
+        classifier: String = "configured-agent",
+        classifiedAtMillis: Long = System.currentTimeMillis(),
+    ) {
+        require(classifications.isNotEmpty()) { "Recommendation Index classification batch 不能为空" }
+        require(classifications.size <= 100) { "Recommendation Index classification batch 不能超过 100 首" }
         require(classifier.isNotBlank()) { "Recommendation Index classifier 不能为空" }
 
-        val canonical = tags
-            .map { tag ->
-                require(RecommendationIndex.isFixedDimension(tag.dimension)) {
-                    "Recommendation Index 非固定维度: ${tag.dimension}"
-                }
-                val value = tag.value.trim()
-                require(value.isNotEmpty()) { "Recommendation Index TagID 不能为空" }
-                require(tag.confidence.isFinite() && tag.confidence in 0.0..1.0) {
-                    "Recommendation Index confidence 必须在 0...1"
-                }
-                RecommendationIndexTag(tag.dimension, value, tag.confidence)
-            }
-            .distinctBy { it.dimension to it.value }
+        val ids = classifications.map { item ->
+            require(item.globalId.serverId == serverId) { "Recommendation Index server/global-id 不一致" }
+            item.globalId.serialized
+        }
+        require(ids.size == ids.toSet().size) { "Recommendation Index classification batch 含重复 global-id" }
+        val entitiesById = database.trackDao().getMany(ids).associateBy { it.globalId }
+        require(entitiesById.size == ids.size) { "Recommendation Index classification batch 含不存在的曲目" }
 
-        // 事务前确认曲目真实存在且 payload 可解码；孤儿 ID / 损坏 payload 整条拒绝。
-        val entity = database.trackDao().get(globalId.serialized)
-            ?: throw IllegalArgumentException("Recommendation Index 曲目不存在: ${globalId.serialized}")
-        require(entity.serverId == serverId.value) { "Recommendation Index 曲目服务器不一致" }
-        val currentTrack = decodeTrack(entity.payload, expectedServer = serverId)
-            ?: throw IllegalArgumentException("Recommendation Index 曲目 payload 无法验证: ${globalId.serialized}")
-        require(currentTrack.globalId == globalId) { "Recommendation Index payload/global-id 不一致" }
-        val sourceHash = RecommendationIndex.contentHash(currentTrack)
+        val prepared = classifications.map { item ->
+            val entity = entitiesById[item.globalId.serialized]
+                ?: error("Recommendation Index 曲目不存在: ${item.globalId.serialized}")
+            require(entity.serverId == serverId.value) { "Recommendation Index 曲目服务器不一致" }
+            val currentTrack = decodeTrack(entity.payload, expectedServer = serverId)
+                ?: throw IllegalArgumentException("Recommendation Index 曲目 payload 无法验证: ${item.globalId.serialized}")
+            require(currentTrack.globalId == item.globalId) { "Recommendation Index payload/global-id 不一致" }
+            PreparedClassification(
+                globalId = item.globalId,
+                sourceHash = RecommendationIndex.contentHash(currentTrack),
+                tags = canonicalizeTags(item.tags),
+            )
+        }
 
         database.withTransaction {
-            dao.upsertState(
-                RecommendationIndexStateEntity(
-                    globalId = globalId.serialized,
-                    serverId = serverId.value,
-                    sourceHash = sourceHash,
-                    rulesVersion = RecommendationIndex.RULES_VERSION,
-                    classifier = classifier,
-                    classifiedAt = classifiedAtMillis,
-                    sourceHashVersion = RecommendationIndex.CONTENT_HASH_VERSION,
-                    semanticTagRulesVersion = 0,
-                ),
-            )
-            dao.deleteTags(globalId.serialized)
-            if (canonical.isNotEmpty()) {
-                dao.upsertTags(
-                    canonical.map { tag ->
-                        RecommendationIndexTagEntity(
-                            globalId = globalId.serialized,
-                            dimension = tag.dimension,
-                            value = tag.value,
-                            confidence = tag.confidence,
-                        )
-                    },
+            prepared.forEach { item ->
+                dao.upsertState(
+                    RecommendationIndexStateEntity(
+                        globalId = item.globalId.serialized,
+                        serverId = serverId.value,
+                        sourceHash = item.sourceHash,
+                        rulesVersion = RecommendationIndex.RULES_VERSION,
+                        classifier = classifier,
+                        classifiedAt = classifiedAtMillis,
+                        sourceHashVersion = RecommendationIndex.CONTENT_HASH_VERSION,
+                        semanticTagRulesVersion = 0,
+                    ),
                 )
+                dao.deleteTags(item.globalId.serialized)
+                if (item.tags.isNotEmpty()) {
+                    dao.upsertTags(
+                        item.tags.map { tag ->
+                            RecommendationIndexTagEntity(
+                                globalId = item.globalId.serialized,
+                                dimension = tag.dimension,
+                                value = tag.value,
+                                confidence = tag.confidence,
+                            )
+                        },
+                    )
+                }
             }
         }
     }
+
+    private fun canonicalizeTags(tags: List<RecommendationIndexTag>): List<RecommendationIndexTag> {
+        val canonical = LinkedHashMap<Pair<String, String>, RecommendationIndexTag>()
+        tags.forEach { tag ->
+            val dimension = tag.dimension.trim()
+            require(RecommendationIndex.isFixedDimension(dimension)) {
+                "Recommendation Index 非固定维度: ${tag.dimension}"
+            }
+            require(tag.confidence.isFinite() && tag.confidence in 0.0..1.0) {
+                "Recommendation Index confidence 必须在 0...1"
+            }
+            val value = tag.value.trim()
+            require(value.isNotEmpty()) { "Recommendation Index TagID 不能为空" }
+            val canonicalValue = when {
+                dimension in RecommendationIndex.textualDimensions -> {
+                    require(RecommendationIndexTaxonomy.isKnownTextTag(dimension, value)) {
+                        "Recommendation Index 未知 taxonomy TagID: $value"
+                    }
+                    value
+                }
+
+                RecommendationIndex.isNumericDimension(dimension) -> {
+                    val number = value.toDoubleOrNull()
+                    val upperBound = RecommendationIndex.numericUpperBounds.getValue(dimension)
+                    require(number != null && number.isFinite() && number % 1.0 == 0.0) {
+                        "Recommendation Index 数值特征必须为整数: $dimension=$value"
+                    }
+                    require(number in 1.0..upperBound.toDouble()) {
+                        "Recommendation Index 数值特征超出范围: $dimension=$value"
+                    }
+                    number.toInt().toString()
+                }
+
+                else -> error("Recommendation Index 非固定维度: $dimension")
+            }
+            val key = dimension to canonicalValue
+            val previous = canonical[key]
+            if (previous == null || tag.confidence > previous.confidence) {
+                canonical[key] = RecommendationIndexTag(dimension, canonicalValue, tag.confidence)
+            }
+        }
+        return canonical.values.toList()
+    }
+
+    private data class PreparedClassification(
+        val globalId: GlobalId,
+        val sourceHash: String,
+        val tags: List<RecommendationIndexTag>,
+    )
 
     suspend fun clear(serverId: ServerId) {
         database.withTransaction {

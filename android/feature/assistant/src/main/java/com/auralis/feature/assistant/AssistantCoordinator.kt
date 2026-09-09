@@ -281,28 +281,37 @@ class AssistantCoordinator(
         _run.value = AssistantRunPresentation(running = true, phase = AssistantRunPhase.Connecting)
         try {
             val provider = buildProvider(settings)
-            val loop = AgentToolLoop(provider, host.registry(), maxRounds = 8)
-            val result = loop.run(
-                systemPrompt = SYSTEM_PROMPT,
-                userText = text,
-                model = settings.model,
-                authorizeOperations = writeToolNames,
-                confirm = { confirmation ->
-                    requestConfirm(runId, confirmation.title, confirmation.detail, destructive = true)
-                },
-                onEvent = { event -> handleRunEvent(runId, event) },
-            )
-            if (currentRunId != runId) return // 迟到结果丢弃
-            val answer = result.finalAnswer.trim()
-            if (answer.isNotEmpty()) {
-                val assistantMessage = StoredAssistantMessage(StoredAssistantMessage.Role.Assistant, answer, System.currentTimeMillis())
-                store.appendMessage(sessionId, assistantMessage)
-                _sessions.value = _sessions.value.map { s ->
-                    if (s.id == sessionId) s.copy(messages = s.messages + assistantMessage, updatedAtMillis = System.currentTimeMillis()) else s
+            if (isRecommendationIndexRequest(text)) {
+                val serverId = activeServerIdForRecommendationIndex()
+                    ?: throw IllegalArgumentException("请先同步并选择一个音乐服务器")
+                val result = RecommendationIndexAssistantRuntime(
+                    graph = graph,
+                    provider = provider,
+                    model = settings.model,
+                ).run(serverId) { progress ->
+                    updateRecommendationIndexProgress(runId, progress)
                 }
-                pushActiveMessages()
+                if (currentRunId != runId) return // 迟到结果丢弃
+                appendAssistantMessage(
+                    sessionId,
+                    "推荐索引已完成：已覆盖 ${result.indexedTracks}/${result.totalTracks} 首曲目。",
+                )
+            } else {
+                val loop = AgentToolLoop(provider, host.registry(), maxRounds = 8)
+                val result = loop.run(
+                    systemPrompt = SYSTEM_PROMPT,
+                    userText = text,
+                    model = settings.model,
+                    authorizeOperations = writeToolNames,
+                    confirm = { confirmation ->
+                        requestConfirm(runId, confirmation.title, confirmation.detail, destructive = true)
+                    },
+                    onEvent = { event -> handleRunEvent(runId, event) },
+                )
+                if (currentRunId != runId) return // 迟到结果丢弃
+                appendAssistantMessage(sessionId, result.finalAnswer.trim())
+                logActions(result.writeOperations)
             }
-            logActions(result.writeOperations)
         } catch (c: CancellationException) {
             // 用户停止：不落盘任何半成品。
         } catch (e: AiProviderException) {
@@ -332,6 +341,65 @@ class AssistantCoordinator(
         _activeSessionId.value = session.id
         pushActiveMessages()
         return session.id
+    }
+
+    private suspend fun appendAssistantMessage(sessionId: String, answer: String) {
+        val trimmed = answer.trim()
+        if (trimmed.isEmpty()) return
+        val assistantMessage = StoredAssistantMessage(
+            StoredAssistantMessage.Role.Assistant,
+            trimmed,
+            System.currentTimeMillis(),
+        )
+        store.appendMessage(sessionId, assistantMessage)
+        _sessions.value = _sessions.value.map { session ->
+            if (session.id == sessionId) {
+                session.copy(messages = session.messages + assistantMessage, updatedAtMillis = System.currentTimeMillis())
+            } else {
+                session
+            }
+        }
+        pushActiveMessages()
+    }
+
+    private suspend fun activeServerIdForRecommendationIndex() =
+        prefs.activeServerIdValue()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { com.auralis.core.domain.ServerId(it) }
+
+    private fun updateRecommendationIndexProgress(
+        runId: String,
+        progress: RecommendationIndexProgress,
+    ) {
+        if (currentRunId != runId) return
+        val detail = "第 ${progress.batchNumber} 批：${progress.indexedTracks}/${progress.totalTracks}，待处理 ${progress.pendingTracks}"
+        val current = _run.value
+        val status = AssistantLiveItem.ToolStatus(
+            toolName = "recommendation_index_commit",
+            label = "建立推荐索引",
+            state = AssistantLiveItem.ToolStatus.State.Running,
+            detail = detail,
+        )
+        val items = current.liveItems.filterNot {
+            it is AssistantLiveItem.ToolStatus && it.toolName == status.toolName
+        } + status
+        _run.value = current.copy(phase = AssistantRunPhase.Working, liveItems = items)
+    }
+
+    private fun isRecommendationIndexRequest(text: String): Boolean {
+        val normalized = text.lowercase()
+        val mentionsIndex = normalized.contains("推荐索引") ||
+            normalized.contains("推荐分类") ||
+            normalized.contains("recommendation index") ||
+            normalized.contains("recommendation categories")
+        val asksToBuild = normalized.contains("建立") ||
+            normalized.contains("生成") ||
+            normalized.contains("构建") ||
+            normalized.contains("重建") ||
+            normalized.contains("分类") ||
+            normalized.contains("build") ||
+            normalized.contains("index")
+        return mentionsIndex && asksToBuild
     }
 
     // ------------------------------------------------------------- run 事件
@@ -508,6 +576,7 @@ class AssistantCoordinator(
             4. 破坏性操作（删除歌单等）会弹窗让用户批准；若工具返回"用户取消"或"未获授权"，如实告知用户结果，不要重试绕过；
             5. 涉及歌曲请标注歌手与专辑；列表过长时只展示前几条并说明总数；
             6. 使用简体中文，简洁直接。
+            7. 用户要建立或重建推荐索引时，说明需要在 Assistant 中使用“建立推荐索引”闭环；分类结果只来自本地已同步曲目。
         """.trimIndent()
     }
 }

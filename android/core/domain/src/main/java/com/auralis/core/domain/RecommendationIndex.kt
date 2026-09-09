@@ -19,7 +19,24 @@ object RecommendationIndex {
         "instrumentalness", "liveness", "speechiness", "valence", "complexity",
     )
 
+    /** Numeric feature dimensions and their inclusive upper bounds in the classifier contract. */
+    val numericUpperBounds: Map<String, Int> = mapOf(
+        "energy" to 10,
+        "tempo" to 5,
+        "acousticness" to 5,
+        "danceability" to 5,
+        "instrumentalness" to 5,
+        "liveness" to 5,
+        "speechiness" to 5,
+        "valence" to 5,
+        "complexity" to 5,
+    )
+
+    val textualDimensions: Set<String> get() = RecommendationIndexTaxonomy.textualDimensions
+
     fun isFixedDimension(value: String): Boolean = value in fixedDimensions
+
+    fun isNumericDimension(value: String): Boolean = value in numericUpperBounds
 
     /**
      * 与 Apple `recommendationIndexContentHash` 位级一致的 v2 内容指纹。
@@ -88,4 +105,20 @@ data class RecommendationIndexStatus(
     val indexedTracks: Int,
     val pendingTracks: Int,
     val rulesVersion: String = RecommendationIndex.RULES_VERSION,
+)
+
+/** One bounded classifier request. Unreadable payloads are reported so a caller cannot loop forever. */
+data class RecommendationIndexBatch(
+    val serverId: ServerId,
+    val tracks: List<Track>,
+    val totalTracks: Int,
+    val indexedTracks: Int,
+    val pendingTracks: Int,
+    val unreadableTracks: Int = 0,
+)
+
+/** Strict, already canonicalized input accepted by the transactional writer. */
+data class RecommendationIndexClassificationInput(
+    val globalId: GlobalId,
+    val tags: List<RecommendationIndexTag>,
 )

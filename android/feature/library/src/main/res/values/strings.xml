@@ -35,7 +35,7 @@
     <string name="library_genres_refresh_action">从服务器刷新流派</string>
     <string name="library_categories_ai_title">分类</string>
     <string name="library_categories_ai_empty_title">还没有分类</string>
-    <string name="library_categories_ai_empty_help">在「设置 → AI 与公开数据」中完成推荐索引后，这里会按歌曲数量展示分类。</string>
+    <string name="library_categories_ai_empty_help">在 Assistant 中输入“建立推荐索引”完成分类后，这里会按歌曲数量展示分类。</string>
     <string name="library_category_invalid">这个分类已失效，请返回分类列表重新选择。</string>
     <string name="library_category_empty">这个分类目前没有歌曲。</string>
     <string name="library_server_prompt_title">还没有连接服务器</string>

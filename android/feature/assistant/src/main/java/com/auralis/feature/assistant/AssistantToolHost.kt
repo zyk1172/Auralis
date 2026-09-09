@@ -51,6 +51,12 @@ class AssistantToolHost(
 ) {
     private val registry = AgentToolRegistry()
 
+    init {
+        // The coordinator owns a single host; register the canonical tools at construction so
+        // ordinary Assistant turns and capability discovery never run with an empty registry.
+        registerTools()
+    }
+
     private suspend fun activeServerId(): ServerId? =
         runCatching { graph.preferences.activeServerIdValue() }
             .getOrNull()
@@ -217,6 +223,19 @@ class AssistantToolHost(
                             }
                         }
                 }
+            }.toString()
+        }
+
+        ro("library_index_status", "返回当前服务器的 Recommendation Index 覆盖状态；建立索引请直接说“建立推荐索引”。", emptyParams()) {
+            val serverId = activeServerId() ?: throw IllegalArgumentException("没有已连接的服务器")
+            val status = graph.recommendationIndex.status(serverId)
+            buildJsonObject {
+                put("ok", true)
+                put("serverID", serverId.value)
+                put("rulesVersion", status.rulesVersion)
+                put("totalTracks", status.totalTracks)
+                put("indexedTracks", status.indexedTracks)
+                put("pendingTracks", status.pendingTracks)
             }.toString()
         }
 
