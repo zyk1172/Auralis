@@ -3,6 +3,7 @@ package com.auralis.feature.assistant
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,16 +16,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
@@ -45,9 +46,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -63,11 +64,9 @@ import com.auralis.core.designsystem.auralisChromeSurface
 /**
  * AI 助手页（对齐 Swift `AssistantView`）。
  *
- * - Header：一行展示 Provider 状态/模型；按钮统一 44dp 命中框、19dp 光学图标；
- * - 消息流：用户主动上翻后不会被流式输出强行拉回底部，重新滑到底部后恢复跟随；
- * - 空会话不再常驻占据首屏的示例/标题文案，与 Apple 当前空态策略一致；
- * - 输入区：发送/停止随运行切换；AI 未配置时如实禁用发送并引导配置；
- * - AI 失败/未授权如实呈现，绝不伪装本地模式。
+ * The UI remains shared with mobile, but TV controls receive explicit D-pad focus treatment. This
+ * is intentionally applied at the actual interactive node (header actions, composer and dialogs),
+ * not as an app-tv overlay, so focused state remains visible after opening sheets/dialogs.
  */
 @Composable
 fun AssistantScreen(
@@ -95,20 +94,15 @@ fun AssistantScreen(
             .sortedWith(compareByDescending<AssistantSession> { it.isPinned }.thenByDescending { it.updatedAtMillis })
     }
 
-    var draft by rememberSaveable { mutableStateOf("") }
+    // TvShell gives every top-level section its own SaveableStateProvider. Keeping this draft local
+    // prevents text typed into Assistant from being reused by a different destination when the
+    // section branch is swapped and later restored.
+    var draft by rememberSaveable(coordinator) { mutableStateOf("") }
     var sessionsOpen by remember { mutableStateOf(false) }
     var actionLogOpen by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     var isFollowingOutput by remember { mutableStateOf(true) }
 
-    /*
-     * Apple AssistantView 只在用户仍靠近会话底部时跟随流式输出。
-     * 这里不能简单在消息数变化时无条件 animateScrollToItem：用户上翻读旧消息时，
-     * token/tool progress 的每次更新都会把阅读位置抢回底部。
-     *
-     * 只有“用户正在滚动”时才允许把 following 从 true 改成 false；普通的新消息导致
-     * totalItemsCount 增长时不应误判用户离开底部。重新滑回末尾后自动恢复 following。
-     */
     LaunchedEffect(listState) {
         snapshotFlow {
             val info = listState.layoutInfo
@@ -137,7 +131,6 @@ fun AssistantScreen(
 
     Box(modifier = modifier.fillMaxSize().background(colors.background)) {
         Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
-            // ---------------- Header（对齐 Apple AssistantView.header） ----------------
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -180,7 +173,9 @@ fun AssistantScreen(
                 if (!aiStatus.isLive) {
                     TextButton(
                         onClick = onOpenAiSettings,
-                        modifier = Modifier.height(44.dp),
+                        modifier = Modifier
+                            .height(44.dp)
+                            .assistantTvFocus(RoundedCornerShape(12.dp)),
                     ) {
                         Icon(
                             Icons.Filled.Settings,
@@ -196,7 +191,12 @@ fun AssistantScreen(
                         )
                     }
                 }
-                IconButton(onClick = onOpenSearch, modifier = Modifier.size(44.dp)) {
+                IconButton(
+                    onClick = onOpenSearch,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .assistantTvFocus(CircleShape),
+                ) {
                     Icon(
                         Icons.Filled.Search,
                         contentDescription = stringResource(R.string.assistant_search_library),
@@ -204,7 +204,12 @@ fun AssistantScreen(
                         modifier = Modifier.size(19.dp),
                     )
                 }
-                IconButton(onClick = { sessionsOpen = true }, modifier = Modifier.size(44.dp)) {
+                IconButton(
+                    onClick = { sessionsOpen = true },
+                    modifier = Modifier
+                        .size(44.dp)
+                        .assistantTvFocus(CircleShape),
+                ) {
                     Icon(
                         Icons.AutoMirrored.Filled.List,
                         contentDescription = stringResource(R.string.assistant_sessions),
@@ -214,7 +219,6 @@ fun AssistantScreen(
                 }
             }
 
-            // ---------------- 消息流 ----------------
             LazyColumn(
                 state = listState,
                 modifier = Modifier
@@ -263,7 +267,6 @@ fun AssistantScreen(
             )
         }
 
-        // ---------------- 覆盖层：会话列表 / 操作日志 / 确认弹窗 ----------------
         if (sessionsOpen) {
             SessionsDialog(
                 sessions = visibleSessions,
@@ -357,9 +360,11 @@ private fun AssistantInputDock(
         Box(
             modifier = Modifier
                 .weight(1f)
+                .assistantTvFocus(RoundedCornerShape(10.dp), enabled = aiAvailable && !isRunning)
                 .clickable(
                     interactionSource = inputInteraction,
                     indication = null,
+                    enabled = aiAvailable && !isRunning,
                     onClick = { inputFocusRequester.requestFocus() },
                 ),
             contentAlignment = Alignment.CenterStart,
@@ -370,6 +375,7 @@ private fun AssistantInputDock(
                     color = colors.secondaryText,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 6.dp),
                 )
             }
             BasicTextField(
@@ -381,13 +387,16 @@ private fun AssistantInputDock(
                 cursorBrush = SolidColor(colors.accent),
                 modifier = Modifier
                     .fillMaxWidth()
+                    .padding(horizontal = 6.dp, vertical = 5.dp)
                     .focusRequester(inputFocusRequester),
             )
         }
         IconButton(
             onClick = if (isRunning) onStop else onSend,
             enabled = if (isRunning) true else canSend,
-            modifier = Modifier.size(44.dp),
+            modifier = Modifier
+                .size(44.dp)
+                .assistantTvFocus(CircleShape, enabled = if (isRunning) true else canSend),
         ) {
             Icon(
                 imageVector = if (isRunning) Icons.Filled.Stop else Icons.AutoMirrored.Filled.Send,
