@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 [versions]
-agp = "8.5.2"
+agp = "8.12.2"
 kotlin = "2.0.21"
 ksp = "2.0.21-1.0.27"
 composeBom = "2024.09.03"
