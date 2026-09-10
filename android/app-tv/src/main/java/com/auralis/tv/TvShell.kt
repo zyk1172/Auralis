@@ -2,6 +2,11 @@
 package com.auralis.tv
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,15 +20,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -42,27 +41,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.auralis.core.data.graph.AuralisGraph
-import com.auralis.core.designsystem.AuralisRadius
-import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.designsystem.LocalReduceMotion
 import com.auralis.core.designsystem.R as AuralisR
 import com.auralis.core.domain.BrowseDestination
 import com.auralis.core.domain.PlaybackState
 import com.auralis.core.domain.QueueEntry
+import com.auralis.core.domain.RecommendationIndexUiState
 import com.auralis.core.domain.Track
-import com.auralis.core.image.AuralisArtwork
 import com.auralis.core.playback.LocalPlaybackHost
-import com.auralis.core.playback.PlaybackCapabilities
 import com.auralis.core.playback.PlaybackController
 import com.auralis.core.playback.PlaybackSnapshot
 import com.auralis.core.playback.QueueSnapshot
 import com.auralis.core.playback.awaitPlaybackController
+import com.auralis.feature.assistant.AssistantCoordinator
+import com.auralis.feature.assistant.AssistantScreen
 import com.auralis.feature.home.HomeScreen
 import com.auralis.feature.library.BrowseDetailScreen
 import com.auralis.feature.library.LibraryScreen
@@ -71,29 +68,38 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 
 /**
- * TV shell uses a permanent left navigation rail and a separate ten-foot Now Playing surface.
- * Shared catalog/business features remain reused, but TV navigation, focus ownership and playback
- * chrome are no longer constrained by the phone shell geometry.
+ * Real-device TV shell.
+ *
+ * The content shell and the full player are mutually exclusive in Composition, so D-pad focus can
+ * never remain on controls hidden behind the player. The old bottom playback strip is removed;
+ * Now Playing is a permanent rail destination that remains one-dimensional and reachable without
+ * scrolling the current content to its end.
  */
 @Composable
 fun TvShell(
     graph: AuralisGraph,
+    assistantCoordinator: AssistantCoordinator,
     onOpenSettings: () -> Unit,
     onOpenServers: () -> Unit,
+    onOpenAiSettings: () -> Unit,
+    recommendationIndexState: RecommendationIndexUiState = RecommendationIndexUiState(),
+    startRecommendationIndexToken: Int = 0,
+    onRecommendationIndexStartConsumed: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
     var section by rememberSaveable { mutableStateOf(TvSection.Home) }
     var browseDestination by remember { mutableStateOf<BrowseDestination?>(null) }
-    var nowPlayingOpen by remember { mutableStateOf(false) }
+    var playerOpen by rememberSaveable { mutableStateOf(false) }
     var pendingFocusRestore by remember { mutableStateOf<TvFocusRestoreTarget?>(null) }
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     val engineAvailable by LocalPlaybackHost.available.collectAsState()
     val controller = remember { LocalPlaybackHost.controller() }
     var playback by remember { mutableStateOf(PlaybackSnapshot.Empty) }
     var queue by remember { mutableStateOf(QueueSnapshot.Empty) }
+
     LaunchedEffect(controller, engineAvailable) {
         if (engineAvailable) controller.playback.collect { playback = it }
         else playback = PlaybackSnapshot.Empty
@@ -103,31 +109,32 @@ fun TvShell(
         else queue = QueueSnapshot.Empty
     }
 
-    val homeFocus = remember { FocusRequester() }
-    val libraryFocus = remember { FocusRequester() }
-    val searchFocus = remember { FocusRequester() }
-    val nowPlayingStripFocus = remember { FocusRequester() }
+    val sectionFocus = remember { TvSection.entries.associateWith { FocusRequester() } }
+    val nowPlayingFocus = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
         yield()
-        runCatching { homeFocus.requestFocus() }
+        runCatching { sectionFocus.getValue(section).requestFocus() }
     }
 
-    LaunchedEffect(nowPlayingOpen, browseDestination, pendingFocusRestore, playback.track) {
-        val target = pendingFocusRestore ?: return@LaunchedEffect
-        val canRestore = when (target) {
-            TvFocusRestoreTarget.Home -> !nowPlayingOpen && browseDestination == null
-            TvFocusRestoreTarget.Library -> !nowPlayingOpen && browseDestination == null
-            TvFocusRestoreTarget.Search -> !nowPlayingOpen && browseDestination == null
-            TvFocusRestoreTarget.NowPlayingStrip -> !nowPlayingOpen && browseDestination == null && playback.track != null
+    LaunchedEffect(startRecommendationIndexToken) {
+        if (startRecommendationIndexToken > 0) {
+            section = TvSection.Assistant
+            browseDestination = null
+            playerOpen = false
+            onRecommendationIndexStartConsumed()
+            yield()
+            runCatching { sectionFocus.getValue(TvSection.Assistant).requestFocus() }
         }
-        if (!canRestore) return@LaunchedEffect
+    }
+
+    LaunchedEffect(playerOpen, browseDestination, pendingFocusRestore) {
+        if (playerOpen) return@LaunchedEffect
+        val target = pendingFocusRestore ?: return@LaunchedEffect
         yield()
         val requester = when (target) {
-            TvFocusRestoreTarget.Home -> homeFocus
-            TvFocusRestoreTarget.Library -> libraryFocus
-            TvFocusRestoreTarget.Search -> searchFocus
-            TvFocusRestoreTarget.NowPlayingStrip -> nowPlayingStripFocus
+            is TvFocusRestoreTarget.Section -> sectionFocus.getValue(target.section)
+            TvFocusRestoreTarget.NowPlaying -> nowPlayingFocus
         }
         if (runCatching { requester.requestFocus() }.isSuccess) pendingFocusRestore = null
     }
@@ -180,55 +187,66 @@ fun TvShell(
         }
     }
 
-    fun closeNowPlaying(restoreToStrip: Boolean = true) {
-        if (restoreToStrip && playback.track != null) pendingFocusRestore = TvFocusRestoreTarget.NowPlayingStrip
-        nowPlayingOpen = false
-    }
-
-    fun closeBrowse(restoreToLibrary: Boolean = true) {
-        if (restoreToLibrary) pendingFocusRestore = TvFocusRestoreTarget.Library
-        browseDestination = null
-    }
-
     fun openBrowse(destination: BrowseDestination) {
-        pendingFocusRestore = null
-        nowPlayingOpen = false
         browseDestination = destination
         section = TvSection.Library
     }
 
     fun selectSection(target: TvSection) {
-        pendingFocusRestore = null
-        nowPlayingOpen = false
-        if (target == TvSection.Library && section == TvSection.Library && browseDestination != null) {
-            closeBrowse(restoreToLibrary = true)
-            return
-        }
+        playerOpen = false
         browseDestination = null
         section = target
     }
 
-    BackHandler(enabled = nowPlayingOpen || browseDestination != null) {
+    fun closePlayer() {
+        playerOpen = false
+        pendingFocusRestore = TvFocusRestoreTarget.NowPlaying
+    }
+
+    BackHandler(enabled = playerOpen || browseDestination != null) {
         when {
-            nowPlayingOpen -> closeNowPlaying()
-            browseDestination != null -> closeBrowse()
+            playerOpen -> closePlayer()
+            browseDestination != null -> {
+                browseDestination = null
+                pendingFocusRestore = TvFocusRestoreTarget.Section(TvSection.Library)
+            }
         }
     }
 
     Box(modifier = modifier.fillMaxSize().background(colors.background)) {
-        Row(Modifier.fillMaxSize()) {
-            TvNavigationRail(
-                section = section,
-                onSelectSection = ::selectSection,
-                onOpenSettings = onOpenSettings,
-                homeFocusRequester = homeFocus,
-                libraryFocusRequester = libraryFocus,
-                searchFocusRequester = searchFocus,
-                modifier = Modifier.fillMaxHeight().width(132.dp),
+        if (playerOpen && playback.track != null) {
+            // Dedicated full-screen route: the shell is not mounted behind it, eliminating focus
+            // fall-through into visually hidden menus/buttons on real televisions.
+            TvNowPlayingScreen(
+                graph = graph,
+                controller = controller,
+                onClose = ::closePlayer,
+                modifier = Modifier.fillMaxSize(),
             )
+        } else {
+            Row(Modifier.fillMaxSize()) {
+                TvNavigationRail(
+                    section = section,
+                    playback = playback,
+                    sectionFocus = sectionFocus,
+                    nowPlayingFocus = nowPlayingFocus,
+                    onSelectSection = ::selectSection,
+                    onOpenPlayer = {
+                        if (playback.track != null) {
+                            pendingFocusRestore = null
+                            playerOpen = true
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(138.dp),
+                )
 
-            Column(Modifier.weight(1f).fillMaxHeight()) {
-                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                ) {
                     when (section) {
                         TvSection.Home -> HomeScreen(
                             graph = graph,
@@ -238,23 +256,38 @@ fun TvShell(
                             modifier = Modifier.fillMaxSize(),
                         )
 
-                        TvSection.Library -> Box(Modifier.fillMaxSize()) {
-                            LibraryScreen(
-                                graph = graph,
-                                onOpenSettings = onOpenSettings,
-                                onPlayTracks = ::playShelf,
-                                onPlayNext = ::playNextShelf,
-                                onAppendToQueue = ::appendQueueShelf,
-                                onBrowse = ::openBrowse,
-                            )
-                            browseDestination?.let { destination ->
-                                BrowseDetailScreen(
+                        TvSection.Library -> {
+                            val destination = browseDestination
+                            if (destination == null) {
+                                LibraryScreen(
                                     graph = graph,
-                                    initial = destination,
-                                    onBack = { closeBrowse() },
+                                    onOpenSettings = onOpenSettings,
                                     onPlayTracks = ::playShelf,
                                     onPlayNext = ::playNextShelf,
                                     onAppendToQueue = ::appendQueueShelf,
+                                    onBrowse = ::openBrowse,
+                                    recommendationIndexState = recommendationIndexState,
+                                    onStartRecommendationIndex = {
+                                        section = TvSection.Assistant
+                                        assistantCoordinator.startRecommendationIndexBuild()
+                                    },
+                                    onCancelRecommendationIndex = assistantCoordinator::cancelRecommendationIndexBuild,
+                                    onRefreshRecommendationIndex = assistantCoordinator::refreshRecommendationIndexStatus,
+                                    bottomChromeClearance = 24.dp,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                            } else {
+                                BrowseDetailScreen(
+                                    graph = graph,
+                                    initial = destination,
+                                    onBack = {
+                                        browseDestination = null
+                                        pendingFocusRestore = TvFocusRestoreTarget.Section(TvSection.Library)
+                                    },
+                                    onPlayTracks = ::playShelf,
+                                    onPlayNext = ::playNextShelf,
+                                    onAppendToQueue = ::appendQueueShelf,
+                                    bottomChromeClearance = 24.dp,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                             }
@@ -265,39 +298,18 @@ fun TvShell(
                             onBack = { selectSection(TvSection.Home) },
                             onPlayTracks = ::playShelf,
                             onBrowse = ::openBrowse,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+
+                        TvSection.Assistant -> AssistantScreen(
+                            coordinator = assistantCoordinator,
+                            onOpenSearch = { selectSection(TvSection.Search) },
+                            onOpenAiSettings = onOpenAiSettings,
+                            modifier = Modifier.fillMaxSize(),
                         )
                     }
                 }
-
-                val track = playback.track
-                if (engineAvailable && track != null) {
-                    TvNowPlayingStrip(
-                        track = track,
-                        playback = playback,
-                        queue = queue,
-                        onOpen = {
-                            pendingFocusRestore = null
-                            nowPlayingOpen = true
-                        },
-                        onPrevious = { controller.previous() },
-                        onTogglePlayPause = { controller.togglePlayPause() },
-                        onNext = { controller.next() },
-                        openFocusRequester = nowPlayingStripFocus,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 28.dp, end = 36.dp, top = 8.dp, bottom = 20.dp),
-                    )
-                }
             }
-        }
-
-        if (nowPlayingOpen && playback.track != null) {
-            TvNowPlayingScreen(
-                graph = graph,
-                controller = controller,
-                onClose = { closeNowPlaying() },
-                modifier = Modifier.fillMaxSize(),
-            )
         }
     }
 }
@@ -305,18 +317,18 @@ fun TvShell(
 @Composable
 private fun TvNavigationRail(
     section: TvSection,
+    playback: PlaybackSnapshot,
+    sectionFocus: Map<TvSection, FocusRequester>,
+    nowPlayingFocus: FocusRequester,
     onSelectSection: (TvSection) -> Unit,
-    onOpenSettings: () -> Unit,
-    homeFocusRequester: FocusRequester,
-    libraryFocusRequester: FocusRequester,
-    searchFocusRequester: FocusRequester,
+    onOpenPlayer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
     Column(
         modifier = modifier
-            .background(colors.elevated.copy(alpha = 0.72f))
-            .padding(horizontal = 12.dp, vertical = 28.dp),
+            .background(colors.elevated.copy(alpha = 0.76f))
+            .padding(horizontal = 12.dp, vertical = 26.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
@@ -326,43 +338,25 @@ private fun TvNavigationRail(
             color = colors.accent,
         )
         Text("Auralis", style = MaterialTheme.typography.labelMedium, color = colors.secondaryText)
-        Spacer(Modifier.height(34.dp))
+        Spacer(Modifier.height(30.dp))
 
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
             TvSection.entries.forEach { entry ->
-                val requester = when (entry) {
-                    TvSection.Home -> homeFocusRequester
-                    TvSection.Library -> libraryFocusRequester
-                    TvSection.Search -> searchFocusRequester
-                }
                 TvRailItem(
                     section = entry,
                     selected = section == entry,
                     onClick = { onSelectSection(entry) },
-                    modifier = Modifier.focusRequester(requester),
+                    modifier = Modifier.focusRequester(sectionFocus.getValue(entry)),
                 )
             }
         }
 
         Spacer(Modifier.weight(1f))
-        val shape = RoundedCornerShape(22.dp)
-        Surface(
-            shape = shape,
-            color = colors.surface,
-            modifier = Modifier
-                .size(72.dp)
-                .tvFocusVisual(shape)
-                .tvClick(onOpenSettings),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    Icons.Filled.Settings,
-                    contentDescription = stringResource(AuralisR.string.settings),
-                    tint = colors.primaryText,
-                    modifier = Modifier.size(30.dp),
-                )
-            }
-        }
+        TvNowPlayingRailButton(
+            playback = playback,
+            onClick = onOpenPlayer,
+            modifier = Modifier.focusRequester(nowPlayingFocus),
+        )
     }
 }
 
@@ -379,10 +373,9 @@ private fun TvRailItem(
         shape = shape,
         color = if (selected) colors.accent.copy(alpha = 0.20f) else Color.Transparent,
         modifier = modifier
-            .width(104.dp)
-            .height(84.dp)
-            .tvFocusVisual(shape)
-            .tvClick(onClick),
+            .width(108.dp)
+            .height(78.dp)
+            .tvFocusableClick(shape = shape, onClick = onClick),
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -392,9 +385,9 @@ private fun TvRailItem(
                 section.icon,
                 contentDescription = null,
                 tint = if (selected) colors.accent else colors.secondaryText,
-                modifier = Modifier.size(28.dp),
+                modifier = Modifier.size(27.dp),
             )
-            Spacer(Modifier.height(7.dp))
+            Spacer(Modifier.height(6.dp))
             Text(
                 stringResource(section.labelRes),
                 style = MaterialTheme.typography.labelMedium,
@@ -405,108 +398,95 @@ private fun TvRailItem(
     }
 }
 
+/**
+ * Bottom rail playback destination. It replaces the duplicated Settings button. The equalizer is
+ * intentionally restrained: it only animates while music is actually playing and freezes under
+ * Reduce Motion.
+ */
 @Composable
-private fun TvNowPlayingStrip(
-    track: Track,
+private fun TvNowPlayingRailButton(
     playback: PlaybackSnapshot,
-    queue: QueueSnapshot,
-    onOpen: () -> Unit,
-    onPrevious: () -> Unit,
-    onTogglePlayPause: () -> Unit,
-    onNext: () -> Unit,
-    openFocusRequester: FocusRequester,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
+    val reduceMotion = LocalReduceMotion.current
+    val hasTrack = playback.track != null
     val isPlaying = playback.state is PlaybackState.Playing
-    val isBuffering = playback.state is PlaybackState.Buffering || playback.state is PlaybackState.Stalled || playback.state is PlaybackState.Preparing
-    val controlsEnabled = playback.state is PlaybackState.Playing || playback.state is PlaybackState.Paused
-    val canGoPrevious = PlaybackCapabilities.canGoPrevious(playback, queue)
-    val canGoNext = PlaybackCapabilities.canGoNext(playback, queue)
+    val shape = RoundedCornerShape(24.dp)
 
-    Row(
+    Surface(
+        shape = shape,
+        color = if (hasTrack) colors.accent.copy(alpha = 0.18f) else colors.surface.copy(alpha = 0.55f),
         modifier = modifier
+            .width(108.dp)
             .height(88.dp)
-            .widthIn(max = 1560.dp)
-            .background(colors.elevated, RoundedCornerShape(26.dp))
-            .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .tvFocusableClick(shape = shape, enabled = hasTrack, onClick = onClick),
     ) {
-        Row(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .focusRequester(openFocusRequester)
-                .tvFocusVisual(RoundedCornerShape(22.dp))
-                .tvClick(onOpen)
-                .padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
         ) {
-            AuralisArtwork(
-                serverId = track.serverId,
-                artworkKey = track.artworkKey,
-                contentDescription = stringResource(AuralisR.string.artwork_cover),
-                titleForFallback = track.title,
-                targetSizeDp = 64,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.size(64.dp),
-            )
-            Spacer(Modifier.width(16.dp))
-            Column(verticalArrangement = Arrangement.Center) {
-                Text(track.title, style = MaterialTheme.typography.titleMedium, color = colors.primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(track.artistName, style = MaterialTheme.typography.bodySmall, color = colors.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (hasTrack) {
+                TvEqualizer(active = isPlaying && !reduceMotion)
+            } else {
+                Icon(
+                    Icons.Filled.GraphicEq,
+                    contentDescription = null,
+                    tint = colors.secondaryText.copy(alpha = 0.55f),
+                    modifier = Modifier.size(29.dp),
+                )
             }
-        }
-        TvTransportButton(
-            enabled = canGoPrevious,
-            onClick = onPrevious,
-        ) { tint -> Icon(Icons.Filled.SkipPrevious, contentDescription = stringResource(AuralisR.string.previous), tint = tint, modifier = Modifier.size(32.dp)) }
-        TvTransportButton(
-            enabled = controlsEnabled,
-            emphasized = true,
-            onClick = onTogglePlayPause,
-        ) { tint ->
-            if (isBuffering) CircularProgressIndicator(modifier = Modifier.size(30.dp), strokeWidth = 3.dp, color = tint)
-            else Icon(
-                if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                contentDescription = if (isPlaying) stringResource(AuralisR.string.pause) else stringResource(AuralisR.string.play),
-                tint = tint,
-                modifier = Modifier.size(38.dp),
+            Spacer(Modifier.height(7.dp))
+            Text(
+                stringResource(if (hasTrack) R.string.tv_now_playing else R.string.tv_no_playback),
+                style = MaterialTheme.typography.labelSmall,
+                color = if (hasTrack) colors.primaryText else colors.secondaryText.copy(alpha = 0.6f),
+                maxLines = 1,
             )
         }
-        TvTransportButton(
-            enabled = canGoNext,
-            onClick = onNext,
-        ) { tint -> Icon(Icons.Filled.SkipNext, contentDescription = stringResource(AuralisR.string.next), tint = tint, modifier = Modifier.size(32.dp)) }
     }
 }
 
 @Composable
-private fun TvTransportButton(
-    enabled: Boolean,
-    emphasized: Boolean = false,
-    onClick: () -> Unit,
-    icon: @Composable (Color) -> Unit,
-) {
+private fun TvEqualizer(active: Boolean) {
     val colors = LocalAuralisTheme.current.colors
-    val shape = RoundedCornerShape(50)
-    Surface(
-        shape = shape,
-        color = if (emphasized) colors.accent.copy(alpha = 0.22f) else Color.Transparent,
-        modifier = Modifier
-            .padding(horizontal = 4.dp)
-            .size(if (emphasized) 68.dp else 60.dp)
-            .then(if (enabled) Modifier.tvFocusVisual(shape).tvClick(onClick) else Modifier),
+    val transition = rememberInfiniteTransition(label = "tv-now-playing-eq")
+    val a by transition.animateFloat(
+        initialValue = 0.38f,
+        targetValue = if (active) 1f else 0.38f,
+        animationSpec = infiniteRepeatable(tween(460), RepeatMode.Reverse),
+        label = "eq-a",
+    )
+    val b by transition.animateFloat(
+        initialValue = 0.76f,
+        targetValue = if (active) 0.32f else 0.76f,
+        animationSpec = infiniteRepeatable(tween(610), RepeatMode.Reverse),
+        label = "eq-b",
+    )
+    val c by transition.animateFloat(
+        initialValue = 0.52f,
+        targetValue = if (active) 0.92f else 0.52f,
+        animationSpec = infiniteRepeatable(tween(540), RepeatMode.Reverse),
+        label = "eq-c",
+    )
+    Row(
+        modifier = Modifier.height(31.dp),
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Box(contentAlignment = Alignment.Center) {
-            icon(if (enabled) colors.primaryText else colors.secondaryText.copy(alpha = 0.38f))
+        listOf(a, b, c).forEach { fraction ->
+            Box(
+                Modifier
+                    .width(5.dp)
+                    .height((28f * fraction.coerceIn(0.25f, 1f)).dp)
+                    .background(colors.accent, RoundedCornerShape(50)),
+            )
         }
     }
 }
 
-private enum class TvFocusRestoreTarget {
-    Home,
-    Library,
-    Search,
-    NowPlayingStrip,
+private sealed interface TvFocusRestoreTarget {
+    data class Section(val section: TvSection) : TvFocusRestoreTarget
+    data object NowPlaying : TvFocusRestoreTarget
 }
