@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
@@ -49,6 +50,7 @@ import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
 import com.auralis.core.designsystem.R as AuralisR
+import com.auralis.core.designsystem.rememberDockBottomReservation
 import com.auralis.core.domain.Album
 import com.auralis.core.domain.Artist
 import com.auralis.core.domain.BrowseDestination
@@ -135,7 +137,11 @@ private fun AppleHomeContent(
     onBrowse: (BrowseDestination) -> Unit,
     bottomChromeClearance: Dp,
 ) {
+    val listState = rememberLazyListState()
+    listState.rememberDockBottomReservation(bottomChromeClearance)
+
     LazyColumn(
+        state = listState,
         modifier = Modifier
             .fillMaxSize()
             .widthIn(max = AuralisChrome.readableContentMaxWidth),

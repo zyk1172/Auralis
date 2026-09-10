@@ -30,12 +30,19 @@ class AuralisPlaybackService : MediaSessionService() {
                 PlaybackDependencies.requireResolver(),
                 PlaybackDependencies.historySink(),
             )
-            LocalPlaybackHost.engine = created
             created
         }
-        mediaSession = MediaSession.Builder(this, engine.player)
+        val session = MediaSession.Builder(this, engine.player)
             .setId(SESSION_ID)
             .build()
+        mediaSession = session
+
+        // The app controls this engine directly and therefore never creates a MediaController
+        // that would call onGetSession(). Register the session explicitly so Media3's notification
+        // manager observes the player's first READY/PLAYING transition and starts this service in
+        // the foreground before Android's startForegroundService deadline expires.
+        addSession(session)
+        LocalPlaybackHost.engine = engine
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession

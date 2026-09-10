@@ -2,6 +2,7 @@
 package com.auralis.feature.assistant
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,12 +15,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
@@ -27,7 +32,6 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -41,12 +45,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.auralis.core.designsystem.AuralisChrome
+import com.auralis.core.designsystem.AuralisChromeSurfaceRole
+import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
 import com.auralis.core.designsystem.R as AuralisR
+import com.auralis.core.designsystem.auralisChromeSurface
 
 /**
  * AI 助手页（对齐 Swift `AssistantView`）。
@@ -62,6 +74,7 @@ fun AssistantScreen(
     coordinator: AssistantCoordinator,
     onOpenSearch: () -> Unit,
     onOpenAiSettings: () -> Unit,
+    collapseProgress: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
@@ -208,6 +221,9 @@ fun AssistantScreen(
                     .weight(1f)
                     .fillMaxWidth()
                     .padding(horizontal = AuralisSpacing.large),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    bottom = AuralisSpacing.small,
+                ),
             ) {
                 items(activeMessages.size) { index ->
                     val message = activeMessages[index]
@@ -231,72 +247,20 @@ fun AssistantScreen(
                 item(key = "bottom-space") { Spacer(Modifier.height(AuralisSpacing.small)) }
             }
 
-            // ---------------- 输入区 ----------------
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.small),
-            ) {
-                if (run.isRunning) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            stringResource(R.string.assistant_running_with_phase, stringResource(run.phase.labelRes)),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = colors.secondaryText,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(onClick = { coordinator.stop() }) { Text(stringResource(R.string.assistant_stop)) }
-                    }
-                }
-                if (!aiStatus.isLive) {
-                    Text(
-                        if (aiStatus.enabled) stringResource(R.string.assistant_need_config_guide) else stringResource(R.string.assistant_disabled_guide),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colors.secondaryText,
-                        modifier = Modifier.padding(bottom = AuralisSpacing.small),
-                    )
-                }
-                Row(verticalAlignment = Alignment.Bottom) {
-                    OutlinedTextField(
-                        value = draft,
-                        onValueChange = { draft = it },
-                        placeholder = { Text(stringResource(R.string.assistant_input_placeholder)) },
-                        modifier = Modifier.weight(1f),
-                        minLines = 1,
-                        maxLines = 4,
-                        enabled = aiStatus.isLive,
-                    )
-                    Spacer(Modifier.width(AuralisSpacing.small))
-                    if (run.isRunning) {
-                        IconButton(onClick = { coordinator.stop() }, modifier = Modifier.size(44.dp)) {
-                            Icon(
-                                Icons.Filled.Stop,
-                                contentDescription = stringResource(R.string.assistant_stop),
-                                tint = colors.error,
-                                modifier = Modifier.size(24.dp),
-                            )
-                        }
-                    } else {
-                        IconButton(
-                            onClick = {
-                                isFollowingOutput = true
-                                coordinator.send(draft)
-                                draft = ""
-                            },
-                            enabled = canSend,
-                            modifier = Modifier.size(44.dp),
-                        ) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.Send,
-                                contentDescription = stringResource(R.string.assistant_send),
-                                tint = if (canSend) colors.accent else colors.secondaryText.copy(alpha = 0.4f),
-                                modifier = Modifier.size(24.dp),
-                            )
-                        }
-                    }
-                }
-            }
+            AssistantInputDock(
+                draft = draft,
+                onDraftChange = { draft = it },
+                canSend = canSend,
+                isRunning = run.isRunning,
+                aiAvailable = aiStatus.isLive,
+                collapseProgress = collapseProgress,
+                onSend = {
+                    isFollowingOutput = true
+                    coordinator.send(draft)
+                    draft = ""
+                },
+                onStop = coordinator::stop,
+            )
         }
 
         // ---------------- 覆盖层：会话列表 / 操作日志 / 确认弹窗 ----------------
@@ -343,6 +307,93 @@ fun AssistantScreen(
                 request = request,
                 onApprove = { coordinator.approveConfirm() },
                 onReject = { coordinator.rejectConfirm() },
+            )
+        }
+    }
+}
+
+/** iOS `DockAssistantInputBar` counterpart: fixed 56dp bar sharing the Dock's two endpoints. */
+@Composable
+private fun AssistantInputDock(
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    canSend: Boolean,
+    isRunning: Boolean,
+    aiAvailable: Boolean,
+    collapseProgress: Float,
+    onSend: () -> Unit,
+    onStop: () -> Unit,
+) {
+    val colors = LocalAuralisTheme.current.colors
+    val progress = collapseProgress.coerceIn(0f, 1f)
+    val inputFocusRequester = remember { FocusRequester() }
+    val inputInteraction = remember { MutableInteractionSource() }
+    val horizontalInset = AuralisChrome.dockHorizontalPadding +
+        (AuralisChrome.dockHeight + AuralisChrome.dockSpacing) * progress
+    val bottomInset = AuralisChrome.dockBottomPadding +
+        (AuralisChrome.dockHeight + AuralisChrome.dockSpacing) * (1f - progress)
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = horizontalInset)
+            .navigationBarsPadding()
+            .padding(bottom = bottomInset)
+            .height(AuralisChrome.dockHeight)
+            .auralisChromeSurface(
+                RoundedCornerShape(AuralisRadius.large),
+                AuralisChromeSurfaceRole.FloatingControl,
+            )
+            .padding(horizontal = AuralisChrome.miniPlayerHorizontalPadding),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Filled.AutoAwesome,
+            contentDescription = null,
+            tint = colors.accent,
+            modifier = Modifier.size(22.dp),
+        )
+        Spacer(Modifier.width(AuralisSpacing.medium))
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .clickable(
+                    interactionSource = inputInteraction,
+                    indication = null,
+                    onClick = { inputFocusRequester.requestFocus() },
+                ),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            if (draft.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.assistant_input_placeholder),
+                    color = colors.secondaryText,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            BasicTextField(
+                value = draft,
+                onValueChange = onDraftChange,
+                singleLine = true,
+                enabled = aiAvailable && !isRunning,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = colors.primaryText),
+                cursorBrush = SolidColor(colors.accent),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(inputFocusRequester),
+            )
+        }
+        IconButton(
+            onClick = if (isRunning) onStop else onSend,
+            enabled = if (isRunning) true else canSend,
+            modifier = Modifier.size(44.dp),
+        ) {
+            Icon(
+                imageVector = if (isRunning) Icons.Filled.Stop else Icons.AutoMirrored.Filled.Send,
+                contentDescription = stringResource(if (isRunning) R.string.assistant_stop else R.string.assistant_send),
+                tint = if (isRunning) colors.error else if (canSend) colors.accent else colors.secondaryText.copy(alpha = 0.4f),
+                modifier = Modifier.size(24.dp),
             )
         }
     }

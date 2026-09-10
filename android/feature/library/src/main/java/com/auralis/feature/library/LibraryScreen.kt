@@ -19,8 +19,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -66,6 +68,7 @@ import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
 import com.auralis.core.designsystem.R as AuralisR
+import com.auralis.core.designsystem.rememberDockBottomReservation
 import com.auralis.core.domain.Album
 import com.auralis.core.domain.Artist
 import com.auralis.core.domain.BrowseDestination
@@ -445,7 +448,10 @@ private fun CategoryScope(
                 onCancel = onCancelRecommendationIndex,
                 onRefresh = refreshIndexAndCategories,
             )
+            val gridState = rememberLazyGridState()
+            gridState.rememberDockBottomReservation(bottomPadding)
             LazyVerticalGrid(
+                state = gridState,
                 columns = GridCells.Adaptive(158.dp),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -628,7 +634,11 @@ internal fun TrackRows(
     showDownloadBadge: Boolean = true,
     bottomPadding: Dp = AuralisChrome.expandedInteractionHeight,
 ) {
+    val listState = rememberLazyListState()
+    listState.rememberDockBottomReservation(bottomPadding)
+
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = bottomPadding + AuralisSpacing.large),
     ) {
@@ -656,7 +666,11 @@ private fun AlbumGrid(
     onBrowse: (BrowseDestination) -> Unit,
     bottomPadding: Dp,
 ) {
+    val gridState = rememberLazyGridState()
+    gridState.rememberDockBottomReservation(bottomPadding)
+
     LazyVerticalGrid(
+        state = gridState,
         columns = GridCells.Adaptive(AuralisChrome.albumGridMin),
         horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.medium),
         verticalArrangement = Arrangement.spacedBy(AuralisSpacing.large),
@@ -802,7 +816,11 @@ private fun ArtistRows(
     onBrowse: (BrowseDestination) -> Unit,
     bottomPadding: Dp,
 ) {
+    val listState = rememberLazyListState()
+    listState.rememberDockBottomReservation(bottomPadding)
+
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = bottomPadding + AuralisSpacing.large),
     ) {
@@ -926,7 +944,11 @@ private fun PlaylistGrid(
     bottomPadding: Dp,
 ) {
     val colors = LocalAuralisTheme.current.colors
+    val gridState = rememberLazyGridState()
+    gridState.rememberDockBottomReservation(bottomPadding)
+
     LazyVerticalGrid(
+        state = gridState,
         columns = GridCells.Adaptive(AuralisChrome.albumGridMin),
         horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.medium),
         verticalArrangement = Arrangement.spacedBy(AuralisSpacing.large),
@@ -976,7 +998,11 @@ private fun GenreGrid(
     bottomPadding: Dp,
 ) {
     val colors = LocalAuralisTheme.current.colors
+    val gridState = rememberLazyGridState()
+    gridState.rememberDockBottomReservation(bottomPadding)
+
     LazyVerticalGrid(
+        state = gridState,
         columns = GridCells.Adaptive(AuralisChrome.genreGridMin),
         horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.medium),
         verticalArrangement = Arrangement.spacedBy(AuralisSpacing.medium),
