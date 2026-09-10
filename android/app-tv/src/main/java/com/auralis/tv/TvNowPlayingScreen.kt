@@ -1,10 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.auralis.tv
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -13,22 +27,34 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.matchParentSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.FastForward
-import androidx.compose.material.icons.filled.FastRewind
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -45,21 +71,37 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.auralis.core.data.graph.AuralisGraph
+import com.auralis.core.designsystem.AuralisColorScheme
 import com.auralis.core.designsystem.LocalAuralisTheme
 import com.auralis.core.designsystem.LocalReduceMotion
 import com.auralis.core.designsystem.R as AuralisR
+import com.auralis.core.domain.GlobalId
 import com.auralis.core.domain.LyricsDocument
+import com.auralis.core.domain.PlayMode
 import com.auralis.core.domain.PlaybackState
 import com.auralis.core.domain.Track
 import com.auralis.core.image.AuralisArtwork
@@ -72,13 +114,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 
 /**
- * Dedicated ten-foot player inspired by the Mac expanded-player hierarchy: identity and transport
- * stay in a stable left column, while lyrics/queue/audio information live in a persistent context
- * panel. This is a real route, not an overlay above the browse shell.
+ * Android TV expanded player, structurally aligned with MacExpandedPlayerView.
  *
- * Focus is explicit state. Entering the page focuses Play/Pause; activating Previous/Next or seek
- * keeps that same control focused after the track/media list changes. This is important on physical
- * TVs where a recomposition can otherwise leave the remote focus on a node that was just replaced.
+ * The Mac implementation is the product contract here:
+ * - no context: player column is centered;
+ * - lyrics / queue / info: player moves left and the context pane fades/slides in;
+ * - the current artwork supplies the ambient background;
+ * - artwork shrinks while paused without changing layout;
+ * - title/favorite/more, scrubber, five transport controls, top-right volume and bottom-right
+ *   lyrics/queue controls are all persistent rather than hidden in a phone-style tab page;
+ * - synced lyrics follow playback and keep the active line centered.
+ *
+ * TV-specific adaptation is limited to D-pad focus and key handling. Visual hierarchy and state
+ * transitions deliberately follow the Mac player rather than the shared mobile player.
  */
 @Composable
 fun TvNowPlayingScreen(
@@ -87,159 +135,475 @@ fun TvNowPlayingScreen(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val colors = LocalAuralisTheme.current.colors
+    val theme = LocalAuralisTheme.current
+    val reduceMotion = LocalReduceMotion.current
+    val androidContext = LocalContext.current
+    val scope = rememberCoroutineScope()
+
     var playback by remember { mutableStateOf(controller.playback.value) }
     var queue by remember { mutableStateOf(controller.queue.value) }
     val positionMs by controller.position.collectAsState()
-    var panel by remember { mutableIntStateOf(0) }
+    var playerContext by remember { mutableStateOf(TvPlayerContext.None) }
 
     val transportFocus = remember { List(5) { FocusRequester() } }
-    var lastTransportFocus by remember { mutableIntStateOf(2) }
-    val backFocus = remember { FocusRequester() }
+    var pendingTransportRestore by remember { mutableIntStateOf(-1) }
+
+    var favoriteIds by remember { mutableStateOf<Set<GlobalId>>(emptySet()) }
+    val track = playback.track
 
     LaunchedEffect(controller) { controller.playback.collect { playback = it } }
     LaunchedEffect(controller) { controller.queue.collect { queue = it } }
-    BackHandler(onBack = onClose)
+
+    LaunchedEffect(track?.serverId) {
+        val currentTrack = track ?: return@LaunchedEffect
+        graph.catalogRepository.observeFavoriteTracks(currentTrack.serverId).collect { tracks ->
+            favoriteIds = tracks.map { it.globalId }.toSet()
+        }
+    }
+
+    BackHandler {
+        if (playerContext != TvPlayerContext.None) {
+            playerContext = TvPlayerContext.None
+        } else {
+            onClose()
+        }
+    }
 
     LaunchedEffect(Unit) {
         yield()
         runCatching { transportFocus[2].requestFocus() }
     }
 
-    // Track replacement is exactly where real TVs used to lose the focused Next/Previous node.
-    // Re-request the user's last transport target only after the new player state is mounted.
     LaunchedEffect(playback.entry?.id?.value) {
+        val target = pendingTransportRestore
+        if (target < 0) return@LaunchedEffect
         yield()
-        runCatching { transportFocus[lastTransportFocus].requestFocus() }
+        if (runCatching { transportFocus[target].requestFocus() }.isSuccess) {
+            pendingTransportRestore = -1
+        }
     }
 
-    val track = playback.track ?: return
+    val currentTrack = track ?: return
     val durationMs = playback.durationMs.coerceAtLeast(0L)
-    val progress = if (durationMs > 0) {
-        (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+    val isFavorite = favoriteIds.contains(currentTrack.globalId)
+
+    BoxWithConstraints(
+        modifier = modifier.fillMaxSize(),
+    ) {
+        val playerWidth = (maxWidth * 0.34f).coerceIn(320.dp, 500.dp)
+        val artworkSize = minOf(playerWidth, maxHeight * 0.44f).coerceIn(220.dp, 440.dp)
+        val centeredLeading = ((maxWidth - playerWidth) / 2f).coerceAtLeast(0.dp)
+        val contextPlayerLeading = (maxWidth * 0.065f).coerceAtLeast(32.dp)
+        val targetLeading = if (playerContext == TvPlayerContext.None) centeredLeading else contextPlayerLeading
+        val playerLeading by animateDpAsState(
+            targetValue = targetLeading,
+            animationSpec = if (reduceMotion) snap() else tween(durationMillis = 250),
+            label = "tv-player-leading",
+        )
+        val contextGap = maxOf(64.dp, maxWidth * 0.055f)
+        val contextLeading = contextPlayerLeading + playerWidth + contextGap
+        val contextTrailing = maxOf(34.dp, maxWidth * 0.035f)
+        val contextWidth = (maxWidth - contextLeading - contextTrailing).coerceAtLeast(280.dp)
+
+        TvPlayerAmbience(
+            track = currentTrack,
+            modifier = Modifier.matchParentSize(),
+        )
+
+        TvPlaybackColumn(
+            controller = controller,
+            playback = playback,
+            queue = queue,
+            track = currentTrack,
+            positionMs = positionMs,
+            durationMs = durationMs,
+            artworkSize = artworkSize,
+            width = playerWidth,
+            isFavorite = isFavorite,
+            infoActive = playerContext == TvPlayerContext.Info,
+            transportFocus = transportFocus,
+            onToggleFavorite = {
+                scope.launch {
+                    runCatching { graph.libraryActions.toggleTrackFavorite(currentTrack) }
+                        .onFailure { throwable ->
+                            val detail = throwable.message?.takeIf { it.isNotBlank() }
+                                ?: throwable::class.java.simpleName
+                            Toast.makeText(
+                                androidContext,
+                                androidContext.getString(AuralisR.string.action_failed, detail),
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                }
+            },
+            onToggleInfo = {
+                playerContext = if (playerContext == TvPlayerContext.Info) {
+                    TvPlayerContext.None
+                } else {
+                    TvPlayerContext.Info
+                }
+            },
+            onTransportTrackChange = { index -> pendingTransportRestore = index },
+            modifier = Modifier
+                .width(playerWidth)
+                .fillMaxHeight()
+                .offset(x = playerLeading)
+                .padding(top = maxOf(46.dp, maxHeight * 0.08f), bottom = 28.dp),
+        )
+
+        AnimatedVisibility(
+            visible = playerContext != TvPlayerContext.None,
+            enter = if (reduceMotion) {
+                fadeIn(tween(1))
+            } else {
+                fadeIn(tween(210)) + slideInHorizontally(
+                    animationSpec = tween(250),
+                    initialOffsetX = { it / 10 },
+                )
+            },
+            exit = if (reduceMotion) {
+                fadeOut(tween(1))
+            } else {
+                fadeOut(tween(160)) + slideOutHorizontally(
+                    animationSpec = tween(210),
+                    targetOffsetX = { it / 12 },
+                )
+            },
+            modifier = Modifier
+                .width(contextWidth)
+                .fillMaxHeight()
+                .offset(x = contextLeading)
+                .padding(top = maxOf(50.dp, maxHeight * 0.07f), bottom = 76.dp),
+        ) {
+            when (playerContext) {
+                TvPlayerContext.None -> Unit
+                TvPlayerContext.Lyrics -> TvLyricsPanel(
+                    graph = graph,
+                    controller = controller,
+                    track = currentTrack,
+                    positionMs = positionMs,
+                )
+                TvPlayerContext.Queue -> TvQueuePanel(
+                    queue = queue,
+                    controller = controller,
+                )
+                TvPlayerContext.Info -> TvTrackInfoPanel(
+                    track = currentTrack,
+                    playback = playback,
+                )
+            }
+        }
+
+        TvTopLeftChrome(
+            onClose = onClose,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 22.dp, top = 18.dp),
+        )
+
+        TvVolumeCapsule(
+            volume = playback.volume,
+            onVolumeChange = controller::setVolume,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(end = 22.dp, top = 18.dp),
+        )
+
+        TvContextCapsule(
+            context = playerContext,
+            onLyrics = {
+                playerContext = if (playerContext == TvPlayerContext.Lyrics) {
+                    TvPlayerContext.None
+                } else {
+                    TvPlayerContext.Lyrics
+                }
+            },
+            onQueue = {
+                playerContext = if (playerContext == TvPlayerContext.Queue) {
+                    TvPlayerContext.None
+                } else {
+                    TvPlayerContext.Queue
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 22.dp, bottom = 20.dp),
+        )
+    }
+}
+
+@Composable
+private fun TvPlayerAmbience(
+    track: Track,
+    modifier: Modifier = Modifier,
+) {
+    val theme = LocalAuralisTheme.current
+    val colors = theme.colors
+    val isLight = theme.colorScheme == AuralisColorScheme.Light
+
+    Box(
+        modifier = modifier.background(
+            Brush.linearGradient(
+                listOf(
+                    colors.background,
+                    colors.elevated,
+                    colors.surface.copy(alpha = if (isLight) 0.82f else 0.90f),
+                ),
+            ),
+        ),
+    ) {
+        if (!track.artworkKey.isNullOrBlank()) {
+            AuralisArtwork(
+                serverId = track.serverId,
+                artworkKey = track.artworkKey,
+                contentDescription = null,
+                titleForFallback = null,
+                targetSizeDp = 1024,
+                shape = RectangleShape,
+                modifier = Modifier
+                    .matchParentSize()
+                    .graphicsLayer {
+                        scaleX = 1.15f
+                        scaleY = 1.15f
+                        alpha = if (isLight) 0.13f else 0.30f
+                    }
+                    .blur(96.dp),
+            )
+        }
+
+        Box(
+            Modifier
+                .matchParentSize()
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            colors.accent.copy(alpha = 0.30f),
+                            colors.accent.copy(alpha = 0.08f),
+                            Color.Transparent,
+                        ),
+                        radius = 1100f,
+                    ),
+                ),
+        )
+        Box(
+            Modifier
+                .matchParentSize()
+                .background(
+                    Brush.linearGradient(
+                        if (isLight) {
+                            listOf(Color.White.copy(alpha = 0.12f), Color.White.copy(alpha = 0.34f))
+                        } else {
+                            listOf(Color.Black.copy(alpha = 0.10f), Color.Black.copy(alpha = 0.34f))
+                        },
+                    ),
+                ),
+        )
+    }
+}
+
+@Composable
+private fun TvPlaybackColumn(
+    controller: PlaybackController,
+    playback: PlaybackSnapshot,
+    queue: QueueSnapshot,
+    track: Track,
+    positionMs: Long,
+    durationMs: Long,
+    artworkSize: Dp,
+    width: Dp,
+    isFavorite: Boolean,
+    infoActive: Boolean,
+    transportFocus: List<FocusRequester>,
+    onToggleFavorite: () -> Unit,
+    onToggleInfo: () -> Unit,
+    onTransportTrackChange: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalAuralisTheme.current.colors
+    val reduceMotion = LocalReduceMotion.current
+    val isPlaying = playback.state is PlaybackState.Playing
+    val artworkScale by animateFloatAsState(
+        targetValue = if (isPlaying) 1f else 0.74f,
+        animationSpec = if (reduceMotion) {
+            snap()
+        } else {
+            spring(dampingRatio = 0.86f, stiffness = 420f)
+        },
+        label = "tv-player-artwork-scale",
+    )
+
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.Start,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(artworkSize),
+            contentAlignment = Alignment.Center,
+        ) {
+            AuralisArtwork(
+                serverId = track.serverId,
+                artworkKey = track.artworkKey,
+                contentDescription = track.albumTitle,
+                titleForFallback = track.albumTitle,
+                targetSizeDp = artworkSize.value.toInt(),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier
+                    .size(artworkSize)
+                    .graphicsLayer {
+                        scaleX = artworkScale
+                        scaleY = artworkScale
+                    }
+                    .shadow(
+                        elevation = 18.dp,
+                        shape = RoundedCornerShape(18.dp),
+                        clip = false,
+                    ),
+            )
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    track.title,
+                    color = colors.primaryText,
+                    fontSize = 23.sp,
+                    lineHeight = 28.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "${track.artistName} — ${track.albumTitle}",
+                    color = colors.secondaryText,
+                    fontSize = 15.sp,
+                    lineHeight = 20.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            TvGlassIconButton(onClick = onToggleFavorite) {
+                Icon(
+                    if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                    contentDescription = stringResource(
+                        if (isFavorite) AuralisR.string.unfavorite else AuralisR.string.favorite,
+                    ),
+                    tint = if (isFavorite) colors.accent else colors.primaryText.copy(alpha = 0.86f),
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+            TvGlassIconButton(
+                selected = infoActive,
+                onClick = onToggleInfo,
+            ) {
+                Icon(
+                    Icons.Filled.MoreHoriz,
+                    contentDescription = stringResource(AuralisR.string.more_actions),
+                    tint = if (infoActive) colors.accent else colors.primaryText.copy(alpha = 0.86f),
+                    modifier = Modifier.size(25.dp),
+                )
+            }
+        }
+
+        Spacer(Modifier.height(18.dp))
+
+        TvSeekBar(
+            positionMs = positionMs,
+            durationMs = durationMs,
+            onSeek = controller::seekTo,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        Spacer(Modifier.height(20.dp))
+
+        TvTransportRow(
+            controller = controller,
+            playback = playback,
+            queue = queue,
+            requesters = transportFocus,
+            onTrackChangingAction = onTransportTrackChange,
+            modifier = Modifier.width(width),
+        )
+
+        Spacer(Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun TvSeekBar(
+    positionMs: Long,
+    durationMs: Long,
+    onSeek: (Long) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalAuralisTheme.current.colors
+    val shape = RoundedCornerShape(12.dp)
+    val clampedPosition = positionMs.coerceIn(0L, durationMs.coerceAtLeast(0L))
+    val fraction = if (durationMs > 0L) {
+        clampedPosition.toFloat() / durationMs.toFloat()
     } else {
         0f
     }
-    val ambient = Brush.linearGradient(
-        listOf(
-            colors.background,
-            colors.accent.copy(alpha = 0.09f),
-            colors.background,
-        ),
-    )
 
-    Box(modifier.fillMaxSize().background(ambient)) {
-        Row(
+    Column(modifier = modifier) {
+        Box(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 54.dp, vertical = 34.dp),
-            horizontalArrangement = Arrangement.spacedBy(46.dp),
+                .fillMaxWidth()
+                .height(30.dp)
+                .onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown || durationMs <= 0L) return@onPreviewKeyEvent false
+                    when (event.key) {
+                        Key.DirectionLeft -> {
+                            onSeek((clampedPosition - 5_000L).coerceAtLeast(0L))
+                            true
+                        }
+                        Key.DirectionRight -> {
+                            onSeek((clampedPosition + 5_000L).coerceAtMost(durationMs))
+                            true
+                        }
+                        else -> false
+                    }
+                }
+                .tvFocusVisual(shape = shape, stroke = 2.dp)
+                .focusable(enabled = durationMs > 0L)
+                .padding(horizontal = 8.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            Column(
+            LinearProgressIndicator(
+                progress = { fraction.coerceIn(0f, 1f) },
                 modifier = Modifier
-                    .weight(0.46f)
-                    .fillMaxHeight(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                AuralisArtwork(
-                    serverId = track.serverId,
-                    artworkKey = track.artworkKey,
-                    contentDescription = track.albumTitle,
-                    titleForFallback = track.albumTitle,
-                    targetSizeDp = 416,
-                    shape = RoundedCornerShape(26.dp),
-                    modifier = Modifier
-                        .size(416.dp)
-                        .clip(RoundedCornerShape(26.dp)),
-                )
-                Spacer(Modifier.height(24.dp))
-                Text(
-                    track.title,
-                    style = MaterialTheme.typography.displaySmall,
-                    fontWeight = FontWeight.Bold,
-                    color = colors.primaryText,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(7.dp))
-                Text(
-                    "${track.artistName} · ${track.albumTitle}",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = colors.secondaryText,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(21.dp))
-                LinearProgressIndicator(
-                    progress = { progress },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp)
-                        .clip(RoundedCornerShape(50)),
-                    color = colors.accent,
-                    trackColor = colors.separator.copy(alpha = 0.34f),
-                )
-                Spacer(Modifier.height(7.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(
-                        formatTvClock(positionMs),
-                        color = colors.secondaryText,
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                    Text(
-                        "-${formatTvClock((durationMs - positionMs).coerceAtLeast(0L))}",
-                        color = colors.secondaryText,
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                }
-                Spacer(Modifier.height(17.dp))
-                TvTransportRow(
-                    controller = controller,
-                    playback = playback,
-                    queue = queue,
-                    positionMs = positionMs,
-                    durationMs = durationMs,
-                    requesters = transportFocus,
-                    onFocusedIndex = { lastTransportFocus = it },
-                )
-            }
-
-            Column(
-                modifier = Modifier
-                    .weight(0.54f)
-                    .fillMaxHeight()
-                    .background(colors.surface.copy(alpha = 0.66f), RoundedCornerShape(30.dp))
-                    .padding(24.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TvSquareAction(
-                        onClick = onClose,
-                        modifier = Modifier.focusRequester(backFocus),
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(AuralisR.string.back),
-                            tint = colors.primaryText,
-                            modifier = Modifier.size(28.dp),
-                        )
-                    }
-                    Spacer(Modifier.width(20.dp))
-                    TvPanelTabs(selected = panel, onSelect = { panel = it })
-                }
-                Spacer(Modifier.height(18.dp))
-                Box(Modifier.fillMaxSize()) {
-                    when (panel) {
-                        0 -> TvLyricsPanel(graph, track, positionMs)
-                        1 -> TvQueuePanel(queue, controller)
-                        else -> TvTrackInfoPanel(track, playback)
-                    }
-                }
-            }
+                    .fillMaxWidth()
+                    .height(5.dp)
+                    .clip(CircleShape),
+                color = colors.accent,
+                trackColor = colors.separator.copy(alpha = 0.40f),
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                formatTvClock(clampedPosition),
+                color = colors.secondaryText,
+                style = MaterialTheme.typography.labelSmall,
+            )
+            Text(
+                "-${formatTvClock((durationMs - clampedPosition).coerceAtLeast(0L))}",
+                color = colors.secondaryText,
+                style = MaterialTheme.typography.labelSmall,
+            )
         }
     }
 }
@@ -249,10 +613,9 @@ private fun TvTransportRow(
     controller: PlaybackController,
     playback: PlaybackSnapshot,
     queue: QueueSnapshot,
-    positionMs: Long,
-    durationMs: Long,
     requesters: List<FocusRequester>,
-    onFocusedIndex: (Int) -> Unit,
+    onTrackChangingAction: (Int) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
     val canPrev = PlaybackCapabilities.canGoPrevious(playback, queue)
@@ -263,116 +626,256 @@ private fun TvTransportRow(
         playback.state is PlaybackState.Stalled
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.Center,
+        modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        TvRoundAction(
-            enabled = canPrev,
-            onClick = { controller.previous() },
+        TvTransportAction(
+            enabled = true,
+            selected = playback.playMode == PlayMode.Shuffle,
+            onClick = {
+                controller.setPlayMode(
+                    if (playback.playMode == PlayMode.Shuffle) PlayMode.Sequential else PlayMode.Shuffle,
+                )
+            },
             modifier = Modifier.focusRequester(requesters[0]),
-            onFocusedChange = { if (it) onFocusedIndex(0) },
+        ) {
+            Icon(
+                Icons.Filled.Shuffle,
+                contentDescription = stringResource(R.string.tv_shuffle),
+                tint = if (playback.playMode == PlayMode.Shuffle) colors.accent else colors.primaryText,
+                modifier = Modifier.size(23.dp),
+            )
+        }
+
+        TvTransportAction(
+            enabled = canPrev,
+            onClick = {
+                onTrackChangingAction(1)
+                controller.previous()
+            },
+            modifier = Modifier.focusRequester(requesters[1]),
         ) {
             Icon(
                 Icons.Filled.SkipPrevious,
                 contentDescription = stringResource(AuralisR.string.previous),
-                tint = colors.primaryText,
+                tint = if (canPrev) colors.primaryText else colors.secondaryText.copy(alpha = 0.38f),
                 modifier = Modifier.size(34.dp),
             )
         }
-        TvRoundAction(
-            enabled = positionMs > 0,
-            onClick = { controller.seekTo((positionMs - 10_000L).coerceAtLeast(0L)) },
-            modifier = Modifier.focusRequester(requesters[1]),
-            onFocusedChange = { if (it) onFocusedIndex(1) },
-        ) {
-            Icon(
-                Icons.Filled.FastRewind,
-                contentDescription = stringResource(R.string.tv_seek_back_10),
-                tint = colors.primaryText,
-                modifier = Modifier.size(32.dp),
-            )
-        }
-        TvRoundAction(
-            enabled = !busy && (playback.state is PlaybackState.Playing || playback.state is PlaybackState.Paused),
+
+        TvTransportAction(
+            enabled = !busy && playback.track != null,
             emphasized = true,
-            onClick = { controller.togglePlayPause() },
+            onClick = controller::togglePlayPause,
             modifier = Modifier.focusRequester(requesters[2]),
-            onFocusedChange = { if (it) onFocusedIndex(2) },
         ) {
             if (busy) {
                 CircularProgressIndicator(
-                    modifier = Modifier.size(32.dp),
+                    modifier = Modifier.size(31.dp),
                     strokeWidth = 3.dp,
                     color = colors.primaryText,
                 )
             } else {
                 Icon(
                     if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = if (isPlaying) {
-                        stringResource(AuralisR.string.pause)
-                    } else {
-                        stringResource(AuralisR.string.play)
-                    },
+                    contentDescription = stringResource(
+                        if (isPlaying) AuralisR.string.pause else AuralisR.string.play,
+                    ),
                     tint = colors.primaryText,
-                    modifier = Modifier.size(42.dp),
+                    modifier = Modifier.size(39.dp),
                 )
             }
         }
-        TvRoundAction(
-            enabled = durationMs > 0 && positionMs < durationMs,
-            onClick = { controller.seekTo((positionMs + 10_000L).coerceAtMost(durationMs)) },
-            modifier = Modifier.focusRequester(requesters[3]),
-            onFocusedChange = { if (it) onFocusedIndex(3) },
-        ) {
-            Icon(
-                Icons.Filled.FastForward,
-                contentDescription = stringResource(R.string.tv_seek_forward_10),
-                tint = colors.primaryText,
-                modifier = Modifier.size(32.dp),
-            )
-        }
-        TvRoundAction(
+
+        TvTransportAction(
             enabled = canNext,
-            onClick = { controller.next() },
-            modifier = Modifier.focusRequester(requesters[4]),
-            onFocusedChange = { if (it) onFocusedIndex(4) },
+            onClick = {
+                onTrackChangingAction(3)
+                controller.next()
+            },
+            modifier = Modifier.focusRequester(requesters[3]),
         ) {
             Icon(
                 Icons.Filled.SkipNext,
                 contentDescription = stringResource(AuralisR.string.next),
-                tint = colors.primaryText,
+                tint = if (canNext) colors.primaryText else colors.secondaryText.copy(alpha = 0.38f),
                 modifier = Modifier.size(34.dp),
+            )
+        }
+
+        val repeatActive = playback.playMode == PlayMode.RepeatAll ||
+            playback.playMode == PlayMode.RepeatOne
+        TvTransportAction(
+            enabled = true,
+            selected = repeatActive,
+            onClick = {
+                controller.setPlayMode(
+                    when (playback.playMode) {
+                        PlayMode.RepeatAll -> PlayMode.RepeatOne
+                        PlayMode.RepeatOne -> PlayMode.Sequential
+                        else -> PlayMode.RepeatAll
+                    },
+                )
+            },
+            modifier = Modifier.focusRequester(requesters[4]),
+        ) {
+            Icon(
+                if (playback.playMode == PlayMode.RepeatOne) Icons.Filled.RepeatOne else Icons.Filled.Repeat,
+                contentDescription = stringResource(R.string.tv_repeat),
+                tint = if (repeatActive) colors.accent else colors.primaryText,
+                modifier = Modifier.size(23.dp),
             )
         }
     }
 }
 
 @Composable
-private fun TvPanelTabs(selected: Int, onSelect: (Int) -> Unit) {
+private fun TvTransportAction(
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    selected: Boolean = false,
+    emphasized: Boolean = false,
+    content: @Composable () -> Unit,
+) {
     val colors = LocalAuralisTheme.current.colors
-    val labels = listOf(
-        stringResource(PlayerR.string.player_tab_lyrics),
-        stringResource(PlayerR.string.player_tab_queue),
-        stringResource(R.string.tv_audio_info),
-    )
-    Row(horizontalArrangement = Arrangement.spacedBy(11.dp)) {
-        labels.forEachIndexed { index, label ->
-            val shape = RoundedCornerShape(18.dp)
-            Surface(
-                shape = shape,
-                color = if (selected == index) {
-                    colors.accent.copy(alpha = 0.22f)
-                } else {
-                    colors.elevated
-                },
-                modifier = Modifier.tvFocusableClick(shape = shape) { onSelect(index) },
+    val size = if (emphasized) 68.dp else 54.dp
+    Surface(
+        shape = CircleShape,
+        color = when {
+            emphasized -> colors.surface.copy(alpha = 0.44f)
+            selected -> colors.accent.copy(alpha = 0.14f)
+            else -> Color.Transparent
+        },
+        border = if (emphasized) {
+            BorderStroke(1.dp, colors.separator.copy(alpha = 0.34f))
+        } else {
+            null
+        },
+        modifier = modifier
+            .size(size)
+            .tvFocusableClick(
+                shape = CircleShape,
+                enabled = enabled,
+                onClick = onClick,
+            ),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            content()
+        }
+    }
+}
+
+@Composable
+private fun TvTopLeftChrome(
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    TvGlassCapsule(modifier = modifier) {
+        TvGlassIconButton(
+            onClick = onClose,
+            compact = true,
+        ) {
+            val colors = LocalAuralisTheme.current.colors
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = stringResource(R.string.tv_close_player),
+                tint = colors.primaryText,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun TvVolumeCapsule(
+    volume: Float,
+    onVolumeChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalAuralisTheme.current.colors
+    val shape = RoundedCornerShape(24.dp)
+    TvGlassCapsule(modifier = modifier) {
+        Row(
+            modifier = Modifier
+                .width(210.dp)
+                .height(46.dp)
+                .onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    when (event.key) {
+                        Key.DirectionLeft -> {
+                            onVolumeChange((volume - 0.05f).coerceIn(0f, 1f))
+                            true
+                        }
+                        Key.DirectionRight -> {
+                            onVolumeChange((volume + 0.05f).coerceIn(0f, 1f))
+                            true
+                        }
+                        else -> false
+                    }
+                }
+                .tvFocusVisual(shape = shape, stroke = 2.dp)
+                .focusable()
+                .padding(horizontal = 15.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            LinearProgressIndicator(
+                progress = { volume.coerceIn(0f, 1f) },
+                modifier = Modifier
+                    .weight(1f)
+                    .height(5.dp)
+                    .clip(CircleShape),
+                color = colors.accent,
+                trackColor = colors.separator.copy(alpha = 0.42f),
+            )
+            Icon(
+                Icons.AutoMirrored.Filled.VolumeUp,
+                contentDescription = stringResource(R.string.tv_volume),
+                tint = colors.primaryText,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun TvContextCapsule(
+    context: TvPlayerContext,
+    onLyrics: () -> Unit,
+    onQueue: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    TvGlassCapsule(modifier = modifier) {
+        Row(
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            TvGlassIconButton(
+                selected = context == TvPlayerContext.Lyrics,
+                onClick = onLyrics,
+                compact = true,
             ) {
-                Text(
-                    label,
-                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 13.dp),
-                    color = if (selected == index) colors.primaryText else colors.secondaryText,
-                    style = MaterialTheme.typography.titleSmall,
+                val colors = LocalAuralisTheme.current.colors
+                Icon(
+                    Icons.Outlined.ChatBubbleOutline,
+                    contentDescription = stringResource(PlayerR.string.player_tab_lyrics),
+                    tint = if (context == TvPlayerContext.Lyrics) colors.accent else colors.primaryText,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+            TvGlassIconButton(
+                selected = context == TvPlayerContext.Queue,
+                onClick = onQueue,
+                compact = true,
+            ) {
+                val colors = LocalAuralisTheme.current.colors
+                Icon(
+                    Icons.AutoMirrored.Filled.QueueMusic,
+                    contentDescription = stringResource(PlayerR.string.player_tab_queue),
+                    tint = if (context == TvPlayerContext.Queue) colors.accent else colors.primaryText,
+                    modifier = Modifier.size(22.dp),
                 )
             }
         }
@@ -380,12 +883,59 @@ private fun TvPanelTabs(selected: Int, onSelect: (Int) -> Unit) {
 }
 
 @Composable
-private fun TvLyricsPanel(graph: AuralisGraph, track: Track, positionMs: Long) {
+private fun TvGlassCapsule(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val colors = LocalAuralisTheme.current.colors
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(26.dp),
+        color = colors.surface.copy(alpha = 0.58f),
+        border = BorderStroke(1.dp, colors.separator.copy(alpha = 0.38f)),
+        shadowElevation = 8.dp,
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun TvGlassIconButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    selected: Boolean = false,
+    compact: Boolean = false,
+    content: @Composable () -> Unit,
+) {
+    val colors = LocalAuralisTheme.current.colors
+    val size = if (compact) 42.dp else 48.dp
+    Surface(
+        shape = CircleShape,
+        color = if (selected) colors.accent.copy(alpha = 0.14f) else Color.Transparent,
+        modifier = modifier
+            .size(size)
+            .tvFocusableClick(shape = CircleShape, onClick = onClick),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            content()
+        }
+    }
+}
+
+@Composable
+private fun TvLyricsPanel(
+    graph: AuralisGraph,
+    controller: PlaybackController,
+    track: Track,
+    positionMs: Long,
+) {
     val colors = LocalAuralisTheme.current.colors
     val reduceMotion = LocalReduceMotion.current
+    val density = LocalDensity.current
     var document by remember(track.globalId) { mutableStateOf<LyricsDocument?>(null) }
     var loading by remember(track.globalId) { mutableStateOf(true) }
     var error by remember(track.globalId) { mutableStateOf<String?>(null) }
+    var focusedLyricIndex by remember(track.globalId) { mutableStateOf<Int?>(null) }
     val listState = rememberLazyListState()
 
     LaunchedEffect(track.globalId) {
@@ -407,10 +957,24 @@ private fun TvLyricsPanel(graph: AuralisGraph, track: Track, positionMs: Long) {
         null
     }
 
-    LaunchedEffect(activeIndex, track.globalId) {
+    LaunchedEffect(activeIndex, track.globalId, focusedLyricIndex, reduceMotion) {
         val target = activeIndex ?: return@LaunchedEffect
+        if (focusedLyricIndex != null || doc?.lines?.indices?.contains(target) != true) {
+            return@LaunchedEffect
+        }
         yield()
-        if (reduceMotion) listState.scrollToItem(target) else listState.animateScrollToItem(target)
+        val viewportHeight = listState.layoutInfo.viewportSize.height
+        val estimatedHalfLine = with(density) { 18.dp.roundToPx() }
+        val centerOffset = if (viewportHeight > 0) {
+            -(viewportHeight / 2 - estimatedHalfLine).coerceAtLeast(0)
+        } else {
+            0
+        }
+        if (reduceMotion) {
+            listState.scrollToItem(target, centerOffset)
+        } else {
+            listState.animateScrollToItem(target, centerOffset)
+        }
     }
 
     when {
@@ -419,10 +983,28 @@ private fun TvLyricsPanel(graph: AuralisGraph, track: Track, positionMs: Long) {
         }
 
         error != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(error.orEmpty(), color = colors.secondaryText, textAlign = TextAlign.Center)
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    stringResource(PlayerR.string.player_lyrics_unavailable),
+                    color = colors.primaryText,
+                    style = MaterialTheme.typography.titleLarge,
+                )
+                Text(
+                    error.orEmpty(),
+                    color = colors.secondaryText,
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
 
-        doc == null || doc.lines.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        doc == null || doc.lines.isEmpty() -> Box(
+            Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center,
+        ) {
             Text(
                 stringResource(PlayerR.string.player_lyrics_none_title),
                 color = colors.secondaryText,
@@ -433,22 +1015,58 @@ private fun TvLyricsPanel(graph: AuralisGraph, track: Track, positionMs: Long) {
         else -> LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(vertical = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(21.dp),
+            contentPadding = PaddingValues(vertical = 30.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            itemsIndexed(doc.lines) { index, line ->
+            itemsIndexed(
+                items = doc.lines,
+                key = { index, _ -> index },
+            ) { index, line ->
                 val current = index == activeIndex
+                val lineScale by animateFloatAsState(
+                    targetValue = if (current) 1f else (23f / 29f),
+                    animationSpec = if (reduceMotion) snap() else tween(220),
+                    label = "tv-lyric-scale-$index",
+                )
+                val lineAlpha by animateFloatAsState(
+                    targetValue = if (current) 1f else 0.62f,
+                    animationSpec = if (reduceMotion) snap() else tween(220),
+                    label = "tv-lyric-alpha-$index",
+                )
+                val start = line.startTimeSeconds
                 Text(
-                    line.text,
-                    color = if (current) {
-                        colors.accent
-                    } else {
-                        colors.secondaryText.copy(alpha = if (activeIndex == null) 1f else 0.64f)
-                    },
-                    fontSize = if (current) 30.sp else 24.sp,
-                    lineHeight = if (current) 38.sp else 32.sp,
-                    fontWeight = if (current) FontWeight.Bold else FontWeight.Medium,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    text = line.text,
+                    color = if (current) colors.primaryText else colors.secondaryText,
+                    fontSize = 29.sp,
+                    lineHeight = 38.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .widthIn(max = 680.dp)
+                        .fillMaxWidth()
+                        .graphicsLayer {
+                            scaleX = lineScale
+                            scaleY = lineScale
+                            alpha = lineAlpha
+                        }
+                        .tvFocusableClick(
+                            shape = RoundedCornerShape(12.dp),
+                            enabled = start != null,
+                            onFocusedChange = { focused ->
+                                if (focused) {
+                                    focusedLyricIndex = index
+                                } else if (focusedLyricIndex == index) {
+                                    focusedLyricIndex = null
+                                }
+                            },
+                            onClick = {
+                                start?.let { seconds ->
+                                    controller.seekTo((seconds * 1000.0).toLong().coerceAtLeast(0L))
+                                }
+                            },
+                        )
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
                 )
             }
         }
@@ -456,76 +1074,133 @@ private fun TvLyricsPanel(graph: AuralisGraph, track: Track, positionMs: Long) {
 }
 
 @Composable
-private fun TvQueuePanel(queue: QueueSnapshot, controller: PlaybackController) {
+private fun TvQueuePanel(
+    queue: QueueSnapshot,
+    controller: PlaybackController,
+) {
     val colors = LocalAuralisTheme.current.colors
     val scope = rememberCoroutineScope()
-    if (queue.entries.isEmpty()) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(stringResource(PlayerR.string.player_queue_empty), color = colors.secondaryText)
-        }
-        return
+    val currentWindowIndex = queue.currentWindowIndex ?: -1
+    val upcoming = remember(queue.entries, currentWindowIndex) {
+        queue.entries.drop((currentWindowIndex + 1).coerceAtLeast(0)).toList()
     }
+    val hasUpcoming = (queue.currentLogicalIndex ?: -1) < queue.totalCount - 1
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        itemsIndexed(queue.entries, key = { _, item -> item.id.value }) { _, entry ->
-            val current = entry.id == queue.currentEntryId
-            val shape = RoundedCornerShape(16.dp)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(
-                        if (current) colors.accent.copy(alpha = 0.14f)
-                        else colors.elevated.copy(alpha = 0.5f),
-                        shape,
-                    )
-                    .tvFocusableClick(shape = shape) {
-                        scope.launch { controller.playOccurrence(entry.id) }
-                    }
-                    .padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AuralisArtwork(
-                    serverId = entry.track.serverId,
-                    artworkKey = entry.track.artworkKey,
-                    contentDescription = null,
-                    titleForFallback = entry.track.title,
-                    targetSizeDp = 64,
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.size(64.dp),
-                )
-                Spacer(Modifier.width(16.dp))
-                Column(Modifier.weight(1f)) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                stringResource(R.string.tv_up_next),
+                fontSize = 18.sp,
+                lineHeight = 24.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.primaryText,
+            )
+            Spacer(Modifier.weight(1f))
+            if (hasUpcoming) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = Color.Transparent,
+                    modifier = Modifier.tvFocusableClick(
+                        shape = RoundedCornerShape(14.dp),
+                        onClick = controller::clearUpcoming,
+                    ),
+                ) {
                     Text(
-                        entry.track.title,
-                        color = if (current) colors.accent else colors.primaryText,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        "${entry.track.artistName} · ${entry.track.albumTitle}",
-                        color = colors.secondaryText,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        stringResource(R.string.tv_clear_up_next),
+                        color = colors.error,
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
                     )
                 }
+            }
+        }
+
+        HorizontalDivider(color = colors.separator.copy(alpha = 0.62f))
+
+        if (upcoming.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
                 Text(
-                    formatTvClock((entry.track.durationSeconds * 1000).toLong()),
+                    stringResource(R.string.tv_queue_empty),
                     color = colors.secondaryText,
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.titleMedium,
                 )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                itemsIndexed(
+                    items = upcoming,
+                    key = { _, entry -> entry.id.value },
+                ) { _, entry ->
+                    val shape = RoundedCornerShape(14.dp)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .tvFocusableClick(shape = shape) {
+                                scope.launch { controller.playOccurrence(entry.id) }
+                            }
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        AuralisArtwork(
+                            serverId = entry.track.serverId,
+                            artworkKey = entry.track.artworkKey,
+                            contentDescription = null,
+                            titleForFallback = entry.track.title,
+                            targetSizeDp = 48,
+                            shape = RoundedCornerShape(6.dp),
+                            modifier = Modifier.size(48.dp),
+                        )
+                        Spacer(Modifier.width(11.dp))
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                entry.track.title,
+                                color = colors.primaryText.copy(alpha = 0.88f),
+                                fontSize = 14.sp,
+                                lineHeight = 18.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                entry.track.artistName,
+                                color = colors.secondaryText,
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Text(
+                            formatTvClock((entry.track.durationSeconds * 1000.0).toLong()),
+                            color = colors.secondaryText,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun TvTrackInfoPanel(track: Track, playback: PlaybackSnapshot) {
+private fun TvTrackInfoPanel(
+    track: Track,
+    playback: PlaybackSnapshot,
+) {
     val colors = LocalAuralisTheme.current.colors
     val source = track.sourceInfo
     val rows = listOf(
@@ -537,93 +1212,52 @@ private fun TvTrackInfoPanel(track: Track, playback: PlaybackSnapshot) {
         "来源" to if (playback.isLocalSource) "本地文件" else "服务器流",
     )
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        itemsIndexed(rows) { _, row ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(colors.elevated.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
-                    .padding(horizontal = 18.dp, vertical = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    row.first,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = colors.secondaryText,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    row.second,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = colors.primaryText,
-                )
+    Column(modifier = Modifier.fillMaxSize()) {
+        Text(
+            stringResource(R.string.tv_audio_info),
+            color = colors.primaryText,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(bottom = 14.dp),
+        )
+        HorizontalDivider(color = colors.separator.copy(alpha = 0.62f))
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(vertical = 12.dp),
+        ) {
+            itemsIndexed(rows) { index, row ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        row.first,
+                        color = colors.secondaryText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        row.second,
+                        color = colors.primaryText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                if (index != rows.lastIndex) {
+                    HorizontalDivider(color = colors.separator.copy(alpha = 0.34f))
+                }
             }
         }
     }
 }
 
-@Composable
-private fun TvSquareAction(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    content: @Composable () -> Unit,
-) {
-    val colors = LocalAuralisTheme.current.colors
-    val shape = RoundedCornerShape(18.dp)
-    Surface(
-        shape = shape,
-        color = colors.elevated,
-        modifier = modifier
-            .size(58.dp)
-            .tvFocusableClick(shape = shape, onClick = onClick),
-    ) {
-        Box(contentAlignment = Alignment.Center) { content() }
-    }
-}
-
-@Composable
-private fun TvRoundAction(
-    enabled: Boolean,
-    emphasized: Boolean = false,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    onFocusedChange: (Boolean) -> Unit = {},
-    content: @Composable () -> Unit,
-) {
-    val colors = LocalAuralisTheme.current.colors
-    val shape = RoundedCornerShape(50)
-    val size = if (emphasized) 82.dp else 66.dp
-    Surface(
-        shape = shape,
-        color = if (emphasized) {
-            colors.accent.copy(alpha = 0.28f)
-        } else {
-            colors.elevated.copy(alpha = 0.8f)
-        },
-        modifier = modifier
-            .padding(horizontal = 7.dp)
-            .size(size)
-            .tvFocusableClick(
-                shape = shape,
-                enabled = enabled,
-                onFocusedChange = onFocusedChange,
-                onClick = onClick,
-            ),
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Box(
-                modifier = Modifier,
-                contentAlignment = Alignment.Center,
-            ) {
-                content()
-            }
-        }
-    }
+private enum class TvPlayerContext {
+    None,
+    Lyrics,
+    Queue,
+    Info,
 }
 
 private fun formatTvClock(ms: Long): String {
