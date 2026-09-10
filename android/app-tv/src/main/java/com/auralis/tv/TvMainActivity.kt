@@ -9,7 +9,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -24,7 +23,6 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.AuralisTheme
 import com.auralis.core.designsystem.AuralisThemeController
@@ -185,22 +183,22 @@ private fun AppRoot(graph: AuralisGraph) {
                     },
                     onCancelRecommendationIndex = assistantCoordinator::cancelRecommendationIndexBuild,
                     onRefreshRecommendationIndex = assistantCoordinator::refreshRecommendationIndexStatus,
-                    // Phone settings intentionally run edge-to-edge. TV needs an overscan/readability
-                    // gutter so rows such as AI Assistant never touch the physical screen edge.
-                    modifier = Modifier.padding(horizontal = 52.dp, vertical = 26.dp),
+                    // The settings surface itself must cover the complete television viewport.
+                    // Individual rows already own their readable-content insets.
+                    modifier = Modifier.fillMaxSize(),
                 )
             }
 
             Route.AiSettings -> AiSettingsPage(
                 graph = graph,
                 onBack = { route = Route.Settings },
-                modifier = Modifier.padding(horizontal = 52.dp, vertical = 26.dp),
+                modifier = Modifier.fillMaxSize(),
             )
 
             Route.HomeLayoutEdit -> HomeLayoutEditScreen(
                 graph = graph,
                 onBack = { route = Route.Settings },
-                modifier = Modifier.padding(horizontal = 52.dp, vertical = 26.dp),
+                modifier = Modifier.fillMaxSize(),
             )
         }
     }
