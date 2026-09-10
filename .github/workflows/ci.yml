@@ -1,21 +1,26 @@
 # SPDX-License-Identifier: GPL-3.0-only
-name: CI
+name: Apple CI
 
 on:
-  # R08：恢复自动触发——push 到 main 与 PR 都跑，防止问题"修了又回来"。
   push:
     branches: [main]
+    paths-ignore:
+      - "android/**"
+      - ".github/workflows/android.yml"
   pull_request:
+    paths-ignore:
+      - "android/**"
+      - ".github/workflows/android.yml"
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: apple-ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   unit-and-build:
     name: Unit tests + builds
-    # Match the Xcode 27 toolchain used for local validation.  The older
+    # Match the Xcode 27 toolchain used for local validation. The older
     # macos-15/Xcode 16.4 Swift frontend crashes while lowering AppShell.
     runs-on: xcode-27
     timeout-minutes: 60
@@ -47,7 +52,6 @@ jobs:
           xcodebuild -version
           swift --version
 
-      # R08：XcodeGen 生成结果一致性检查——project.yml 与 .xcodeproj 不得漂移。
       - name: XcodeGen project consistency
         shell: bash
         run: |
@@ -69,19 +73,10 @@ jobs:
           fi
           echo "XcodeGen 输出与已提交工程一致"
 
-      # Catalog completeness is a blocking check. The optional --hardcoded scan
-      # intentionally stays out of the gate for now: the repository contains
-      # existing Siri phrases and Agent protocol text that are not UI catalog
-      # entries; those findings are tracked separately instead of masking build
-      # regressions behind a noisy baseline.
       - name: Localization catalog audit
         run: python3 Scripts/check_localization.py
 
       - name: Swift 6 tests (AuralisCore)
-        # Xcode 16.4's Swift 6.1.2 frontend can crash with signal 11 while
-        # emitting the large AppShell/AgentKit modules at the default -j8.
-        # Serialize SwiftPM compilation on the runner; the test surface stays
-        # complete and the app build steps remain independently parallelizable.
         run: swift test --jobs 1 --package-path Packages/AuralisCore
 
       - name: Build macOS app
@@ -136,9 +131,6 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
-      # UI smoke tests run through the Auralis scheme's real AuralisUITests
-      # TestableReference.  This is separate evidence from the generic build:
-      # it launches the app and queries rendered accessibility elements.
       - name: Build iOS app (Simulator)
         shell: bash
         run: |
@@ -165,10 +157,6 @@ jobs:
             echo "::error::An established iPhone Simulator is required for this PR's iOS UI smoke gate."
             exit 1
           fi
-          # xcodebuild can discover an available device before SpringBoard and
-          # Accessibility are ready. Wait for the already-created simulator
-          # explicitly so a boot race cannot fail the UI runner before any test
-          # body executes.
           ensure_simulator_ready() {
             local simulator_state
             simulator_state="$(xcrun simctl list devices | awk -v id="$simulator_id" '$0 ~ id { if ($0 ~ /Booted/) print "Booted"; else if ($0 ~ /Booting/) print "Booting"; else print "Stopped"; exit }')"
@@ -208,10 +196,6 @@ jobs:
             exit 1
           fi
 
-  # AVFoundation 真实播放边界测试需要能驱动 AVPlayer 的 run loop。
-  # Swift Testing 的无界面 runner 在 GitHub macOS 环境中不会持续驱动该
-  # run loop，因此这里保留测试目标的编译/跳过检查；真实音频回归仍按
-  # Docs/ManualValidation.md 在本机或真机执行。
   macOS-av-integration:
     name: macOS AV test target compilation
     runs-on: xcode-27
