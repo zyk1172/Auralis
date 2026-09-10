@@ -45,6 +45,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     debugImplementation(libs.androidx.compose.ui.tooling)
+
     implementation(project(":core:common"))
     implementation(project(":core:domain"))
     implementation(project(":core:opensubsonic"))
@@ -59,6 +60,7 @@ dependencies {
     implementation(project(":feature:library"))
     implementation(project(":feature:player"))
     implementation(project(":feature:search"))
+    implementation(project(":feature:assistant"))
     implementation(project(":feature:settings"))
     implementation(project(":feature:server"))
 }
