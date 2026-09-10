@@ -6,18 +6,13 @@ import com.auralis.core.domain.PlayMode
 /**
  * UI/system transport capabilities derived from the same semantics as [PlaybackLogic].
  *
- * Keeping these checks here prevents shells from treating queue adjacency as the whole contract:
- * previous can restart the current track after the restart threshold, RepeatAll wraps at both ends,
- * RepeatOne can explicitly restart the current occurrence, and Shuffle needs another candidate.
+ * Keeping these checks here prevents shells from treating queue adjacency as the whole contract.
+ * Apple exposes Previous whenever a current track exists: the command either restarts the current
+ * track, selects the physical previous occurrence, or wraps in RepeatAll. Next is mode-sensitive.
  */
 object PlaybackCapabilities {
-    fun canGoPrevious(playback: PlaybackSnapshot, queue: QueueSnapshot): Boolean {
-        val current = queue.currentLogicalIndex ?: return false
-        if (playback.track == null || queue.totalCount <= 0) return false
-        if (playback.positionMs > PlaybackLogic.PREVIOUS_RESTART_THRESHOLD_MS) return true
-        if (current > 0) return true
-        return playback.playMode == PlayMode.RepeatAll
-    }
+    fun canGoPrevious(playback: PlaybackSnapshot, queue: QueueSnapshot): Boolean =
+        playback.track != null && queue.totalCount > 0 && queue.currentLogicalIndex != null
 
     fun canGoNext(playback: PlaybackSnapshot, queue: QueueSnapshot): Boolean {
         val current = queue.currentLogicalIndex ?: return false
