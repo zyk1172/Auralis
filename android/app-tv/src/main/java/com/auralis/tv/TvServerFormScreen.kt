@@ -1,0 +1,334 @@
+// SPDX-License-Identifier: GPL-3.0-only
+package com.auralis.tv
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.dp
+import com.auralis.core.data.graph.AuralisGraph
+import com.auralis.core.designsystem.AuralisSpacing
+import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.designsystem.LocalReduceMotion
+import com.auralis.core.designsystem.R as AuralisR
+import com.auralis.core.domain.ServerAccount
+import com.auralis.feature.server.R as ServerR
+import com.auralis.feature.server.ServerFormState
+import com.auralis.feature.server.ServerTestUi
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
+
+/**
+ * TV-specific server editor. Material text fields are retained for IME compatibility, but focus is
+ * rendered around the complete field bounds so a remote user can always see which value will be
+ * edited before opening the on-screen keyboard.
+ */
+@Composable
+fun TvServerFormScreen(
+    graph: AuralisGraph,
+    existing: ServerAccount?,
+    onSuccess: () -> Unit,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalAuralisTheme.current.colors
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val firstField = remember { FocusRequester() }
+    val state = remember(graph, existing) {
+        ServerFormState(
+            context = context,
+            scope = scope,
+            graph = graph,
+            existing = existing,
+            onSuccess = { onSuccess() },
+            onBack = onBack,
+        )
+    }
+
+    BackHandler(enabled = !state.busy && !state.isTesting) { state.cancel() }
+    LaunchedEffect(Unit) {
+        yield()
+        runCatching { firstField.requestFocus() }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(colors.background)
+            .imePadding(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(82.dp)
+                .padding(horizontal = 36.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(
+                onClick = { state.cancel() },
+                enabled = !state.busy && !state.isTesting,
+                modifier = Modifier.tvFocusVisual(RoundedCornerShape(50)),
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(AuralisR.string.back),
+                    tint = colors.primaryText,
+                )
+            }
+            Spacer(Modifier.width(18.dp))
+            Text(
+                text = stringResource(if (existing != null) ServerR.string.server_edit_title else AuralisR.string.add_server),
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.primaryText,
+            )
+        }
+        HorizontalDivider(color = colors.separator)
+
+        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 1120.dp)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 48.dp, vertical = 30.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                TvServerField(
+                    value = state.displayName,
+                    onValueChange = { state.displayName = it },
+                    label = stringResource(ServerR.string.server_form_display_label),
+                    enabled = !state.busy,
+                    modifier = Modifier.focusRequester(firstField),
+                )
+                TvServerField(
+                    value = state.serverUrl,
+                    onValueChange = { state.serverUrl = it },
+                    label = stringResource(ServerR.string.server_form_url_label),
+                    placeholder = "http://192.168.1.10:4533",
+                    keyboardType = KeyboardType.Uri,
+                    enabled = !state.busy,
+                )
+                TvServerField(
+                    value = state.username,
+                    onValueChange = { state.username = it },
+                    label = stringResource(ServerR.string.server_form_username_label),
+                    keyboardType = KeyboardType.Ascii,
+                    enabled = !state.busy,
+                )
+                TvServerField(
+                    value = state.password,
+                    onValueChange = { state.password = it },
+                    label = stringResource(
+                        if (existing != null) ServerR.string.server_form_password_new_label
+                        else ServerR.string.server_form_password_label,
+                    ),
+                    keyboardType = KeyboardType.Password,
+                    password = true,
+                    enabled = !state.busy,
+                )
+                TvServerField(
+                    value = state.externalUrl,
+                    onValueChange = { state.externalUrl = it },
+                    label = stringResource(ServerR.string.server_form_external_label),
+                    placeholder = "https://music.example.com",
+                    keyboardType = KeyboardType.Uri,
+                    enabled = !state.busy,
+                )
+
+                Text(
+                    stringResource(ServerR.string.server_url_probe_note),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.secondaryText,
+                )
+                state.localError?.let { message ->
+                    TvServerStatus(message = message, error = true)
+                }
+                if (state.busy && state.busyLabel != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = colors.accent)
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            stringResource(ServerR.string.server_busy_format, state.busyLabel!!),
+                            color = colors.secondaryText,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+                state.testUi?.let { result ->
+                    when (result) {
+                        ServerTestUi.Success -> TvServerStatus(stringResource(ServerR.string.server_test_ok), success = true)
+                        ServerTestUi.AuthenticationFailed -> TvServerStatus(stringResource(ServerR.string.server_test_auth_failed), error = true)
+                        ServerTestUi.Unreachable -> TvServerStatus(stringResource(ServerR.string.server_test_unreachable), error = true)
+                        is ServerTestUi.Failed -> TvServerStatus(result.message, error = true)
+                    }
+                }
+                state.failureMessage?.let { TvServerStatus(it, error = true) }
+            }
+        }
+
+        HorizontalDivider(color = colors.separator)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 48.dp, vertical = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(
+                onClick = { state.runTest() },
+                enabled = !state.busy && !state.isTesting,
+                modifier = Modifier.tvFocusVisual(RoundedCornerShape(22.dp)),
+            ) {
+                if (state.isTesting) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = colors.accent)
+                    Spacer(Modifier.width(10.dp))
+                    Text(stringResource(ServerR.string.server_testing))
+                } else {
+                    Text(stringResource(AuralisR.string.test_connection))
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            Button(
+                onClick = { state.save() },
+                enabled = state.canSave(),
+                modifier = Modifier.tvFocusVisual(RoundedCornerShape(22.dp)),
+            ) {
+                Text(stringResource(if (state.busy) ServerR.string.server_saving else AuralisR.string.save))
+            }
+        }
+    }
+}
+
+@Composable
+private fun TvServerField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    placeholder: String? = null,
+    keyboardType: KeyboardType = KeyboardType.Text,
+    password: Boolean = false,
+    enabled: Boolean = true,
+) {
+    val colors = LocalAuralisTheme.current.colors
+    val reduceMotion = LocalReduceMotion.current
+    var focused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (focused) 1.015f else 1f,
+        animationSpec = if (reduceMotion) androidx.compose.animation.core.snap() else androidx.compose.animation.core.tween(120),
+        label = "tv-server-field-focus",
+    )
+    val shape = RoundedCornerShape(18.dp)
+
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        placeholder = placeholder?.let { text -> { Text(text) } },
+        singleLine = true,
+        enabled = enabled,
+        visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = colors.accent,
+            focusedLabelColor = colors.accent,
+            cursorColor = colors.accent,
+            unfocusedBorderColor = colors.separator.copy(alpha = 0.85f),
+            focusedTextColor = colors.primaryText,
+            unfocusedTextColor = colors.primaryText,
+        ),
+        modifier = modifier
+            .fillMaxWidth()
+            .height(74.dp)
+            .onFocusChanged { focused = it.isFocused }
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .then(
+                if (focused) Modifier.border(3.dp, colors.accent.copy(alpha = 0.95f), shape)
+                else Modifier,
+            ),
+        shape = shape,
+    )
+}
+
+@Composable
+private fun TvServerStatus(
+    message: String,
+    success: Boolean = false,
+    error: Boolean = false,
+) {
+    val colors = LocalAuralisTheme.current.colors
+    val tint = when {
+        success -> colors.success
+        error -> colors.error
+        else -> colors.secondaryText
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(tint.copy(alpha = 0.08f), RoundedCornerShape(16.dp))
+            .padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (success) Icons.Filled.CheckCircle else Icons.Filled.Info,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(22.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(message, color = tint, style = MaterialTheme.typography.bodyMedium)
+    }
+}
