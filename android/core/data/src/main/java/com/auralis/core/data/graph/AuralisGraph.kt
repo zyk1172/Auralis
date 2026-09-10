@@ -12,6 +12,7 @@ import com.auralis.core.data.connector.ServerClientRegistry
 import com.auralis.core.data.db.AuralisDatabase
 import com.auralis.core.data.db.AuralisDatabaseProvider
 import com.auralis.core.data.prefs.AuralisPreferences
+import com.auralis.core.data.repository.CachedCatalogRepository
 import com.auralis.core.data.repository.RecommendationIndexStore
 import com.auralis.core.data.repository.RoomCatalogRepository
 import com.auralis.core.data.repository.RoomLyricsRepository
@@ -30,13 +31,13 @@ import com.auralis.core.opensubsonic.StreamQualityPolicy
 import com.auralis.core.playback.DefaultPlaybackSourceResolver
 import com.auralis.core.playback.PlaybackDependencies
 import com.auralis.core.security.KeystoreCredentialVault
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
-import java.util.concurrent.TimeUnit
 
 /**
  * Auralis 组合根（对应 Apple `ApplicationComposition`）。
@@ -47,17 +48,26 @@ import java.util.concurrent.TimeUnit
  * - **服务器客户端唯一来源是 [ServerClientRegistry]**（connector 持有）。Graph 不再
  *   维护第二份易漂移的 accountCache：resolveStream / download / cover 一律
  *   `registry.client(serverId)` 取当前真正可用的端点；
- * - 播放器 / 下载器均为进程级单例。
+ * - 播放器 / 下载器均为进程级单例；
+ * - Room 是 catalog 唯一事实源，UI 通过进程级 replay 元数据层避免每次重进 Library
+ *   都重新解码整库。Artwork 仍由图片缓存独立管理。
  */
 class AuralisGraph(context: Context) {
 
     val appContext: Context = context.applicationContext
 
+    /**
+     * 应用级后台作用域。除了本地恢复，也承载 catalog replay collectors；其生命周期与
+     * Application 一致，不持有 Activity/View/Composable，因此不会因 TV 页面切换泄漏 UI。
+     */
+    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     val database: AuralisDatabase = AuralisDatabaseProvider.get(appContext)
     val preferences = AuralisPreferences(appContext)
     val vault = KeystoreCredentialVault(appContext)
 
-    val catalogRepository = RoomCatalogRepository(
+    /** Connector needs concrete transactional APIs; external consumers use the replaying facade. */
+    private val roomCatalogRepository = RoomCatalogRepository(
         database = database,
         serverDao = database.serverDao(),
         artistDao = database.artistDao(),
@@ -71,10 +81,16 @@ class AuralisGraph(context: Context) {
         syncDao = database.syncDao(),
     )
 
+    /**
+     * Public catalog API. The first Room emission is decoded once and replayed on subsequent UI
+     * entries; real Room invalidations still flow through immediately.
+     */
+    val catalogRepository = CachedCatalogRepository(roomCatalogRepository, appScope)
+
     /** 与 Catalog 使用同一个 Room 实例；Categories / Agent classifier 只能从这里访问索引。 */
     val recommendationIndex = RecommendationIndexStore(database)
 
-    val connector = ProductionServerConnector(vault, catalogRepository)
+    val connector = ProductionServerConnector(vault, roomCatalogRepository)
 
     /** 服务器客户端注册表：连接成功后登记；这是唯一真实来源。 */
     val registry: ServerClientRegistry get() = connector.registry
@@ -85,9 +101,6 @@ class AuralisGraph(context: Context) {
         .build()
 
     private val streamUrlProvider = StreamUrlProvider { track, _ -> resolveStreamUrl(track) }
-
-    /** 应用级后台作用域（Room 就绪后的本地恢复等，不阻塞首屏、不做网络门槛）。 */
-    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private fun detectNetwork(): NetworkKind {
         val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return NetworkKind.Other
@@ -146,6 +159,7 @@ class AuralisGraph(context: Context) {
     suspend fun forgetServer(serverId: ServerId): ServerId? {
         val wasActive = preferences.activeServerIdValue() == serverId.value
         connector.forgetServer(serverId)
+        catalogRepository.evict(serverId)
         recommendationIndex.clear(serverId)
         preferences.clearEndpointKind(serverId.value)
         val remaining = catalogRepository.servers()
