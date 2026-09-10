@@ -39,8 +39,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreHoriz
@@ -113,19 +111,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 
 /**
- * Android TV expanded player, structurally aligned with MacExpandedPlayerView.
+ * Android TV expanded player derived from MacExpandedPlayerView.
  *
- * The Mac implementation is the product contract here:
- * - no context: player column is centered;
- * - lyrics / queue / info: player moves left and the context pane fades/slides in;
- * - the current artwork supplies the ambient background;
- * - artwork shrinks while paused without changing layout;
- * - title/favorite/more, scrubber, five transport controls, top-right volume and bottom-right
- *   lyrics/queue controls are all persistent rather than hidden in a phone-style tab page;
- * - synced lyrics follow playback and keep the active line centered.
+ * TV deliberately drops the Mac window chrome: Back is the only close action and hardware volume
+ * keys own system volume. The primary D-pad layer is one horizontal row containing shuffle,
+ * previous, play/pause, next, repeat, lyrics and queue so left/right navigation never has to jump
+ * between unrelated focus groups.
  *
- * TV-specific adaptation is limited to D-pad focus and key handling. Visual hierarchy and state
- * transitions deliberately follow the Mac player rather than the shared mobile player.
+ * Mac geometry is preserved proportionally: the player column targets 31.6% of the viewport,
+ * artwork is the column width unless the 54% height guard limits it, and pause only scales the
+ * artwork visually to 0.74 without reflowing title/progress/controls.
  */
 @Composable
 fun TvNowPlayingScreen(
@@ -143,8 +138,9 @@ fun TvNowPlayingScreen(
     val positionMs by controller.position.collectAsState()
     var playerContext by remember { mutableStateOf(TvPlayerContext.None) }
 
-    val transportFocus = remember { List(5) { FocusRequester() } }
-    var pendingTransportRestore by remember { mutableIntStateOf(-1) }
+    // One focus sequence: transport 0...4, lyrics 5, queue 6.
+    val primaryFocus = remember { List(7) { FocusRequester() } }
+    var pendingPrimaryRestore by remember { mutableIntStateOf(-1) }
 
     var favoriteIds by remember { mutableStateOf<Set<GlobalId>>(emptySet()) }
     val track = playback.track
@@ -169,15 +165,15 @@ fun TvNowPlayingScreen(
 
     LaunchedEffect(Unit) {
         yield()
-        runCatching { transportFocus[2].requestFocus() }
+        runCatching { primaryFocus[2].requestFocus() }
     }
 
     LaunchedEffect(playback.entry?.id?.value) {
-        val target = pendingTransportRestore
-        if (target < 0) return@LaunchedEffect
+        val target = pendingPrimaryRestore
+        if (target !in primaryFocus.indices) return@LaunchedEffect
         yield()
-        if (runCatching { transportFocus[target].requestFocus() }.isSuccess) {
-            pendingTransportRestore = -1
+        if (runCatching { primaryFocus[target].requestFocus() }.isSuccess) {
+            pendingPrimaryRestore = -1
         }
     }
 
@@ -185,23 +181,26 @@ fun TvNowPlayingScreen(
     val durationMs = playback.durationMs.coerceAtLeast(0L)
     val isFavorite = favoriteIds.contains(currentTrack.globalId)
 
-    BoxWithConstraints(
-        modifier = modifier.fillMaxSize(),
-    ) {
-        val playerWidth = (maxWidth * 0.34f).coerceIn(320.dp, 500.dp)
-        val artworkSize = minOf(playerWidth, maxHeight * 0.44f).coerceIn(220.dp, 440.dp)
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        // MacFullPlayerMetrics adapted to ten-foot density. The lower TV minimum prevents a
+        // 960x540dp device from overflowing while keeping the same 31.6% / 54% proportions.
+        val playerWidth = (maxWidth * 0.316f).coerceIn(360.dp, 520.dp)
+        val artworkSize = minOf(playerWidth, maxHeight * 0.54f).coerceIn(300.dp, 520.dp)
         val centeredLeading = ((maxWidth - playerWidth) / 2f).coerceAtLeast(0.dp)
-        val contextPlayerLeading = (maxWidth * 0.065f).coerceAtLeast(32.dp)
+        val contextPlayerLeading = (maxWidth * 0.092f).coerceAtLeast(32.dp)
         val targetLeading = if (playerContext == TvPlayerContext.None) centeredLeading else contextPlayerLeading
         val playerLeading by animateDpAsState(
             targetValue = targetLeading,
             animationSpec = if (reduceMotion) snap() else tween(durationMillis = 250),
             label = "tv-player-leading",
         )
-        val contextGap = maxOf(64.dp, maxWidth * 0.055f)
+
+        val contextGap = maxOf(72.dp, maxWidth * 0.075f)
         val contextLeading = contextPlayerLeading + playerWidth + contextGap
         val contextTrailing = maxOf(34.dp, maxWidth * 0.035f)
         val contextWidth = (maxWidth - contextLeading - contextTrailing).coerceAtLeast(280.dp)
+        val contextTop = (maxHeight * 0.04f).coerceIn(24.dp, 54.dp)
+        val playerTop = if (maxHeight < 700.dp) 18.dp else (maxHeight * 0.07f).coerceIn(46.dp, 96.dp)
 
         TvPlayerAmbience(
             track = currentTrack,
@@ -211,15 +210,12 @@ fun TvNowPlayingScreen(
         TvPlaybackColumn(
             controller = controller,
             playback = playback,
-            queue = queue,
             track = currentTrack,
             positionMs = positionMs,
             durationMs = durationMs,
             artworkSize = artworkSize,
-            width = playerWidth,
             isFavorite = isFavorite,
             infoActive = playerContext == TvPlayerContext.Info,
-            transportFocus = transportFocus,
             onToggleFavorite = {
                 scope.launch {
                     runCatching { graph.libraryActions.toggleTrackFavorite(currentTrack) }
@@ -241,12 +237,11 @@ fun TvNowPlayingScreen(
                     TvPlayerContext.Info
                 }
             },
-            onTransportTrackChange = { index -> pendingTransportRestore = index },
             modifier = Modifier
                 .width(playerWidth)
                 .fillMaxHeight()
                 .offset(x = playerLeading)
-                .padding(top = maxOf(46.dp, maxHeight * 0.08f), bottom = 28.dp),
+                .padding(top = playerTop, bottom = 96.dp),
         )
 
         AnimatedVisibility(
@@ -271,7 +266,7 @@ fun TvNowPlayingScreen(
                 .width(contextWidth)
                 .fillMaxHeight()
                 .offset(x = contextLeading)
-                .padding(top = maxOf(50.dp, maxHeight * 0.07f), bottom = 76.dp),
+                .padding(top = contextTop, bottom = 96.dp),
         ) {
             when (playerContext) {
                 TvPlayerContext.None -> Unit
@@ -292,23 +287,16 @@ fun TvNowPlayingScreen(
             }
         }
 
-        TvTopLeftChrome(
-            onClose = onClose,
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(start = 22.dp, top = 18.dp),
-        )
-
-        TvVolumeCapsule(
-            volume = playback.volume,
-            onVolumeChange = controller::setVolume,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(end = 22.dp, top = 18.dp),
-        )
-
-        TvContextCapsule(
+        // Mac places transport and context controls on the same visual baseline. TV goes further:
+        // they are one D-pad row, so DirectionLeft/Right traverses all seven actions naturally.
+        TvPrimaryControlLayer(
+            controller = controller,
+            playback = playback,
+            queue = queue,
             context = playerContext,
+            requesters = primaryFocus,
+            playerWidth = playerWidth,
+            onTrackChangingAction = { index -> pendingPrimaryRestore = index },
             onLyrics = {
                 playerContext = if (playerContext == TvPlayerContext.Lyrics) {
                     TvPlayerContext.None
@@ -324,8 +312,10 @@ fun TvNowPlayingScreen(
                 }
             },
             modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 22.dp, bottom = 20.dp),
+                .align(Alignment.BottomStart)
+                .offset(x = playerLeading)
+                .width((maxWidth - playerLeading - 22.dp).coerceAtLeast(playerWidth))
+                .padding(bottom = 20.dp),
         )
     }
 }
@@ -403,18 +393,14 @@ private fun TvPlayerAmbience(
 private fun TvPlaybackColumn(
     controller: PlaybackController,
     playback: PlaybackSnapshot,
-    queue: QueueSnapshot,
     track: Track,
     positionMs: Long,
     durationMs: Long,
     artworkSize: Dp,
-    width: Dp,
     isFavorite: Boolean,
     infoActive: Boolean,
-    transportFocus: List<FocusRequester>,
     onToggleFavorite: () -> Unit,
     onToggleInfo: () -> Unit,
-    onTransportTrackChange: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
@@ -425,6 +411,7 @@ private fun TvPlaybackColumn(
         animationSpec = if (reduceMotion) {
             snap()
         } else {
+            // Compose spring tuned to the Mac 0.30s / low-bounce artwork response.
             spring(dampingRatio = 0.86f, stiffness = 420f)
         },
         label = "tv-player-artwork-scale",
@@ -461,7 +448,7 @@ private fun TvPlaybackColumn(
             )
         }
 
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(18.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -514,7 +501,7 @@ private fun TvPlaybackColumn(
             }
         }
 
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(16.dp))
 
         TvSeekBar(
             positionMs = positionMs,
@@ -522,19 +509,6 @@ private fun TvPlaybackColumn(
             onSeek = controller::seekTo,
             modifier = Modifier.fillMaxWidth(),
         )
-
-        Spacer(Modifier.height(20.dp))
-
-        TvTransportRow(
-            controller = controller,
-            playback = playback,
-            queue = queue,
-            requesters = transportFocus,
-            onTrackChangingAction = onTransportTrackChange,
-            modifier = Modifier.width(width),
-        )
-
-        Spacer(Modifier.weight(1f))
     }
 }
 
@@ -602,6 +576,70 @@ private fun TvSeekBar(
                 color = colors.secondaryText,
                 style = MaterialTheme.typography.labelSmall,
             )
+        }
+    }
+}
+
+@Composable
+private fun TvPrimaryControlLayer(
+    controller: PlaybackController,
+    playback: PlaybackSnapshot,
+    queue: QueueSnapshot,
+    context: TvPlayerContext,
+    requesters: List<FocusRequester>,
+    playerWidth: Dp,
+    onTrackChangingAction: (Int) -> Unit,
+    onLyrics: () -> Unit,
+    onQueue: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TvTransportRow(
+            controller = controller,
+            playback = playback,
+            queue = queue,
+            requesters = requesters,
+            onTrackChangingAction = onTrackChangingAction,
+            modifier = Modifier.width(playerWidth),
+        )
+
+        Spacer(Modifier.weight(1f))
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            TvTransportAction(
+                enabled = true,
+                selected = context == TvPlayerContext.Lyrics,
+                onClick = onLyrics,
+                modifier = Modifier.focusRequester(requesters[5]),
+            ) {
+                val colors = LocalAuralisTheme.current.colors
+                Icon(
+                    Icons.Outlined.ChatBubbleOutline,
+                    contentDescription = stringResource(PlayerR.string.player_tab_lyrics),
+                    tint = if (context == TvPlayerContext.Lyrics) colors.accent else colors.primaryText,
+                    modifier = Modifier.size(23.dp),
+                )
+            }
+            TvTransportAction(
+                enabled = true,
+                selected = context == TvPlayerContext.Queue,
+                onClick = onQueue,
+                modifier = Modifier.focusRequester(requesters[6]),
+            ) {
+                val colors = LocalAuralisTheme.current.colors
+                Icon(
+                    Icons.AutoMirrored.Filled.QueueMusic,
+                    contentDescription = stringResource(PlayerR.string.player_tab_queue),
+                    tint = if (context == TvPlayerContext.Queue) colors.accent else colors.primaryText,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
         }
     }
 }
@@ -766,152 +804,18 @@ private fun TvTransportAction(
 }
 
 @Composable
-private fun TvTopLeftChrome(
-    onClose: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    TvGlassCapsule(modifier = modifier) {
-        TvGlassIconButton(
-            onClick = onClose,
-            compact = true,
-        ) {
-            val colors = LocalAuralisTheme.current.colors
-            Icon(
-                Icons.Filled.Close,
-                contentDescription = stringResource(R.string.tv_close_player),
-                tint = colors.primaryText,
-                modifier = Modifier.size(22.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun TvVolumeCapsule(
-    volume: Float,
-    onVolumeChange: (Float) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val colors = LocalAuralisTheme.current.colors
-    val shape = RoundedCornerShape(24.dp)
-    TvGlassCapsule(modifier = modifier) {
-        Row(
-            modifier = Modifier
-                .width(210.dp)
-                .height(46.dp)
-                .onPreviewKeyEvent { event ->
-                    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                    when (event.key) {
-                        Key.DirectionLeft -> {
-                            onVolumeChange((volume - 0.05f).coerceIn(0f, 1f))
-                            true
-                        }
-                        Key.DirectionRight -> {
-                            onVolumeChange((volume + 0.05f).coerceIn(0f, 1f))
-                            true
-                        }
-                        else -> false
-                    }
-                }
-                .tvFocusVisual(shape = shape, stroke = 2.dp)
-                .focusable()
-                .padding(horizontal = 15.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            LinearProgressIndicator(
-                progress = { volume.coerceIn(0f, 1f) },
-                modifier = Modifier
-                    .weight(1f)
-                    .height(5.dp)
-                    .clip(CircleShape),
-                color = colors.accent,
-                trackColor = colors.separator.copy(alpha = 0.42f),
-            )
-            Icon(
-                Icons.AutoMirrored.Filled.VolumeUp,
-                contentDescription = stringResource(R.string.tv_volume),
-                tint = colors.primaryText,
-                modifier = Modifier.size(20.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun TvContextCapsule(
-    context: TvPlayerContext,
-    onLyrics: () -> Unit,
-    onQueue: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    TvGlassCapsule(modifier = modifier) {
-        Row(
-            modifier = Modifier.padding(horizontal = 5.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            TvGlassIconButton(
-                selected = context == TvPlayerContext.Lyrics,
-                onClick = onLyrics,
-                compact = true,
-            ) {
-                val colors = LocalAuralisTheme.current.colors
-                Icon(
-                    Icons.Outlined.ChatBubbleOutline,
-                    contentDescription = stringResource(PlayerR.string.player_tab_lyrics),
-                    tint = if (context == TvPlayerContext.Lyrics) colors.accent else colors.primaryText,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-            TvGlassIconButton(
-                selected = context == TvPlayerContext.Queue,
-                onClick = onQueue,
-                compact = true,
-            ) {
-                val colors = LocalAuralisTheme.current.colors
-                Icon(
-                    Icons.AutoMirrored.Filled.QueueMusic,
-                    contentDescription = stringResource(PlayerR.string.player_tab_queue),
-                    tint = if (context == TvPlayerContext.Queue) colors.accent else colors.primaryText,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun TvGlassCapsule(
-    modifier: Modifier = Modifier,
-    content: @Composable () -> Unit,
-) {
-    val colors = LocalAuralisTheme.current.colors
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(26.dp),
-        color = colors.surface.copy(alpha = 0.58f),
-        border = BorderStroke(1.dp, colors.separator.copy(alpha = 0.38f)),
-        shadowElevation = 8.dp,
-    ) {
-        content()
-    }
-}
-
-@Composable
 private fun TvGlassIconButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     selected: Boolean = false,
-    compact: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val colors = LocalAuralisTheme.current.colors
-    val size = if (compact) 42.dp else 48.dp
     Surface(
         shape = CircleShape,
         color = if (selected) colors.accent.copy(alpha = 0.14f) else Color.Transparent,
         modifier = modifier
-            .size(size)
+            .size(48.dp)
             .tvFocusableClick(shape = CircleShape, onClick = onClick),
     ) {
         Box(contentAlignment = Alignment.Center) {
