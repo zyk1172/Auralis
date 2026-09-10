@@ -24,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
@@ -34,6 +35,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -45,6 +47,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import com.auralis.core.designsystem.AuralisColors
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.LocalAuralisTheme
 import com.auralis.core.designsystem.LocalReduceMotion
@@ -53,10 +56,10 @@ import kotlinx.coroutines.launch
 /**
  * TV focus/remote feedback layer.
  *
- * Shared mobile-derived cards still use ordinary clickable(), therefore the LocalIndication must
- * provide a strong ten-foot focus state. Native TV controls additionally use [tvFocusableClick]
- * for a subtle focus-scale and pressed pulse. Remote key sounds are emitted once at the root so
- * every D-pad action gets consistent feedback without each feature having to implement it again.
+ * Selection and focus are deliberately different concepts. Product selection keeps the theme
+ * accent, while remote focus uses a contrast-resolved color that remains legible even when a theme
+ * uses nearly the same accent and surface hues. This avoids the real-TV failure where the focus
+ * rectangle visually disappeared into the selected background.
  */
 class TvIndication(
     private val focusColor: Color,
@@ -96,14 +99,14 @@ private class TvIndicationNode(
         val radius = 14.dp.toPx()
         if (focused) {
             drawRoundRect(
-                color = focusColor.copy(alpha = 0.08f),
+                color = focusColor.copy(alpha = 0.11f),
                 cornerRadius = CornerRadius(radius, radius),
             )
         }
         drawContent()
         if (pressed) {
             drawRoundRect(
-                color = focusColor.copy(alpha = 0.15f),
+                color = focusColor.copy(alpha = 0.18f),
                 cornerRadius = CornerRadius(radius, radius),
             )
         }
@@ -127,19 +130,59 @@ private class TvIndicationNode(
     }
 }
 
+private val LocalTvFocusColor = staticCompositionLocalOf { Color.White }
+
+/** WCAG-style contrast ratio, kept internal so unit tests can exercise every built-in theme. */
+internal fun tvContrastRatio(a: Color, b: Color): Float {
+    val lighter = maxOf(a.luminance(), b.luminance())
+    val darker = minOf(a.luminance(), b.luminance())
+    return (lighter + 0.05f) / (darker + 0.05f)
+}
+
 /**
- * Installs the shared focus indication and TV remote sound feedback. SoundEffectConstants route
- * through the TV system UI-sound channel and respect the device's own UI-sound policy/volume.
- * The handler never consumes a key, so normal Compose focus movement remains authoritative.
+ * Resolve a focus color independently from the theme's primary accent. The score is the weaker of
+ * its contrast against the normal surface and the selected-accent surface; this guarantees that a
+ * focus outline stays visible in both selected and unselected states.
+ */
+internal fun resolveTvFocusColor(colors: AuralisColors): Color {
+    val selectedSurface = compositeOver(colors.accent.copy(alpha = 0.24f), colors.surface)
+    val candidates = listOf(colors.accentSecondary, colors.primaryText, Color.White, Color.Black)
+    return candidates.maxBy { candidate ->
+        minOf(
+            tvContrastRatio(candidate, colors.surface),
+            tvContrastRatio(candidate, selectedSurface),
+        )
+    }
+}
+
+private fun compositeOver(foreground: Color, background: Color): Color {
+    val alpha = foreground.alpha + background.alpha * (1f - foreground.alpha)
+    if (alpha <= 0f) return Color.Transparent
+    return Color(
+        red = (foreground.red * foreground.alpha + background.red * background.alpha * (1f - foreground.alpha)) / alpha,
+        green = (foreground.green * foreground.alpha + background.green * background.alpha * (1f - foreground.alpha)) / alpha,
+        blue = (foreground.blue * foreground.alpha + background.blue * background.alpha * (1f - foreground.alpha)) / alpha,
+        alpha = alpha,
+    )
+}
+
+/**
+ * Installs shared focus indication and TV remote sound feedback. Sound effects respect the device's
+ * own UI-sound setting. The handler never consumes a key, so normal Compose focus movement remains
+ * authoritative.
  */
 @Composable
 fun ProvideTvIndication(content: @Composable () -> Unit) {
     val colors = LocalAuralisTheme.current.colors
-    val indication = remember(colors.accent) { TvIndication(colors.accent) }
+    val focusColor = remember(colors) { resolveTvFocusColor(colors) }
+    val indication = remember(focusColor) { TvIndication(focusColor) }
     val view = LocalView.current
     var soundKeyDown by remember { mutableStateOf<Key?>(null) }
 
-    CompositionLocalProvider(LocalIndication provides indication) {
+    CompositionLocalProvider(
+        LocalIndication provides indication,
+        LocalTvFocusColor provides focusColor,
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -187,7 +230,7 @@ fun Modifier.tvFocusVisual(
     onFocusedChange: (Boolean) -> Unit = {},
 ): Modifier {
     var focused by remember { mutableStateOf(false) }
-    val colors = LocalAuralisTheme.current.colors
+    val focusColor = LocalTvFocusColor.current
     val reduceMotion = LocalReduceMotion.current
     val pressed = interactionSource?.collectIsPressedAsState()?.value == true
     val targetScale = when {
@@ -213,7 +256,7 @@ fun Modifier.tvFocusVisual(
             scaleY = scale
         }
         .then(
-            if (focused) Modifier.border(stroke, colors.accent, shape)
+            if (focused) Modifier.border(stroke, focusColor, shape)
             else Modifier,
         )
 }
