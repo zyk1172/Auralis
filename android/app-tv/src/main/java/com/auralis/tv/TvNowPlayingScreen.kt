@@ -27,7 +27,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -135,7 +134,6 @@ fun TvNowPlayingScreen(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val theme = LocalAuralisTheme.current
     val reduceMotion = LocalReduceMotion.current
     val androidContext = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -207,7 +205,7 @@ fun TvNowPlayingScreen(
 
         TvPlayerAmbience(
             track = currentTrack,
-            modifier = Modifier.matchParentSize(),
+            modifier = Modifier.fillMaxSize(),
         )
 
         TvPlaybackColumn(
@@ -361,7 +359,7 @@ private fun TvPlayerAmbience(
                 targetSizeDp = 1024,
                 shape = RectangleShape,
                 modifier = Modifier
-                    .matchParentSize()
+                    .fillMaxSize()
                     .graphicsLayer {
                         scaleX = 1.15f
                         scaleY = 1.15f
@@ -373,7 +371,7 @@ private fun TvPlayerAmbience(
 
         Box(
             Modifier
-                .matchParentSize()
+                .fillMaxSize()
                 .background(
                     Brush.radialGradient(
                         colors = listOf(
@@ -387,7 +385,7 @@ private fun TvPlayerAmbience(
         )
         Box(
             Modifier
-                .matchParentSize()
+                .fillMaxSize()
                 .background(
                     Brush.linearGradient(
                         if (isLight) {
