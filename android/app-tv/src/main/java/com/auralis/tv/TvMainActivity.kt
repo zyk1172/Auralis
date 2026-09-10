@@ -3,11 +3,13 @@ package com.auralis.tv
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -22,6 +24,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.AuralisTheme
 import com.auralis.core.designsystem.AuralisThemeController
@@ -38,9 +41,10 @@ import com.auralis.feature.settings.SettingsScreen
 /**
  * TV single-activity composition root.
  *
- * Full-screen routes are mutually exclusive in the focus tree. The shell is stored in a
- * SaveableStateHolder instead of remaining focusable underneath settings/server pages; this avoids
- * D-pad events falling through to controls that are visually covered by the foreground route.
+ * Full-screen routes are mutually exclusive in the focus tree. Shell/settings keep their own
+ * saveable state buckets while they are temporarily removed, so entering a detail route no longer
+ * forces the user to start again from the top-level destination. Hardware Back is handled here for
+ * top-level TV routes; only the first-run server picker may fall through to Activity exit.
  */
 class TvMainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -78,6 +82,7 @@ private fun AppRoot(graph: AuralisGraph) {
     var shellReady by remember { mutableStateOf(false) }
     var startRecommendationIndexToken by remember { mutableIntStateOf(0) }
     val shellStateHolder = rememberSaveableStateHolder()
+    val settingsStateHolder = rememberSaveableStateHolder()
     val scope = rememberCoroutineScope()
     val assistantCoordinator = remember(graph, scope) { AssistantCoordinator(graph, scope) }
     val recommendationIndexState by assistantCoordinator.recommendationIndex.collectAsState()
@@ -89,6 +94,24 @@ private fun AppRoot(graph: AuralisGraph) {
         val saved = runCatching { graph.catalogRepository.servers() }.getOrDefault(emptyList())
         shellReady = saved.isNotEmpty()
         route = if (shellReady) Route.Shell else Route.ManageServers(showBack = false)
+    }
+
+    val currentRoute = route
+    val handleBackAtRoot = when (currentRoute) {
+        Route.Boot, Route.Shell -> false
+        is Route.ManageServers -> currentRoute.showBack
+        else -> true
+    }
+    BackHandler(enabled = handleBackAtRoot) {
+        route = when (val current = route) {
+            Route.Settings -> Route.Shell
+            Route.AiSettings -> Route.Settings
+            Route.HomeLayoutEdit -> Route.Settings
+            is Route.ManageServers -> if (current.showBack) Route.Shell else current
+            is Route.AddServer -> Route.ManageServers(showBack = shellReady)
+            is Route.EditServer -> Route.ManageServers(showBack = true)
+            Route.Boot, Route.Shell -> current
+        }
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -147,30 +170,37 @@ private fun AppRoot(graph: AuralisGraph) {
                 onBack = { route = Route.ManageServers(showBack = true) },
             )
 
-            Route.Settings -> SettingsScreen(
-                graph = graph,
-                onBack = { route = Route.Shell },
-                onOpenServers = { route = Route.ManageServers(showBack = true) },
-                onEditHomeLayout = { route = Route.HomeLayoutEdit },
-                onOpenAiSettings = { route = Route.AiSettings },
-                recommendationIndexState = recommendationIndexState,
-                onStartRecommendationIndex = {
-                    assistantCoordinator.startRecommendationIndexBuild()
-                    startRecommendationIndexToken += 1
-                    route = Route.Shell
-                },
-                onCancelRecommendationIndex = assistantCoordinator::cancelRecommendationIndexBuild,
-                onRefreshRecommendationIndex = assistantCoordinator::refreshRecommendationIndexStatus,
-            )
+            Route.Settings -> settingsStateHolder.SaveableStateProvider("tv-settings") {
+                SettingsScreen(
+                    graph = graph,
+                    onBack = { route = Route.Shell },
+                    onOpenServers = { route = Route.ManageServers(showBack = true) },
+                    onEditHomeLayout = { route = Route.HomeLayoutEdit },
+                    onOpenAiSettings = { route = Route.AiSettings },
+                    recommendationIndexState = recommendationIndexState,
+                    onStartRecommendationIndex = {
+                        assistantCoordinator.startRecommendationIndexBuild()
+                        startRecommendationIndexToken += 1
+                        route = Route.Shell
+                    },
+                    onCancelRecommendationIndex = assistantCoordinator::cancelRecommendationIndexBuild,
+                    onRefreshRecommendationIndex = assistantCoordinator::refreshRecommendationIndexStatus,
+                    // Phone settings intentionally run edge-to-edge. TV needs an overscan/readability
+                    // gutter so rows such as AI Assistant never touch the physical screen edge.
+                    modifier = Modifier.padding(horizontal = 52.dp, vertical = 26.dp),
+                )
+            }
 
             Route.AiSettings -> AiSettingsPage(
                 graph = graph,
                 onBack = { route = Route.Settings },
+                modifier = Modifier.padding(horizontal = 52.dp, vertical = 26.dp),
             )
 
             Route.HomeLayoutEdit -> HomeLayoutEditScreen(
                 graph = graph,
                 onBack = { route = Route.Settings },
+                modifier = Modifier.padding(horizontal = 52.dp, vertical = 26.dp),
             )
         }
     }
