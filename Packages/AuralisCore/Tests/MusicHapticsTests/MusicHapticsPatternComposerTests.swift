@@ -25,6 +25,50 @@ private func texture(at time: TimeInterval, duration: TimeInterval = 1) -> Music
     #expect(layers.contains([bass]))
 }
 
+@Test func transientDurationMaterializesAsRealContinuousBody() throws {
+    let kick = MusicHapticsEvent(
+        time: 1,
+        duration: 0.09,
+        intensity: 0.82,
+        sharpness: 0.22,
+        kind: .transient,
+        classification: .kick
+    )
+    let expanded = MusicHapticsPatternComposer.expandedEvents(for: [kick])
+
+    #expect(expanded.count == 2)
+    #expect(expanded.contains(kick))
+    let body = try #require(expanded.first { $0.kind == .continuous })
+    #expect(body.classification == .kick)
+    #expect(body.time > kick.time)
+    #expect((body.duration ?? 0) >= 0.028)
+    #expect(body.intensity < kick.intensity)
+    #expect(body.sharpness <= 0.22)
+    #expect(body.curve.isEmpty)
+
+    // No parameter curve means the short body can share the unmodulated Core
+    // Haptics pattern with its transient instead of allocating a texture lane.
+    let layers = MusicHapticsPatternComposer.layers(for: [kick])
+    #expect(layers.count == 1)
+    #expect(layers[0].contains { $0.kind == .transient })
+    #expect(layers[0].contains { $0.kind == .continuous })
+}
+
+@Test func highPercussionDurationStaysTransientOnly() {
+    let hat = MusicHapticsEvent(
+        time: 1,
+        duration: 0.04,
+        intensity: 0.72,
+        sharpness: 0.88,
+        kind: .transient,
+        classification: .highPercussion
+    )
+    let expanded = MusicHapticsPatternComposer.expandedEvents(for: [hat])
+
+    #expect(expanded == [hat])
+    #expect(!expanded.contains { $0.kind == .continuous })
+}
+
 @Test func overlappingCurvesUseIndependentPlayersButAdjacentTexturesReuseALane() {
     let first = texture(at: 0)
     let overlapping = texture(at: 0.5)
