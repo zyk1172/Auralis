@@ -37,6 +37,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,6 +46,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -76,8 +79,8 @@ import kotlinx.coroutines.yield
  *
  * Full-player/content routes are mutually exclusive. The content focus group also has a restorer:
  * entering an album/artist detail and backing out returns to the card that opened it instead of
- * jumping to the rail or the first card. Apple branding uses the same binary AppIcon asset as the
- * Apple target, referenced into Android through Git rather than redrawn.
+ * jumping to the rail or the first card. Each top-level destination owns an independent saveable
+ * state bucket so an Assistant draft cannot be reused by Home/Library/Search when the branch swaps.
  */
 @Composable
 fun TvShell(
@@ -96,6 +99,7 @@ fun TvShell(
     var browseDestination by remember { mutableStateOf<BrowseDestination?>(null) }
     var playerOpen by rememberSaveable { mutableStateOf(false) }
     var pendingFocusRestore by remember { mutableStateOf<TvFocusRestoreTarget?>(null) }
+    val sectionStateHolder = rememberSaveableStateHolder()
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -111,8 +115,6 @@ fun TvShell(
     LaunchedEffect(controller, engineAvailable) {
         if (engineAvailable) {
             controller.queue.collect { snapshot ->
-                // Defensive copy while core snapshots are being hardened as well. Never keep a UI
-                // reference to a mutable ArrayList.SubList across the next player mutation.
                 queue = snapshot.stableCopy()
             }
         } else {
@@ -267,66 +269,68 @@ fun TvShell(
                         .focusRestorer()
                         .focusGroup(),
                 ) {
-                    when (section) {
-                        TvSection.Home -> HomeScreen(
-                            graph = graph,
-                            onPlayTracks = ::playShelf,
-                            onBrowse = ::openBrowse,
-                            onManageServers = onOpenServers,
-                            modifier = Modifier.fillMaxSize(),
-                        )
+                    sectionStateHolder.SaveableStateProvider("tv-section-${section.name}") {
+                        when (section) {
+                            TvSection.Home -> HomeScreen(
+                                graph = graph,
+                                onPlayTracks = ::playShelf,
+                                onBrowse = ::openBrowse,
+                                onManageServers = onOpenServers,
+                                modifier = Modifier.fillMaxSize(),
+                            )
 
-                        TvSection.Library -> {
-                            val destination = browseDestination
-                            if (destination == null) {
-                                LibraryScreen(
-                                    graph = graph,
-                                    onOpenSettings = onOpenSettings,
-                                    onPlayTracks = ::playShelf,
-                                    onPlayNext = ::playNextShelf,
-                                    onAppendToQueue = ::appendQueueShelf,
-                                    onBrowse = ::openBrowse,
-                                    recommendationIndexState = recommendationIndexState,
-                                    onStartRecommendationIndex = {
-                                        section = TvSection.Assistant
-                                        assistantCoordinator.startRecommendationIndexBuild()
-                                    },
-                                    onCancelRecommendationIndex = assistantCoordinator::cancelRecommendationIndexBuild,
-                                    onRefreshRecommendationIndex = assistantCoordinator::refreshRecommendationIndexStatus,
-                                    bottomChromeClearance = 24.dp,
-                                    modifier = Modifier.fillMaxSize(),
-                                )
-                            } else {
-                                BrowseDetailScreen(
-                                    graph = graph,
-                                    initial = destination,
-                                    onBack = {
-                                        browseDestination = null
-                                        pendingFocusRestore = TvFocusRestoreTarget.Content
-                                    },
-                                    onPlayTracks = ::playShelf,
-                                    onPlayNext = ::playNextShelf,
-                                    onAppendToQueue = ::appendQueueShelf,
-                                    bottomChromeClearance = 24.dp,
-                                    modifier = Modifier.fillMaxSize(),
-                                )
+                            TvSection.Library -> {
+                                val destination = browseDestination
+                                if (destination == null) {
+                                    LibraryScreen(
+                                        graph = graph,
+                                        onOpenSettings = onOpenSettings,
+                                        onPlayTracks = ::playShelf,
+                                        onPlayNext = ::playNextShelf,
+                                        onAppendToQueue = ::appendQueueShelf,
+                                        onBrowse = ::openBrowse,
+                                        recommendationIndexState = recommendationIndexState,
+                                        onStartRecommendationIndex = {
+                                            section = TvSection.Assistant
+                                            assistantCoordinator.startRecommendationIndexBuild()
+                                        },
+                                        onCancelRecommendationIndex = assistantCoordinator::cancelRecommendationIndexBuild,
+                                        onRefreshRecommendationIndex = assistantCoordinator::refreshRecommendationIndexStatus,
+                                        bottomChromeClearance = 24.dp,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                } else {
+                                    BrowseDetailScreen(
+                                        graph = graph,
+                                        initial = destination,
+                                        onBack = {
+                                            browseDestination = null
+                                            pendingFocusRestore = TvFocusRestoreTarget.Content
+                                        },
+                                        onPlayTracks = ::playShelf,
+                                        onPlayNext = ::playNextShelf,
+                                        onAppendToQueue = ::appendQueueShelf,
+                                        bottomChromeClearance = 24.dp,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                }
                             }
+
+                            TvSection.Search -> SearchScreen(
+                                graph = graph,
+                                onBack = { selectSection(TvSection.Home) },
+                                onPlayTracks = ::playShelf,
+                                onBrowse = ::openBrowse,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+
+                            TvSection.Assistant -> AssistantScreen(
+                                coordinator = assistantCoordinator,
+                                onOpenSearch = { selectSection(TvSection.Search) },
+                                onOpenAiSettings = onOpenAiSettings,
+                                modifier = Modifier.fillMaxSize(),
+                            )
                         }
-
-                        TvSection.Search -> SearchScreen(
-                            graph = graph,
-                            onBack = { selectSection(TvSection.Home) },
-                            onPlayTracks = ::playShelf,
-                            onBrowse = ::openBrowse,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-
-                        TvSection.Assistant -> AssistantScreen(
-                            coordinator = assistantCoordinator,
-                            onOpenSearch = { selectSection(TvSection.Search) },
-                            onOpenAiSettings = onOpenAiSettings,
-                            modifier = Modifier.fillMaxSize(),
-                        )
                     }
                 }
             }
@@ -345,40 +349,59 @@ private fun TvNavigationRail(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
+    val itemHeight = 72.dp
+    val itemGap = 8.dp
+
     Column(
         modifier = modifier
             .background(colors.elevated.copy(alpha = 0.76f))
-            .padding(horizontal = 12.dp, vertical = 26.dp),
+            .padding(horizontal = 12.dp, vertical = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Image(
-            painter = painterResource(R.drawable.auralis_apple_icon),
-            contentDescription = stringResource(R.string.app_name),
+        // Crop a few percent from the master-artwork edge. Icon Composer normally applies its own
+        // mask/fill; showing the raw artwork edge-to-edge on a white rail exposes that source rim.
+        Box(
             modifier = Modifier
-                .size(58.dp)
+                .size(56.dp)
                 .clip(RoundedCornerShape(14.dp)),
-        )
-        Spacer(Modifier.height(8.dp))
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                painter = painterResource(R.drawable.auralis_apple_icon),
+                contentDescription = stringResource(R.string.app_name),
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = 1.08f
+                        scaleY = 1.08f
+                    },
+            )
+        }
+        Spacer(Modifier.height(6.dp))
         Text("Auralis", style = MaterialTheme.typography.labelMedium, color = colors.secondaryText)
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(18.dp))
 
-        Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
+        // Home / Library / Search / Assistant / Now Playing are one five-row system. Keeping them
+        // in the same column with exactly the same height prevents the bottom player row from being
+        // compressed by a weighted spacer on shorter 720p/overscanned televisions.
+        Column(verticalArrangement = Arrangement.spacedBy(itemGap)) {
             TvSection.entries.forEach { entry ->
                 TvRailItem(
                     section = entry,
                     selected = section == entry,
                     onClick = { onSelectSection(entry) },
                     modifier = Modifier.focusRequester(sectionFocus.getValue(entry)),
+                    height = itemHeight,
                 )
             }
+            TvNowPlayingRailButton(
+                playback = playback,
+                onClick = onOpenPlayer,
+                modifier = Modifier.focusRequester(nowPlayingFocus),
+                height = itemHeight,
+            )
         }
-
-        Spacer(Modifier.weight(1f))
-        TvNowPlayingRailButton(
-            playback = playback,
-            onClick = onOpenPlayer,
-            modifier = Modifier.focusRequester(nowPlayingFocus),
-        )
     }
 }
 
@@ -388,6 +411,7 @@ private fun TvRailItem(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    height: androidx.compose.ui.unit.Dp = 72.dp,
 ) {
     val colors = LocalAuralisTheme.current.colors
     val shape = RoundedCornerShape(22.dp)
@@ -396,7 +420,7 @@ private fun TvRailItem(
         color = if (selected) colors.accent.copy(alpha = 0.20f) else Color.Transparent,
         modifier = modifier
             .width(108.dp)
-            .height(78.dp)
+            .height(height)
             .tvFocusableClick(shape = shape, onClick = onClick),
     ) {
         Column(
@@ -407,9 +431,9 @@ private fun TvRailItem(
                 section.icon,
                 contentDescription = null,
                 tint = if (selected) colors.accent else colors.secondaryText,
-                modifier = Modifier.size(27.dp),
+                modifier = Modifier.size(25.dp),
             )
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(5.dp))
             Text(
                 stringResource(section.labelRes),
                 style = MaterialTheme.typography.labelMedium,
@@ -425,19 +449,20 @@ private fun TvNowPlayingRailButton(
     playback: PlaybackSnapshot,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    height: androidx.compose.ui.unit.Dp = 72.dp,
 ) {
     val colors = LocalAuralisTheme.current.colors
     val reduceMotion = LocalReduceMotion.current
     val hasTrack = playback.track != null
-    val isPlaying = playback.state is PlaybackState.Playing
-    val shape = RoundedCornerShape(24.dp)
+    val active = playback.state.isActive && !reduceMotion
+    val shape = RoundedCornerShape(22.dp)
 
     Surface(
         shape = shape,
         color = if (hasTrack) colors.accent.copy(alpha = 0.18f) else colors.surface.copy(alpha = 0.55f),
         modifier = modifier
             .width(108.dp)
-            .height(88.dp)
+            .height(height)
             .tvFocusableClick(shape = shape, enabled = hasTrack, onClick = onClick),
     ) {
         Column(
@@ -445,16 +470,16 @@ private fun TvNowPlayingRailButton(
             verticalArrangement = Arrangement.Center,
         ) {
             if (hasTrack) {
-                TvEqualizer(active = isPlaying && !reduceMotion)
+                TvEqualizer(active = active)
             } else {
                 Icon(
                     Icons.Filled.GraphicEq,
                     contentDescription = null,
                     tint = colors.secondaryText.copy(alpha = 0.55f),
-                    modifier = Modifier.size(29.dp),
+                    modifier = Modifier.size(25.dp),
                 )
             }
-            Spacer(Modifier.height(7.dp))
+            Spacer(Modifier.height(4.dp))
             Text(
                 stringResource(if (hasTrack) R.string.tv_now_playing else R.string.tv_no_playback),
                 style = MaterialTheme.typography.labelSmall,
@@ -470,33 +495,33 @@ private fun TvEqualizer(active: Boolean) {
     val colors = LocalAuralisTheme.current.colors
     val transition = rememberInfiniteTransition(label = "tv-now-playing-eq")
     val a by transition.animateFloat(
-        initialValue = 0.38f,
-        targetValue = if (active) 1f else 0.38f,
-        animationSpec = infiniteRepeatable(tween(460), RepeatMode.Reverse),
+        initialValue = 0.34f,
+        targetValue = if (active) 1f else 0.34f,
+        animationSpec = infiniteRepeatable(tween(420), RepeatMode.Reverse),
         label = "eq-a",
     )
     val b by transition.animateFloat(
-        initialValue = 0.76f,
-        targetValue = if (active) 0.32f else 0.76f,
-        animationSpec = infiniteRepeatable(tween(610), RepeatMode.Reverse),
+        initialValue = 0.78f,
+        targetValue = if (active) 0.28f else 0.78f,
+        animationSpec = infiniteRepeatable(tween(570), RepeatMode.Reverse),
         label = "eq-b",
     )
     val c by transition.animateFloat(
-        initialValue = 0.52f,
-        targetValue = if (active) 0.92f else 0.52f,
-        animationSpec = infiniteRepeatable(tween(540), RepeatMode.Reverse),
+        initialValue = 0.48f,
+        targetValue = if (active) 0.94f else 0.48f,
+        animationSpec = infiniteRepeatable(tween(500), RepeatMode.Reverse),
         label = "eq-c",
     )
     Row(
-        modifier = Modifier.height(31.dp),
+        modifier = Modifier.height(23.dp),
         verticalAlignment = Alignment.Bottom,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         listOf(a, b, c).forEach { fraction ->
             Box(
                 Modifier
-                    .width(5.dp)
-                    .height((28f * fraction.coerceIn(0.25f, 1f)).dp)
+                    .width(4.dp)
+                    .height((21f * fraction.coerceIn(0.25f, 1f)).dp)
                     .background(colors.accent, RoundedCornerShape(50)),
             )
         }
