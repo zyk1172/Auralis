@@ -29,7 +29,7 @@
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:banner="@drawable/tv_banner"
-        android:icon="@drawable/auralis_apple_icon"
+        android:icon="@drawable/ic_tv_logo"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.Auralis">
