@@ -110,8 +110,7 @@ fun AppleBottomChrome(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .navigationBarsPadding()
-            .then(gestureModifier),
+            .navigationBarsPadding(),
         contentAlignment = Alignment.BottomCenter,
     ) {
         if (progress >= AuralisChrome.compactInteractionThreshold && canCompact) {
@@ -119,6 +118,7 @@ fun AppleBottomChrome(
                 section = section,
                 track = track,
                 playbackState = playbackState,
+                gestureModifier = gestureModifier,
                 onExpand = { onCompactRequest(false) },
                 onAssistant = {
                     onSelectSection(AppSection.Assistant)
@@ -133,6 +133,7 @@ fun AppleBottomChrome(
                 section = section,
                 track = track,
                 playbackState = playbackState,
+                gestureModifier = gestureModifier,
                 canGoPrevious = canGoPrevious,
                 canGoNext = canGoNext,
                 onSelectSection = onSelectSection,
@@ -151,6 +152,7 @@ private fun MorphingBottomChrome(
     section: AppSection,
     track: Track?,
     playbackState: PlaybackState,
+    gestureModifier: Modifier,
     canGoPrevious: Boolean,
     canGoNext: Boolean,
     onSelectSection: (AppSection) -> Unit,
@@ -172,7 +174,11 @@ private fun MorphingBottomChrome(
                 .padding(horizontal = AuralisChrome.dockHorizontalPadding)
                 .padding(bottom = AuralisChrome.dockBottomPadding),
         ) {
-            BottomDock(selected = section, onSelect = onSelectSection, modifier = Modifier.fillMaxWidth())
+            BottomDock(
+                selected = section,
+                onSelect = onSelectSection,
+                modifier = Modifier.fillMaxWidth().then(gestureModifier),
+            )
         }
         return
     }
@@ -204,7 +210,11 @@ private fun MorphingBottomChrome(
                 .alpha(1f - chromeFade)
                 .graphicsLayer { scaleX = 1f - 0.16f * chromeFade },
         ) {
-            BottomDock(selected = section, onSelect = onSelectSection, modifier = Modifier.fillMaxWidth())
+            BottomDock(
+                selected = section,
+                onSelect = onSelectSection,
+                modifier = Modifier.fillMaxWidth().then(gestureModifier),
+            )
         }
 
         if (track != null && section != AppSection.Assistant) {
@@ -275,6 +285,7 @@ private fun CollapsedBottomChrome(
     section: AppSection,
     track: Track?,
     playbackState: PlaybackState,
+    gestureModifier: Modifier,
     onExpand: () -> Unit,
     onAssistant: () -> Unit,
     onOpenPlayer: () -> Unit,
@@ -285,7 +296,8 @@ private fun CollapsedBottomChrome(
             .fillMaxWidth()
             .height(AuralisChrome.compactInteractionHeight)
             .padding(horizontal = AuralisChrome.dockHorizontalPadding)
-            .padding(bottom = AuralisChrome.dockBottomPadding),
+            .padding(bottom = AuralisChrome.dockBottomPadding)
+            .then(gestureModifier),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         CircularChromeButton(

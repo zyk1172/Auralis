@@ -255,6 +255,7 @@ fun MobileShell(
                         onPlayTracks = ::playShelf,
                         onPlayNext = ::playNextShelf,
                         onAppendToQueue = ::appendQueueShelf,
+                        bottomChromeClearance = scrollBottomClearance,
                         modifier = dockScrollModifier(),
                     )
                 }
@@ -264,6 +265,7 @@ fun MobileShell(
                 coordinator = assistantCoordinator,
                 onOpenSearch = { searchOpen = true },
                 onOpenAiSettings = onOpenAiSettings,
+                collapseProgress = dockProgress,
                 modifier = dockScrollModifier(),
             )
         }

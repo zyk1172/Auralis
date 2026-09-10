@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -55,10 +56,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.auralis.core.data.graph.AuralisGraph
+import com.auralis.core.designsystem.AuralisChrome
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
 import com.auralis.core.designsystem.R as AuralisR
+import com.auralis.core.designsystem.rememberDockBottomReservation
 import com.auralis.core.domain.Album
 import com.auralis.core.domain.Artist
 import com.auralis.core.domain.BrowseDestination
@@ -87,6 +90,7 @@ fun BrowseDetailScreen(
     onPlayTracks: (List<Track>, Int) -> Unit,
     onPlayNext: (List<Track>) -> Unit,
     onAppendToQueue: (List<Track>) -> Unit,
+    bottomChromeClearance: androidx.compose.ui.unit.Dp = AuralisChrome.expandedInteractionHeight,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
@@ -139,9 +143,21 @@ fun BrowseDetailScreen(
 
         Box(Modifier.fillMaxSize()) {
             when (current) {
-                BrowseDestination.Playlists -> PlaylistOverview(graph, push = { stack = stack + it })
-                BrowseDestination.TopArtists -> TopArtistList(graph, push = { stack = stack + it })
-                BrowseDestination.TopAlbums -> TopAlbumList(graph, push = { stack = stack + it })
+                BrowseDestination.Playlists -> PlaylistOverview(
+                    graph,
+                    push = { stack = stack + it },
+                    bottomChromeClearance = bottomChromeClearance,
+                )
+                BrowseDestination.TopArtists -> TopArtistList(
+                    graph,
+                    push = { stack = stack + it },
+                    bottomChromeClearance = bottomChromeClearance,
+                )
+                BrowseDestination.TopAlbums -> TopAlbumList(
+                    graph,
+                    push = { stack = stack + it },
+                    bottomChromeClearance = bottomChromeClearance,
+                )
                 else -> DetailTrackContent(
                     graph = graph,
                     destination = current,
@@ -150,6 +166,7 @@ fun BrowseDetailScreen(
                     onPlayTracks = onPlayTracks,
                     onPlayNext = onPlayNext,
                     onAppendToQueue = onAppendToQueue,
+                    bottomChromeClearance = bottomChromeClearance,
                 )
             }
         }
@@ -284,6 +301,7 @@ private fun DetailTrackContent(
     onPlayTracks: (List<Track>, Int) -> Unit,
     onPlayNext: (List<Track>) -> Unit,
     onAppendToQueue: (List<Track>) -> Unit,
+    bottomChromeClearance: androidx.compose.ui.unit.Dp,
 ) {
     val context = LocalContext.current
     var load by remember(destination) { mutableStateOf<DetailLoad>(DetailLoad.Loading) }
@@ -318,6 +336,7 @@ private fun DetailTrackContent(
                 onPlayRow = { index -> onPlayTracks(state.tracks, index) },
                 onPlayNext = onPlayNext,
                 onAppendToQueue = onAppendToQueue,
+                bottomChromeClearance = bottomChromeClearance,
                 onRemovedFromPlaylist = if (destination is BrowseDestination.Playlist) {
                     { localReload += 1 }
                 } else {
@@ -355,6 +374,7 @@ private fun TrackListWithHeader(
     onPlayNext: (List<Track>) -> Unit,
     onAppendToQueue: (List<Track>) -> Unit,
     onRemovedFromPlaylist: (() -> Unit)?,
+    bottomChromeClearance: androidx.compose.ui.unit.Dp,
 ) {
     val colors = LocalAuralisTheme.current.colors
     val context = LocalContext.current
@@ -366,7 +386,16 @@ private fun TrackListWithHeader(
     var removingIndex by remember { mutableStateOf<Int?>(null) }
     var removingBusy by remember { mutableStateOf(false) }
 
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
+    val listState = rememberLazyListState()
+    listState.rememberDockBottomReservation(bottomChromeClearance)
+
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            bottom = bottomChromeClearance + AuralisSpacing.large,
+        ),
+    ) {
         item(key = "header") {
             Row(
                 modifier = Modifier
@@ -573,6 +602,7 @@ private fun TrackListWithHeader(
 private fun PlaylistOverview(
     graph: AuralisGraph,
     push: (BrowseDestination) -> Unit,
+    bottomChromeClearance: androidx.compose.ui.unit.Dp,
 ) {
     val serverId = rememberActiveServerId(graph)
     val repo = graph.catalogRepository
@@ -613,7 +643,15 @@ private fun PlaylistOverview(
             playlists!!.isEmpty() -> LibraryEmptyState(stringResource(R.string.library_empty_playlists_title), stringResource(R.string.library_empty_playlists_help))
             else -> {
                 val sorted = sort.apply(playlists!!)
-                LazyColumn(Modifier.fillMaxSize()) {
+                val listState = rememberLazyListState()
+                listState.rememberDockBottomReservation(bottomChromeClearance)
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        bottom = bottomChromeClearance + AuralisSpacing.large,
+                    ),
+                ) {
                     items(sorted, key = { it.globalId.serialized }) { playlist ->
                         Row(
                             modifier = Modifier
@@ -860,6 +898,7 @@ private fun PlaylistManageMenu(
 private fun TopArtistList(
     graph: AuralisGraph,
     push: (BrowseDestination) -> Unit,
+    bottomChromeClearance: androidx.compose.ui.unit.Dp,
 ) {
     val colors = LocalAuralisTheme.current.colors
     val context = LocalContext.current
@@ -887,29 +926,39 @@ private fun TopArtistList(
         )
         pairs == null -> LibraryLoadingBox(stringResource(R.string.library_stats_loading_top_artists))
         pairs!!.isEmpty() -> LibraryEmptyState(stringResource(R.string.library_empty_top_artists_title), stringResource(R.string.library_empty_top_artists_help))
-        else -> LazyColumn(Modifier.fillMaxSize()) {
+        else -> {
             val sorted = pairs!!.sortedByDescending { it.second }
-            items(sorted, key = { it.first.globalId.serialized }) { (artist, count) ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { push(BrowseDestination.Artist(artist.globalId)) }
-                        .padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.small),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.medium),
-                ) {
-                    AuralisArtwork(
-                        serverId = artist.serverId,
-                        artworkKey = artist.artworkKey,
-                        contentDescription = artist.name,
-                        titleForFallback = artist.name,
-                        targetSizeDp = 88,
-                        shape = RoundedCornerShape(AuralisRadius.small),
-                        modifier = Modifier.size(44.dp),
-                    )
-                    Column(Modifier.weight(1f)) {
-                        Text(artist.name, style = MaterialTheme.typography.titleMedium, color = colors.primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(stringResource(R.string.library_plays_count_format, count), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+            val listState = rememberLazyListState()
+            listState.rememberDockBottomReservation(bottomChromeClearance)
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    bottom = bottomChromeClearance + AuralisSpacing.large,
+                ),
+            ) {
+                items(sorted, key = { it.first.globalId.serialized }) { (artist, count) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { push(BrowseDestination.Artist(artist.globalId)) }
+                            .padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.small),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.medium),
+                    ) {
+                        AuralisArtwork(
+                            serverId = artist.serverId,
+                            artworkKey = artist.artworkKey,
+                            contentDescription = artist.name,
+                            titleForFallback = artist.name,
+                            targetSizeDp = 88,
+                            shape = RoundedCornerShape(AuralisRadius.small),
+                            modifier = Modifier.size(44.dp),
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(artist.name, style = MaterialTheme.typography.titleMedium, color = colors.primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(stringResource(R.string.library_plays_count_format, count), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+                        }
                     }
                 }
             }
@@ -921,6 +970,7 @@ private fun TopArtistList(
 private fun TopAlbumList(
     graph: AuralisGraph,
     push: (BrowseDestination) -> Unit,
+    bottomChromeClearance: androidx.compose.ui.unit.Dp,
 ) {
     val colors = LocalAuralisTheme.current.colors
     val context = LocalContext.current
@@ -948,30 +998,40 @@ private fun TopAlbumList(
         )
         pairs == null -> LibraryLoadingBox(stringResource(R.string.library_stats_loading_top_albums))
         pairs!!.isEmpty() -> LibraryEmptyState(stringResource(R.string.library_empty_top_albums_title), stringResource(R.string.library_empty_top_albums_help))
-        else -> LazyColumn(Modifier.fillMaxSize()) {
+        else -> {
             val sorted = pairs!!.sortedByDescending { it.second }
-            items(sorted, key = { it.first.globalId.serialized }) { (album, count) ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { push(BrowseDestination.Album(album.globalId)) }
-                        .padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.small),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.medium),
-                ) {
-                    AuralisArtwork(
-                        serverId = album.serverId,
-                        artworkKey = album.artworkKey,
-                        contentDescription = album.title,
-                        titleForFallback = album.title,
-                        targetSizeDp = 88,
-                        shape = RoundedCornerShape(AuralisRadius.small),
-                        modifier = Modifier.size(44.dp),
-                    )
-                    Column(Modifier.weight(1f)) {
-                        Text(album.title, style = MaterialTheme.typography.titleMedium, color = colors.primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(album.artistName, style = MaterialTheme.typography.bodySmall, color = colors.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(stringResource(R.string.library_plays_count_format, count), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+            val listState = rememberLazyListState()
+            listState.rememberDockBottomReservation(bottomChromeClearance)
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    bottom = bottomChromeClearance + AuralisSpacing.large,
+                ),
+            ) {
+                items(sorted, key = { it.first.globalId.serialized }) { (album, count) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { push(BrowseDestination.Album(album.globalId)) }
+                            .padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.small),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.medium),
+                    ) {
+                        AuralisArtwork(
+                            serverId = album.serverId,
+                            artworkKey = album.artworkKey,
+                            contentDescription = album.title,
+                            titleForFallback = album.title,
+                            targetSizeDp = 88,
+                            shape = RoundedCornerShape(AuralisRadius.small),
+                            modifier = Modifier.size(44.dp),
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(album.title, style = MaterialTheme.typography.titleMedium, color = colors.primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(album.artistName, style = MaterialTheme.typography.bodySmall, color = colors.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(stringResource(R.string.library_plays_count_format, count), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+                        }
                     }
                 }
             }

@@ -223,15 +223,23 @@ class AuralisGraph(context: Context) {
         downloadManager
     }
 
-    /** 播放服务：跨 Activity 进程内长期持有单个 ExoPlayer。 */
+    /**
+     * 播放服务：先作为普通 started service 创建并注册 MediaSession。
+     *
+     * 这里不能预先调用 startForegroundService：冷启动后用户可能只执行“下一首播放/加入队列”
+     * 而并不真正开始播放，或者首曲 URL 解析失败/变慢；这两种情况都会让 Android 的 FGS
+     * deadline 在播放器进入前台前到期。真正开始播放时，Media3 的 MediaNotificationManager
+     * 会在已注册 Player 进入 BUFFERING/READY 且 playWhenReady=true 后，自行把同一服务提升
+     * 为 mediaPlayback foreground service 并同步发布通知。
+     */
     fun startPlaybackService() {
         val intent = Intent(appContext, com.auralis.core.playback.AuralisPlaybackService::class.java)
-        appContext.startForegroundService(intent)
+        appContext.startService(intent)
     }
 
     /**
      * 下载是长期 dataSync 前台任务。Android 8+ 从后台启动普通 Service 会直接被系统拒绝，
-     * 因此与播放服务一样走 startForegroundService；DownloadService 会在收到启动后立即
+     * 因此下载继续走 startForegroundService；DownloadService 会在收到启动后立即
      * 根据 activeCount 进入前台或自停。
      */
     fun startDownloadService() {
@@ -241,24 +249,15 @@ class AuralisGraph(context: Context) {
 
     suspend fun trackFor(globalId: GlobalId): Track? = catalogRepository.track(globalId)
 
-    // ------------------------------------------------------------ 缓存管理（设置页）
+    // ------------------------------------------------------------ 缓存管理
 
-    /** 歌词缓存行数（设置 → 数据与备份 统计；失败按 0 处理不抛给 UI）。 */
     suspend fun lyricCacheCount(): Int =
         runCatching { database.annotationDao().lyricCount() }.getOrDefault(0)
 
-    /** 清空全部歌词缓存（Room lyrics 表），对齐 Swift `clearLyricsCache`。 */
     suspend fun clearLyricCache() {
         database.annotationDao().clearAllLyrics()
     }
 
-    // ------------------------------------------------------------ 服务器在线搜索
-
-    /**
-     * 在线搜索（OpenSubsonic `search3`，对齐 Apple `AuralisAppModel.searchOnServer`：
-     * 服务器搜索结果只取歌曲，本地无结果时作为兜底播放源）。
-     * 无该服务器的可用客户端时抛 [IllegalStateException]，由 UI 如实呈现，不伪装空结果。
-     */
     suspend fun serverSearch(serverId: ServerId, query: String, limit: Int): List<Track> {
         val client = registry.client(serverId)
             ?: throw IllegalStateException("服务器尚未就绪（无可用客户端）")
@@ -271,10 +270,6 @@ class AuralisGraph(context: Context) {
         return container.song.map { com.auralis.core.opensubsonic.OpenSubsonicMapper.track(it, serverId) }
     }
 
-    /**
-     * 服务器相似歌曲（OpenSubsonic `getSimilarSongs2`，R4：AI「由此继续播放」数据源）。
-     * 与 [serverSearch] 同样：无该服务器可用客户端时抛 [IllegalStateException]。
-     */
     suspend fun similarSongs(serverId: ServerId, trackId: String, count: Int = 30): List<Track> {
         val client = registry.client(serverId)
             ?: throw IllegalStateException("服务器尚未就绪（无可用客户端）")
