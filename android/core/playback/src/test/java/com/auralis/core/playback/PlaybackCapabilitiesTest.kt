@@ -23,11 +23,7 @@ class PlaybackCapabilitiesTest {
         durationSeconds = 180.0,
     )
 
-    private fun playback(mode: PlayMode, positionMs: Long = 0L) = PlaybackSnapshot(
-        track = track,
-        positionMs = positionMs,
-        playMode = mode,
-    )
+    private fun playback(mode: PlayMode) = PlaybackSnapshot(track = track, playMode = mode)
 
     private fun queue(current: Int, total: Int) = QueueSnapshot(
         entries = listOf(QueueEntry.of(track)),
@@ -37,24 +33,18 @@ class PlaybackCapabilitiesTest {
     )
 
     @Test
-    fun `previous restarts current track after threshold even at queue head`() {
-        assertThat(
-            PlaybackCapabilities.canGoPrevious(
-                playback(PlayMode.Sequential, positionMs = 3_001L),
-                queue(current = 0, total = 1),
-            ),
-        ).isTrue()
+    fun `previous is available whenever a current occurrence exists`() {
+        assertThat(PlaybackCapabilities.canGoPrevious(playback(PlayMode.Sequential), queue(0, 1))).isTrue()
+        assertThat(PlaybackCapabilities.canGoPrevious(playback(PlayMode.Sequential), queue(1, 3))).isTrue()
     }
 
     @Test
-    fun `repeat all exposes wraparound previous and next`() {
-        assertThat(PlaybackCapabilities.canGoPrevious(playback(PlayMode.RepeatAll), queue(0, 3))).isTrue()
+    fun `repeat all exposes wraparound next`() {
         assertThat(PlaybackCapabilities.canGoNext(playback(PlayMode.RepeatAll), queue(2, 3))).isTrue()
     }
 
     @Test
-    fun `sequential transport stops at physical boundaries`() {
-        assertThat(PlaybackCapabilities.canGoPrevious(playback(PlayMode.Sequential), queue(0, 3))).isFalse()
+    fun `sequential next stops at physical queue end`() {
         assertThat(PlaybackCapabilities.canGoNext(playback(PlayMode.Sequential), queue(2, 3))).isFalse()
     }
 
