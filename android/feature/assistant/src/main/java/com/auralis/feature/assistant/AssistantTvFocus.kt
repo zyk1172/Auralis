@@ -2,6 +2,7 @@
 package com.auralis.feature.assistant
 
 import android.content.res.Configuration
+import android.content.res.Resources
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -16,15 +17,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import com.auralis.core.designsystem.LocalAuralisTheme
 import com.auralis.core.designsystem.LocalReduceMotion
 
-/** True only for the ten-foot Android UI. Shared phone/tablet Assistant keeps native touch chrome. */
-@Composable
+/** True only for the ten-foot Android UI. Safe to query from focus-launch coroutines too. */
 internal fun assistantIsTelevision(): Boolean {
-    val configuration = LocalConfiguration.current
+    val configuration = Resources.getSystem().configuration
     return configuration.uiMode and Configuration.UI_MODE_TYPE_MASK == Configuration.UI_MODE_TYPE_TELEVISION
 }
 
