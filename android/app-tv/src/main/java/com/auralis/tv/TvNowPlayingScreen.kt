@@ -118,9 +118,9 @@ import kotlinx.coroutines.yield
  * previous, play/pause, next, repeat, lyrics and queue so left/right navigation never has to jump
  * between unrelated focus groups.
  *
- * Mac geometry is preserved proportionally: the player column targets 31.6% of the viewport,
- * artwork is the column width unless the 54% height guard limits it, and pause only scales the
- * artwork visually to 0.74 without reflowing title/progress/controls.
+ * The artwork and every component below it share one exact column width. The square artwork is
+ * height-budgeted after title/progress/transport chrome has been reserved, so 540p/720p logical
+ * TV viewports cannot push the time labels under the bottom controls.
  */
 @Composable
 fun TvNowPlayingScreen(
@@ -182,12 +182,17 @@ fun TvNowPlayingScreen(
     val isFavorite = favoriteIds.contains(currentTrack.globalId)
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        // MacFullPlayerMetrics adapted to ten-foot density. The lower TV minimum prevents a
-        // 960x540dp device from overflowing while keeping the same 31.6% / 54% proportions.
-        val playerWidth = (maxWidth * 0.316f).coerceIn(360.dp, 520.dp)
-        val artworkSize = minOf(playerWidth, maxHeight * 0.54f).coerceIn(300.dp, 520.dp)
+        val playerTop = if (maxHeight < 700.dp) 14.dp else (maxHeight * 0.055f).coerceIn(34.dp, 72.dp)
+        val targetColumnWidth = (maxWidth * 0.316f).coerceIn(320.dp, 520.dp)
+
+        // Below-artwork budget: identity row + spacing + seek/time + bottom transport clearance.
+        // Compute the artwork from the remaining height, then use that same result as column width.
+        val heightLimitedArtwork = (maxHeight - playerTop - 166.dp).coerceAtLeast(240.dp)
+        val playerWidth = minOf(targetColumnWidth, heightLimitedArtwork).coerceAtLeast(240.dp)
+        val artworkSize = playerWidth
+
         val centeredLeading = ((maxWidth - playerWidth) / 2f).coerceAtLeast(0.dp)
-        val contextPlayerLeading = (maxWidth * 0.092f).coerceAtLeast(32.dp)
+        val contextPlayerLeading = (maxWidth * 0.092f).coerceAtLeast(28.dp)
         val targetLeading = if (playerContext == TvPlayerContext.None) centeredLeading else contextPlayerLeading
         val playerLeading by animateDpAsState(
             targetValue = targetLeading,
@@ -195,12 +200,11 @@ fun TvNowPlayingScreen(
             label = "tv-player-leading",
         )
 
-        val contextGap = maxOf(72.dp, maxWidth * 0.075f)
+        val contextGap = maxOf(62.dp, maxWidth * 0.065f)
         val contextLeading = contextPlayerLeading + playerWidth + contextGap
-        val contextTrailing = maxOf(34.dp, maxWidth * 0.035f)
-        val contextWidth = (maxWidth - contextLeading - contextTrailing).coerceAtLeast(280.dp)
-        val contextTop = (maxHeight * 0.04f).coerceIn(24.dp, 54.dp)
-        val playerTop = if (maxHeight < 700.dp) 18.dp else (maxHeight * 0.07f).coerceIn(46.dp, 96.dp)
+        val contextTrailing = maxOf(28.dp, maxWidth * 0.03f)
+        val contextWidth = (maxWidth - contextLeading - contextTrailing).coerceAtLeast(260.dp)
+        val contextTop = (maxHeight * 0.04f).coerceIn(20.dp, 46.dp)
 
         TvPlayerAmbience(
             track = currentTrack,
@@ -241,7 +245,7 @@ fun TvNowPlayingScreen(
                 .width(playerWidth)
                 .fillMaxHeight()
                 .offset(x = playerLeading)
-                .padding(top = playerTop, bottom = 96.dp),
+                .padding(top = playerTop, bottom = 68.dp),
         )
 
         AnimatedVisibility(
@@ -266,7 +270,7 @@ fun TvNowPlayingScreen(
                 .width(contextWidth)
                 .fillMaxHeight()
                 .offset(x = contextLeading)
-                .padding(top = contextTop, bottom = 96.dp),
+                .padding(top = contextTop, bottom = 70.dp),
         ) {
             when (playerContext) {
                 TvPlayerContext.None -> Unit
@@ -287,8 +291,6 @@ fun TvNowPlayingScreen(
             }
         }
 
-        // Mac places transport and context controls on the same visual baseline. TV goes further:
-        // they are one D-pad row, so DirectionLeft/Right traverses all seven actions naturally.
         TvPrimaryControlLayer(
             controller = controller,
             playback = playback,
@@ -314,8 +316,8 @@ fun TvNowPlayingScreen(
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .offset(x = playerLeading)
-                .width((maxWidth - playerLeading - 22.dp).coerceAtLeast(playerWidth))
-                .padding(bottom = 20.dp),
+                .width((maxWidth - playerLeading - 18.dp).coerceAtLeast(playerWidth))
+                .padding(bottom = 10.dp),
         )
     }
 }
@@ -405,13 +407,12 @@ private fun TvPlaybackColumn(
 ) {
     val colors = LocalAuralisTheme.current.colors
     val reduceMotion = LocalReduceMotion.current
-    val isPlaying = playback.state is PlaybackState.Playing
+    val artworkExpanded = playback.state.isActive
     val artworkScale by animateFloatAsState(
-        targetValue = if (isPlaying) 1f else 0.74f,
+        targetValue = if (artworkExpanded) 1f else 0.74f,
         animationSpec = if (reduceMotion) {
             snap()
         } else {
-            // Compose spring tuned to the Mac 0.30s / low-bounce artwork response.
             spring(dampingRatio = 0.86f, stiffness = 420f)
         },
         label = "tv-player-artwork-scale",
@@ -448,22 +449,22 @@ private fun TvPlaybackColumn(
             )
         }
 
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(10.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
                     track.title,
                     color = colors.primaryText,
-                    fontSize = 23.sp,
-                    lineHeight = 28.sp,
+                    fontSize = 20.sp,
+                    lineHeight = 24.sp,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -471,8 +472,8 @@ private fun TvPlaybackColumn(
                 Text(
                     "${track.artistName} — ${track.albumTitle}",
                     color = colors.secondaryText,
-                    fontSize = 15.sp,
-                    lineHeight = 20.sp,
+                    fontSize = 13.sp,
+                    lineHeight = 17.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -485,7 +486,7 @@ private fun TvPlaybackColumn(
                         if (isFavorite) AuralisR.string.unfavorite else AuralisR.string.favorite,
                     ),
                     tint = if (isFavorite) colors.accent else colors.primaryText.copy(alpha = 0.86f),
-                    modifier = Modifier.size(24.dp),
+                    modifier = Modifier.size(21.dp),
                 )
             }
             TvGlassIconButton(
@@ -496,12 +497,12 @@ private fun TvPlaybackColumn(
                     Icons.Filled.MoreHoriz,
                     contentDescription = stringResource(AuralisR.string.more_actions),
                     tint = if (infoActive) colors.accent else colors.primaryText.copy(alpha = 0.86f),
-                    modifier = Modifier.size(25.dp),
+                    modifier = Modifier.size(22.dp),
                 )
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(8.dp))
 
         TvSeekBar(
             positionMs = positionMs,
@@ -520,7 +521,7 @@ private fun TvSeekBar(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
-    val shape = RoundedCornerShape(12.dp)
+    val shape = RoundedCornerShape(10.dp)
     val clampedPosition = positionMs.coerceIn(0L, durationMs.coerceAtLeast(0L))
     val fraction = if (durationMs > 0L) {
         clampedPosition.toFloat() / durationMs.toFloat()
@@ -532,7 +533,7 @@ private fun TvSeekBar(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(30.dp)
+                .height(20.dp)
                 .onPreviewKeyEvent { event ->
                     if (event.type != KeyEventType.KeyDown || durationMs <= 0L) return@onPreviewKeyEvent false
                     when (event.key) {
@@ -549,32 +550,37 @@ private fun TvSeekBar(
                 }
                 .tvFocusVisual(shape = shape, stroke = 2.dp)
                 .focusable(enabled = durationMs > 0L)
-                .padding(horizontal = 8.dp),
+                .padding(horizontal = 6.dp),
             contentAlignment = Alignment.Center,
         ) {
             LinearProgressIndicator(
                 progress = { fraction.coerceIn(0f, 1f) },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(5.dp)
+                    .height(4.dp)
                     .clip(CircleShape),
                 color = colors.accent,
                 trackColor = colors.separator.copy(alpha = 0.40f),
             )
         }
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 formatTvClock(clampedPosition),
                 color = colors.secondaryText,
-                style = MaterialTheme.typography.labelSmall,
+                fontSize = 10.sp,
+                lineHeight = 12.sp,
             )
             Text(
                 "-${formatTvClock((durationMs - clampedPosition).coerceAtLeast(0L))}",
                 color = colors.secondaryText,
-                style = MaterialTheme.typography.labelSmall,
+                fontSize = 10.sp,
+                lineHeight = 12.sp,
             )
         }
     }
@@ -610,7 +616,7 @@ private fun TvPrimaryControlLayer(
 
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             TvTransportAction(
                 enabled = true,
@@ -623,7 +629,7 @@ private fun TvPrimaryControlLayer(
                     Icons.Outlined.ChatBubbleOutline,
                     contentDescription = stringResource(PlayerR.string.player_tab_lyrics),
                     tint = if (context == TvPlayerContext.Lyrics) colors.accent else colors.primaryText,
-                    modifier = Modifier.size(23.dp),
+                    modifier = Modifier.size(21.dp),
                 )
             }
             TvTransportAction(
@@ -637,7 +643,7 @@ private fun TvPrimaryControlLayer(
                     Icons.AutoMirrored.Filled.QueueMusic,
                     contentDescription = stringResource(PlayerR.string.player_tab_queue),
                     tint = if (context == TvPlayerContext.Queue) colors.accent else colors.primaryText,
-                    modifier = Modifier.size(24.dp),
+                    modifier = Modifier.size(22.dp),
                 )
             }
         }
@@ -680,7 +686,7 @@ private fun TvTransportRow(
                 Icons.Filled.Shuffle,
                 contentDescription = stringResource(R.string.tv_shuffle),
                 tint = if (playback.playMode == PlayMode.Shuffle) colors.accent else colors.primaryText,
-                modifier = Modifier.size(23.dp),
+                modifier = Modifier.size(20.dp),
             )
         }
 
@@ -696,7 +702,7 @@ private fun TvTransportRow(
                 Icons.Filled.SkipPrevious,
                 contentDescription = stringResource(AuralisR.string.previous),
                 tint = if (canPrev) colors.primaryText else colors.secondaryText.copy(alpha = 0.38f),
-                modifier = Modifier.size(34.dp),
+                modifier = Modifier.size(29.dp),
             )
         }
 
@@ -708,8 +714,8 @@ private fun TvTransportRow(
         ) {
             if (busy) {
                 CircularProgressIndicator(
-                    modifier = Modifier.size(31.dp),
-                    strokeWidth = 3.dp,
+                    modifier = Modifier.size(26.dp),
+                    strokeWidth = 2.5.dp,
                     color = colors.primaryText,
                 )
             } else {
@@ -719,7 +725,7 @@ private fun TvTransportRow(
                         if (isPlaying) AuralisR.string.pause else AuralisR.string.play,
                     ),
                     tint = colors.primaryText,
-                    modifier = Modifier.size(39.dp),
+                    modifier = Modifier.size(34.dp),
                 )
             }
         }
@@ -736,7 +742,7 @@ private fun TvTransportRow(
                 Icons.Filled.SkipNext,
                 contentDescription = stringResource(AuralisR.string.next),
                 tint = if (canNext) colors.primaryText else colors.secondaryText.copy(alpha = 0.38f),
-                modifier = Modifier.size(34.dp),
+                modifier = Modifier.size(29.dp),
             )
         }
 
@@ -760,7 +766,7 @@ private fun TvTransportRow(
                 if (playback.playMode == PlayMode.RepeatOne) Icons.Filled.RepeatOne else Icons.Filled.Repeat,
                 contentDescription = stringResource(R.string.tv_repeat),
                 tint = if (repeatActive) colors.accent else colors.primaryText,
-                modifier = Modifier.size(23.dp),
+                modifier = Modifier.size(20.dp),
             )
         }
     }
@@ -776,7 +782,7 @@ private fun TvTransportAction(
     content: @Composable () -> Unit,
 ) {
     val colors = LocalAuralisTheme.current.colors
-    val size = if (emphasized) 68.dp else 54.dp
+    val size = if (emphasized) 54.dp else 44.dp
     Surface(
         shape = CircleShape,
         color = when {
@@ -815,7 +821,7 @@ private fun TvGlassIconButton(
         shape = CircleShape,
         color = if (selected) colors.accent.copy(alpha = 0.14f) else Color.Transparent,
         modifier = modifier
-            .size(48.dp)
+            .size(42.dp)
             .tvFocusableClick(shape = CircleShape, onClick = onClick),
     ) {
         Box(contentAlignment = Alignment.Center) {
@@ -831,7 +837,13 @@ private fun TvLyricsPanel(
     track: Track,
     positionMs: Long,
 ) {
-    val colors = LocalAuralisTheme.current.colors
+    val theme = LocalAuralisTheme.current
+    val colors = theme.colors
+    val activeLyricColor = if (theme.colorScheme == AuralisColorScheme.Light) {
+        Color(0xFF087D74)
+    } else {
+        Color(0xFF50D5C8)
+    }
     val reduceMotion = LocalReduceMotion.current
     val density = LocalDensity.current
     var document by remember(track.globalId) { mutableStateOf<LyricsDocument?>(null) }
@@ -917,8 +929,8 @@ private fun TvLyricsPanel(
         else -> LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(vertical = 30.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+            contentPadding = PaddingValues(vertical = 26.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             itemsIndexed(
@@ -932,17 +944,17 @@ private fun TvLyricsPanel(
                     label = "tv-lyric-scale-$index",
                 )
                 val lineAlpha by animateFloatAsState(
-                    targetValue = if (current) 1f else 0.62f,
+                    targetValue = if (current) 1f else 0.55f,
                     animationSpec = if (reduceMotion) snap() else tween(220),
                     label = "tv-lyric-alpha-$index",
                 )
                 val start = line.startTimeSeconds
                 Text(
                     text = line.text,
-                    color = if (current) colors.primaryText else colors.secondaryText,
+                    color = if (current) activeLyricColor else colors.primaryText,
                     fontSize = 29.sp,
                     lineHeight = 38.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = if (current) FontWeight.Bold else FontWeight.SemiBold,
                     textAlign = TextAlign.Center,
                     modifier = Modifier
                         .widthIn(max = 680.dp)
@@ -968,7 +980,7 @@ private fun TvLyricsPanel(
                                 }
                             },
                         )
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                        .padding(horizontal = 12.dp, vertical = 5.dp),
                 )
             }
         }
