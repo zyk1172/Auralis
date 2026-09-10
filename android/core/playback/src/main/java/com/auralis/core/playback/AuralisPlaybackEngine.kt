@@ -404,7 +404,6 @@ class AuralisPlaybackEngine(
         val entry = logicalQueue.getOrNull(logicalIndex) ?: return
         val currentItem = buildMediaItem(entry, requireUri = true)
 
-        // A newer Next/Previous/play request superseded this slow source resolution.
         if (generation != windowGeneration) return
 
         val currentOnly = PlaybackWindowIdentity.currentOnly(logicalIndex)
@@ -436,9 +435,6 @@ class AuralisPlaybackEngine(
             return
         }
 
-        // During this first low-latency phase media index 0 represents logicalIndex, not the start
-        // of the future prefetch window. Suppress synchronous Media3 callbacks until that identity
-        // is established atomically.
         playerListMutation = true
         try {
             player.setMediaItems(listOf(currentItem), 0, startAtMs)
@@ -461,10 +457,6 @@ class AuralisPlaybackEngine(
         }
     }
 
-    /**
-     * Resolves neighbours away from the main thread, then commits the structural Media3 mutation as
-     * one identity transaction. A stale hydration job is discarded when another navigation wins.
-     */
     private suspend fun fillWindowAround(
         currentIndex: Int,
         targetStart: Int,
@@ -489,15 +481,11 @@ class AuralisPlaybackEngine(
                 playerListMutation = false
             }
             updateCurrentFromPlayer()
-            // updateCurrentFromPlayer should resolve to currentIndex after prefix insertion; keep the
-            // logical selection authoritative even on OEM Media3 implementations that defer index
-            // adjustment until the next callback.
             currentLogical = currentIndex
             publishAll()
         }
     }
 
-    /** Background window entries may keep an unresolved placeholder; active/resumed entries may not. */
     private suspend fun buildMediaItems(start: Int, end: Int): List<MediaItem>? {
         if (logicalQueue.isEmpty()) return null
         val items = ArrayList<MediaItem>(end - start)
@@ -612,7 +600,11 @@ class AuralisPlaybackEngine(
         }
         val safeStart = windowStart.coerceIn(0, logicalQueue.size)
         val safeEnd = windowEnd.coerceIn(safeStart, logicalQueue.size)
-        val entries = logicalQueue.subList(safeStart, safeEnd)
+        // QueueSnapshot is a value object. Never expose ArrayList.SubList here: that object keeps a
+        // live modCount link to logicalQueue and throws ConcurrentModificationException as soon as
+        // playback hydration/navigation mutates the backing queue while an older UI snapshot is
+        // still being iterated.
+        val entries = logicalQueue.subList(safeStart, safeEnd).toList()
         val playerIndex = player.currentMediaItemIndex
         val logicalWindowIndex = (currentLogical - safeStart).takeIf { it in entries.indices }
         val windowIndex = playerIndex.takeIf { it in entries.indices } ?: logicalWindowIndex
