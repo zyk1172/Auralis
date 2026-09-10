@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.nativeKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.node.DelegatableNode
@@ -94,8 +95,6 @@ private class TvIndicationNode(
     override fun ContentDrawScope.draw() {
         val radius = 14.dp.toPx()
         if (focused) {
-            // A very light full-card wash makes focus readable even when a card's artwork has a
-            // high-contrast edge; the ring is then drawn at the actual clickable bounds.
             drawRoundRect(
                 color = focusColor.copy(alpha = 0.08f),
                 cornerRadius = CornerRadius(radius, radius),
@@ -129,10 +128,9 @@ private class TvIndicationNode(
 }
 
 /**
- * Installs the shared focus indication and TV remote sound feedback.
- * SoundEffectConstants route through the TV system sound-effects channel and respect the device's
- * own UI-sound policy/volume. The handler never consumes a key, so normal Compose focus movement
- * remains authoritative.
+ * Installs the shared focus indication and TV remote sound feedback. SoundEffectConstants route
+ * through the TV system UI-sound channel and respect the device's own UI-sound policy/volume.
+ * The handler never consumes a key, so normal Compose focus movement remains authoritative.
  */
 @Composable
 fun ProvideTvIndication(content: @Composable () -> Unit) {
@@ -169,9 +167,8 @@ fun ProvideTvIndication(content: @Composable () -> Unit) {
 }
 
 /**
- * Visual-only TV focus effect. The focused target grows slightly; while D-pad OK is held it dips
- * inward instead of losing the selection marker. This prevents controls such as Next from looking
- * as if they disappeared immediately after activation.
+ * Visual-only TV focus effect. Focused targets grow slightly; while D-pad OK is held they dip
+ * inward instead of losing the marker, keeping the active target obvious after activation.
  */
 @Composable
 fun Modifier.tvFocusVisual(
@@ -212,7 +209,7 @@ fun Modifier.tvFocusVisual(
         )
 }
 
-/** D-pad click target. Focus and click share one interaction source when one is supplied. */
+/** D-pad click target. Focus and click share one interaction source when supplied. */
 @Composable
 fun Modifier.tvClick(
     onClick: () -> Unit,
