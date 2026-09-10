@@ -6,7 +6,7 @@
 ## 1. 代码与产物
 
 - 验证提交：`d120d57`（`fix(android): align mobile dock and playback lifecycle with iOS (#45)`）。
-- 验证分支：`codex/android-latest-apk-test-20260910`，与 `origin/main` 同提交。
+- 验证分支：`codex/android-latest-apk-test-20260910`；执行验证时该分支 HEAD 为 `d120d57`，与当时的 `origin/main` 一致，随后仅新增本验证记录。
 - 构建环境：仓库 Gradle Wrapper、JDK 17、Android API 34。
 - 测试设备：已有 `Auralis_API_34` 模拟器；整个验证过程只运行这一台模拟器。
 - 构建命令：
@@ -48,7 +48,7 @@
 
 ## 3. TV 验证
 
-TV 端使用与 Mobile 相同的音乐服务器配置，不创建独立的音乐服务器。
+TV 端独立配置了与 Mobile 相同的音乐服务器端点/账户，用于 connected-playback 验证；Mobile 与 TV 的本地配置状态仍彼此独立。
 
 - TV APK 安装、启动和返回操作正常。
 - TV 端添加同一服务器配置后，首页出现服务器音乐库数据、统计信息和专辑封面。
