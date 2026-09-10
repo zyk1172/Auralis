@@ -16,6 +16,7 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.session.MediaSession
 import com.auralis.core.domain.DownloadRepository
 import com.auralis.core.domain.PlayMode
 import com.auralis.core.domain.PlaybackError
@@ -45,28 +46,22 @@ import okhttp3.OkHttpClient
 /**
  * Media3 播放引擎。
  *
- * 承担 Apple `AVFoundationPlaybackEngine` + 队列编排的职责：
- * - **单一 ExoPlayer 实例**，长期复用，绝不每切歌/重建 new 一个；
- * - **逻辑队列 + 窗口化呈现**（见 [QueueWindowing]），MediaItem.mediaId = QueueEntryId；
- * - 播放状态与队列状态**分流**：position 高频变化不影响队列 UI；
- * - stall 15s 超时、流失败 ≤2 次重试（重新 resolve URL）、失败后 canGoNext 自动下一首；
- * - 播放模式一个按钮循环（顺序→随机→列表循环→单曲循环）；
- * - 速度 0.5–2.0 跨切歌/暂停保持；ReplayGain 作用于 player volume，不覆盖用户音量偏好；
- * - 锁屏/后台：由 [AuralisPlaybackService]（MediaSessionService）持有本引擎，
- *   进程活着音乐就不中断（Activity 重建/页面切换不受影响）。
+ * - 单一 ExoPlayer 实例，服务生命周期内长期复用；
+ * - 逻辑队列 + 有界 Media3 窗口，MediaItem.mediaId 始终是 occurrence QueueEntryId；
+ * - position 高频流与低频队列/状态流分离；
+ * - 首曲解析失败直接进入可诊断 Failed，而不是交给一个无 URI MediaItem 后再泛化失败；
+ * - 支持从持久化的有界 occurrence 上下文恢复逻辑队列与 Media3 播放列表。
  */
 @OptIn(UnstableApi::class)
 class AuralisPlaybackEngine(
     context: Context,
     private val resolver: PlaybackSourceResolver,
     okHttpClient: OkHttpClient = defaultOkHttpClient(),
-    /** 播放历史/scrobble 下沉（core:data 实现）；null 表示不记录。 */
     private val historySink: PlaybackHistorySink? = null,
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    // ------------------------------------------------------------ 播放器本体
     val player: ExoPlayer = run {
         val okHttpDataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
         val dataSourceFactory = DefaultDataSource.Factory(appContext, okHttpDataSourceFactory)
@@ -81,21 +76,14 @@ class AuralisPlaybackEngine(
             .build()
     }
 
-    // ------------------------------------------------------------- 双态分流
     private val playbackState = MutableStateFlow(PlaybackSnapshot.Empty)
     private val queueState = MutableStateFlow(QueueSnapshot.Empty)
-
     val playback: StateFlow<PlaybackSnapshot> = playbackState.asStateFlow()
     val queue: StateFlow<QueueSnapshot> = queueState.asStateFlow()
 
-    // ------------------------------------------------------- 位置节拍（S5）
     private val positionTicker = MutableStateFlow(0L)
-
-    /** 约 250ms 一拍的**真实**播放位置（进度条拖动/歌词高亮用）。
-     * 快照只在播放器事件时发布，长时播放时位置会“静止”，UI 进度与同步歌词不能等事件。 */
     val position: StateFlow<Long> = positionTicker.asStateFlow()
 
-    // -------------------------------------------------------------- 逻辑队列
     private val logicalQueue = ArrayList<QueueEntry>()
     private var windowStart = 0
     private var windowEnd = 0
@@ -106,38 +94,26 @@ class AuralisPlaybackEngine(
     private var playbackSpeed = 1f
     private var replayGain: ReplayGainSettings = ReplayGainSettings()
     private val retryAttempts = HashMap<String, Int>()
-
     private var stallTimeoutJob: Job? = null
-    private var pendingHistory = HashMap<String, Boolean>()
 
-    /** 已通知过“开始播放”的 occurrence（去重）。 */
     private var activatedEntryId: QueueEntryId? = null
-    /** 已通知过“自然播完”的 occurrence（去重，防重复 scrobble/计数）。 */
     private val completedOccurrences = HashSet<String>()
-    /** 真实解析来源：globalTrackId → 是否本地文件（P0-9：不再恒定 false）。 */
     private val localSourceKeys = HashMap<String, Boolean>()
-
-    private val queueMutating = false
 
     init {
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 when (state) {
-                    Player.STATE_BUFFERING -> {
-                        if (player.playWhenReady) enterBuffering()
-                    }
-
+                    Player.STATE_BUFFERING -> if (player.playWhenReady) enterBuffering()
                     Player.STATE_READY -> {
                         stallTimeoutJob?.cancel()
                         publishPlaybackState()
                     }
-
                     Player.STATE_ENDED -> {
                         stallTimeoutJob?.cancel()
                         notifyCompleted()
                         handleWindowExhausted()
                     }
-
                     else -> publishPlaybackState()
                 }
             }
@@ -168,7 +144,6 @@ class AuralisPlaybackEngine(
             }
         })
 
-        // S5：位置节拍（250ms）。值与上次相同不发布，避免无谓重组。
         scope.launch {
             while (isActive) {
                 val pos = player.currentPosition.coerceAtLeast(0)
@@ -178,9 +153,6 @@ class AuralisPlaybackEngine(
         }
     }
 
-    // --------------------------------------------------------------- 公开命令
-
-    /** 播放一组队列（从 [startLogicalIndex] 开始）。occurrence UUID 全部保留。 */
     suspend fun playQueue(entries: List<QueueEntry>, startLogicalIndex: Int = 0, startAtMs: Long = 0) {
         if (entries.isEmpty()) return
         logicalQueue.clear()
@@ -192,7 +164,67 @@ class AuralisPlaybackEngine(
         awaitPlayAt(logicalIndex = currentLogical, startAtMs = startAtMs, seekMode = true)
     }
 
-    /** 点击队列中某个 occurrence（按 entry id）播放。 */
+    /**
+     * Rebuilds the engine-side occurrence model before MediaSession applies a playback-resumption
+     * playlist. Neighbours that can no longer resolve are dropped; the current occurrence is
+     * mandatory. This prevents an externally restored Media3 playlist from existing without a
+     * corresponding Auralis logical queue.
+     */
+    internal suspend fun preparePlaybackResumption(
+        snapshot: PersistedPlaybackSession,
+    ): MediaSession.MediaItemsWithStartPosition? {
+        if (snapshot.entries.isEmpty() || snapshot.currentIndex !in snapshot.entries.indices) return null
+
+        val resolvedEntries = ArrayList<QueueEntry>(snapshot.entries.size)
+        val resolvedItems = ArrayList<MediaItem>(snapshot.entries.size)
+        var resolvedCurrent = -1
+
+        snapshot.entries.forEachIndexed { index, persisted ->
+            val entry = persisted.toQueueEntry()
+            val item = buildMediaItem(entry, requireUri = true)
+            if (item == null) {
+                if (index == snapshot.currentIndex) return null
+                return@forEachIndexed
+            }
+            if (index == snapshot.currentIndex) resolvedCurrent = resolvedItems.size
+            resolvedEntries.add(entry)
+            resolvedItems.add(item)
+        }
+        if (resolvedCurrent !in resolvedItems.indices) return null
+
+        logicalQueue.clear()
+        logicalQueue.addAll(resolvedEntries)
+        currentLogical = resolvedCurrent
+        windowStart = 0
+        windowEnd = logicalQueue.size
+        playMode = snapshot.playMode
+        playbackSpeed = snapshot.speed.coerceIn(0.5f, 2.0f)
+        retryAttempts.clear()
+        applyPlayModeToPlayer()
+        player.setPlaybackParameters(player.playbackParameters.withSpeed(playbackSpeed))
+        positionTicker.value = snapshot.positionMs.coerceAtLeast(0L)
+
+        val currentEntry = logicalQueue[currentLogical]
+        playbackState.value = PlaybackSnapshot(
+            state = PlaybackState.Paused,
+            entry = currentEntry,
+            track = currentEntry.track,
+            positionMs = snapshot.positionMs.coerceAtLeast(0L),
+            durationMs = (currentEntry.track.durationSeconds * 1000.0).toLong().coerceAtLeast(0L),
+            speed = playbackSpeed,
+            playMode = playMode,
+            volume = userVolume,
+            isLocalSource = localSourceKeys[currentEntry.track.globalId.serialized] == true,
+        )
+        publishQueueState()
+
+        return MediaSession.MediaItemsWithStartPosition(
+            resolvedItems,
+            resolvedCurrent,
+            snapshot.positionMs.coerceAtLeast(0L),
+        )
+    }
+
     suspend fun playOccurrence(entryId: QueueEntryId) {
         val index = logicalIndexOf(entryId) ?: return
         currentLogical = index
@@ -210,7 +242,7 @@ class AuralisPlaybackEngine(
             player.pause()
         } else {
             when (playbackState.value.state) {
-                PlaybackState.Failed -> scope.launch { retryPlayback() }
+                is PlaybackState.Failed -> scope.launch { retryPlayback() }
                 PlaybackState.Idle -> Unit
                 else -> player.play()
             }
@@ -249,7 +281,6 @@ class AuralisPlaybackEngine(
         }
     }
 
-    /** 播放模式按钮循环：顺序 → 随机 → 列表循环 → 单曲循环 → 顺序。 */
     fun cyclePlayMode() {
         playMode = playMode.next()
         applyPlayModeToPlayer()
@@ -266,11 +297,13 @@ class AuralisPlaybackEngine(
     fun setSpeed(speed: Float) {
         playbackSpeed = speed.coerceIn(0.5f, 2.0f)
         player.setPlaybackParameters(player.playbackParameters.withSpeed(playbackSpeed))
+        publishPlaybackState()
     }
 
     fun setVolume(volume: Float) {
         userVolume = volume.coerceIn(0f, 1f)
         applyReplayGainVolume()
+        publishPlaybackState()
     }
 
     fun configureReplayGain(settings: ReplayGainSettings) {
@@ -278,7 +311,6 @@ class AuralisPlaybackEngine(
         applyReplayGainVolume()
     }
 
-    /** 删除队列 occurrence；删除当前项后自动续播。 */
     fun removeOccurrence(entryId: QueueEntryId) {
         val index = logicalIndexOf(entryId) ?: return
         val removedWasCurrent = index == currentLogical
@@ -313,32 +345,19 @@ class AuralisPlaybackEngine(
         refreshWindowPreservingPosition()
     }
 
-    /**
-     * 下一首播放（对齐 Swift `playNext(tracks:)`）：把 [entries] 按序插到当前项之后，
-     * 重复曲目创建独立 occurrence；尚未起播（currentLogical = -1）时插入队首。
-     * 不改变当前曲目与播放进度——插入点若落在已物化窗口内则重建窗口（保位置），
-     * 否则只更新逻辑队列与快照。
-     */
     fun insertNext(entries: List<QueueEntry>) {
         if (entries.isEmpty()) return
-        val insertAt = currentLogical + 1
+        val insertAt = (currentLogical + 1).coerceIn(0, logicalQueue.size)
         logicalQueue.addAll(insertAt, entries)
-        // addAll 的插入点 ≥ currentLogical+1，当前项下标不受影响。
-        if (player.mediaItemCount > 0) {
-            refreshWindowPreservingPosition()
-        } else {
-            publishAll()
-        }
+        if (player.mediaItemCount > 0) refreshWindowPreservingPosition() else publishAll()
     }
 
-    /** 加入队列（对齐 Swift `appendToQueue`）：追加到逻辑队列末尾，不自动起播、不打断播放。 */
     fun appendToQueue(entries: List<QueueEntry>) {
         if (entries.isEmpty()) return
         logicalQueue.addAll(entries)
         publishAll()
     }
 
-    /** 清空队列并停止。 */
     fun clearQueue() {
         logicalQueue.clear()
         player.stop()
@@ -357,8 +376,6 @@ class AuralisPlaybackEngine(
         scope.cancel()
     }
 
-    // ------------------------------------------------------------ 内部实现
-
     private fun applyPlayModeToPlayer() {
         player.repeatMode = when (playMode) {
             PlayMode.RepeatOne -> Player.REPEAT_MODE_ONE
@@ -366,16 +383,31 @@ class AuralisPlaybackEngine(
         }
     }
 
-    /**
-     * 起播（P0-9：音频首响优先）。
-     * 只 resolve **当前这一首** 就交给 Media3 prepare/play；窗口其余部分在后台补齐，
-     * 绝不先给 256 首逐首 resolve 认证 URL 再开始第一首。
-     */
     private suspend fun awaitPlayAt(logicalIndex: Int, startAtMs: Long, seekMode: Boolean) {
         val window = QueueWindowing.initialWindow(logicalQueue.size, logicalIndex)
         windowStart = window.first
         windowEnd = window.last + 1
-        val currentItem = buildMediaItemAt(logicalIndex) ?: return
+        val entry = logicalQueue.getOrNull(logicalIndex) ?: return
+        val currentItem = buildMediaItem(entry, requireUri = true)
+        if (currentItem == null) {
+            currentLogical = logicalIndex
+            player.stop()
+            player.clearMediaItems()
+            positionTicker.value = 0L
+            playbackState.value = PlaybackSnapshot(
+                state = PlaybackState.Failed(PlaybackError.EngineFailure("无法解析播放地址")),
+                entry = entry,
+                track = entry.track,
+                positionMs = 0L,
+                durationMs = (entry.track.durationSeconds * 1000.0).toLong().coerceAtLeast(0L),
+                speed = playbackSpeed,
+                playMode = playMode,
+                volume = userVolume,
+                isLocalSource = false,
+            )
+            publishQueueState()
+            return
+        }
         player.setMediaItems(listOf(currentItem), 0, startAtMs)
         player.prepare()
         player.play()
@@ -383,12 +415,8 @@ class AuralisPlaybackEngine(
         currentLogical = logicalIndex
         notifyActivated()
         publishAll()
-        // 后台补齐窗口：先插当前之前，再追加之后（保持 current 位置 = index-windowStart）。
         scope.launch { fillWindowAround(logicalIndex) }
     }
-
-    private suspend fun buildMediaItemAt(index: Int): MediaItem? =
-        buildMediaItems(index, index + 1)?.firstOrNull()
 
     private suspend fun fillWindowAround(currentIndex: Int) {
         val before = buildMediaItems(windowStart, currentIndex).orEmpty()
@@ -405,60 +433,57 @@ class AuralisPlaybackEngine(
         }
     }
 
-    /** 生成窗口 MediaItems；任何一条无法 resolve 会被替换为占位（防止窗口整体失败）。 */
+    /** Background window entries may keep an unresolved placeholder; active/resumed entries may not. */
     private suspend fun buildMediaItems(start: Int, end: Int): List<MediaItem>? {
         if (logicalQueue.isEmpty()) return null
         val items = ArrayList<MediaItem>(end - start)
         for (i in start until end) {
             val entry = logicalQueue.getOrNull(i) ?: continue
-            val resolved = withContext(Dispatchers.IO) {
-                runCatching { resolver.resolve(entry.track) }.getOrNull()
-            }
-            val uri = when (resolved) {
-                is com.auralis.core.domain.ResolvedSource.Local -> Uri.fromFile(File(resolved.path))
-                is com.auralis.core.domain.ResolvedSource.Remote -> Uri.parse(resolved.url)
-                else -> null
-            }
-            // 真实解析结果：本地/远端。以后歌曲信息页的“播放来源”取自这里。
-            localSourceKeys[entry.track.globalId.serialized] =
-                resolved is com.auralis.core.domain.ResolvedSource.Local
-            val builder = MediaItem.Builder()
-                .setMediaId(entry.id.value)
-                .setMediaMetadata(
-                    MediaMetadata.Builder()
-                        .setTitle(entry.track.title)
-                        .setArtist(entry.track.artistName)
-                        .setAlbumTitle(entry.track.albumTitle)
-                        .setIsBrowsable(false)
-                        .setIsPlayable(true)
-                        .setExtras(android.os.Bundle().apply {
-                            putString("globalTrackId", entry.track.globalId.serialized)
-                            putString("serverId", entry.track.serverId.value)
-                            putString("remoteTrackId", entry.track.id.value)
-                        })
-                        .build(),
-                )
-            if (uri != null) builder.setUri(uri)
-            items.add(builder.build())
+            buildMediaItem(entry, requireUri = false)?.let(items::add)
         }
         return items
+    }
+
+    private suspend fun buildMediaItem(entry: QueueEntry, requireUri: Boolean): MediaItem? {
+        val resolved = withContext(Dispatchers.IO) {
+            runCatching { resolver.resolve(entry.track) }.getOrNull()
+        }
+        val uri = when (resolved) {
+            is com.auralis.core.domain.ResolvedSource.Local -> Uri.fromFile(File(resolved.path))
+            is com.auralis.core.domain.ResolvedSource.Remote -> Uri.parse(resolved.url)
+            else -> null
+        }
+        localSourceKeys[entry.track.globalId.serialized] =
+            resolved is com.auralis.core.domain.ResolvedSource.Local
+        if (requireUri && uri == null) return null
+
+        val builder = MediaItem.Builder()
+            .setMediaId(entry.id.value)
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle(entry.track.title)
+                    .setArtist(entry.track.artistName)
+                    .setAlbumTitle(entry.track.albumTitle)
+                    .setIsBrowsable(false)
+                    .setIsPlayable(true)
+                    .setExtras(android.os.Bundle().apply {
+                        putString("globalTrackId", entry.track.globalId.serialized)
+                        putString("serverId", entry.track.serverId.value)
+                        putString("remoteTrackId", entry.track.id.value)
+                    })
+                    .build(),
+            )
+        if (uri != null) builder.setUri(uri)
+        return builder.build()
     }
 
     private fun updateCurrentFromPlayer() {
         val indexInWindow = player.currentMediaItemIndex
         if (indexInWindow in 0 until player.mediaItemCount && indexInWindow >= 0) {
-            val mediaItem = player.getMediaItemAt(indexInWindow)
-            val entryId = QueueEntryId(mediaItem.mediaId)
-            val windowIndex = (windowStart + indexInWindow)
-            if (windowIndex - windowStart == indexInWindow) {
-                currentLogical = windowStart + indexInWindow
-            }
-            @Suppress("UNUSED_VARIABLE")
-            val unused = entryId
+            currentLogical = windowStart + indexInWindow
         }
     }
 
-    /** 通知历史协调器：新 occurrence 开始播放（同 occurrence 只通知一次）。 */
     private fun notifyActivated() {
         val entry = currentQueueEntry() ?: return
         if (activatedEntryId == entry.id) return
@@ -467,7 +492,6 @@ class AuralisPlaybackEngine(
         scope.launch { runCatching { sink.onOccurrenceActivated(entry, entry.track) } }
     }
 
-    /** 通知历史协调器：occurrence 自然播完（同 occurrence 只通知一次）。 */
     private fun notifyCompleted() {
         val entry = currentQueueEntry() ?: return
         if (!completedOccurrences.add(entry.id.value)) return
@@ -484,12 +508,11 @@ class AuralisPlaybackEngine(
     }
 
     private fun publishPlaybackState() {
-        val current = playbackState.value
         val mediaItemIndex = player.currentMediaItemIndex
         val entry = if (mediaItemIndex in 0 until player.mediaItemCount) {
             logicalQueue.getOrNull(windowStart + mediaItemIndex)
         } else {
-            null
+            logicalQueue.getOrNull(currentLogical)
         }
         val state = when {
             player.playerError != null -> PlaybackState.Failed(PlaybackError.EngineFailure("播放中途失败"))
@@ -513,75 +536,64 @@ class AuralisPlaybackEngine(
         )
     }
 
-    /** 当前 occurrence 是否真的在用本地文件播放（来自 resolver 的真实解析结果）。 */
     private fun isDownloaded(track: Track): Boolean =
         localSourceKeys[track.globalId.serialized] == true
 
     private fun publishQueueState() {
-        val windowIndex = player.currentMediaItemIndex
-        val entries = logicalQueue.subList(windowStart, minOf(windowEnd, logicalQueue.size))
+        if (logicalQueue.isEmpty()) {
+            queueState.value = QueueSnapshot.Empty
+            return
+        }
+        val safeStart = windowStart.coerceIn(0, logicalQueue.size)
+        val safeEnd = windowEnd.coerceIn(safeStart, logicalQueue.size)
+        val entries = logicalQueue.subList(safeStart, safeEnd)
+        val playerIndex = player.currentMediaItemIndex
+        val logicalWindowIndex = (currentLogical - safeStart).takeIf { it in entries.indices }
+        val windowIndex = playerIndex.takeIf { it in entries.indices } ?: logicalWindowIndex
         queueState.value = QueueSnapshot(
             entries = entries,
-            windowStartLogicalIndex = windowStart,
-            currentEntryId = entries.getOrNull(windowIndex)?.id,
-            currentWindowIndex = if (windowIndex in entries.indices) windowIndex else null,
+            windowStartLogicalIndex = safeStart,
+            currentEntryId = windowIndex?.let { entries.getOrNull(it)?.id },
+            currentWindowIndex = windowIndex,
             currentLogicalIndex = if (currentLogical in logicalQueue.indices) currentLogical else null,
             totalCount = logicalQueue.size,
-            hasMoreBehindWindow = windowEnd < logicalQueue.size,
+            hasMoreBehindWindow = safeEnd < logicalQueue.size,
         )
     }
 
-    // ------------------------------------------------------------ 播完/失败
-
     private fun handleWindowExhausted() {
-        // 单曲循环交给 ExoPlayer repeatMode=ONE，不会走到这里
-        val lastPlayedLogical = windowStart + (player.mediaItemCount - 1)
         val atLogicalEnd = windowEnd >= logicalQueue.size
         if (!atLogicalEnd && logicalQueue.size > QueueWindowing.LARGE_CONTEXT_THRESHOLD) {
-            // 窗口尚未到底：续 192 并继续
             scope.launch {
                 val newEnd = minOf(logicalQueue.size, windowEnd + QueueWindowing.LARGE_WINDOW_REFILL_BATCH)
                 val extra = buildMediaItems(windowEnd, newEnd) ?: return@launch
                 player.addMediaItems(extra)
                 windowEnd = newEnd
-                if (player.playbackState == Player.STATE_ENDED) {
-                    player.prepare()
-                }
+                if (player.playbackState == Player.STATE_ENDED) player.prepare()
                 player.seekToNextMediaItem()
                 player.play()
                 publishAll()
             }
             return
         }
-        // 逻辑队尾
         when (playMode) {
-            PlayMode.RepeatAll -> {
-                val target = 0
-                scope.launch { awaitPlayAt(target, 0L, seekMode = true) }
-            }
-
-            PlayMode.Shuffle -> {
-                scope.launch { advanceUser(force = true) }
-            }
-
+            PlayMode.RepeatAll -> scope.launch { awaitPlayAt(0, 0L, seekMode = true) }
+            PlayMode.Shuffle -> scope.launch { advanceUser(force = true) }
             PlayMode.RepeatOne -> {
                 player.seekTo(0)
                 player.play()
             }
-
             PlayMode.Sequential -> {
-                // 停在队尾（对齐 pauseAtQueueEnd）
                 player.pause()
                 publishPlaybackState()
             }
         }
     }
 
-    /** 用户主动 next / shuffle / 失败自动下一首（目标决策见 [PlaybackLogic.nextTarget]）。 */
     private suspend fun advanceUser(force: Boolean = false) {
         val total = logicalQueue.size
         if (total == 0) return
-        val target = PlaybackLogic.nextTarget(playMode, currentLogical ?: -1, total, force) ?: return
+        val target = PlaybackLogic.nextTarget(playMode, currentLogical, total, force) ?: return
         if (target == currentLogical && playMode == PlayMode.RepeatOne) {
             player.seekTo(0)
             player.play()
@@ -595,12 +607,10 @@ class AuralisPlaybackEngine(
     private suspend fun backUser() {
         val total = logicalQueue.size
         if (total == 0) return
-        val target = PlaybackLogic.previousTarget(playMode, currentLogical ?: 0, total) ?: return
+        val target = PlaybackLogic.previousTarget(playMode, currentLogical, total) ?: return
         currentLogical = target
         awaitPlayAt(target, 0L, seekMode = true)
     }
-
-    // ------------------------------------------------------------- 失败恢复
 
     private fun enterBuffering() {
         stallTimeoutJob?.cancel()
@@ -613,7 +623,6 @@ class AuralisPlaybackEngine(
         publishPlaybackState()
     }
 
-    /** 流失败恢复：重新 resolve URL，重试预算 2 次/曲；耗尽后 canGoNext 自动下一首。 */
     private fun handleStreamFailure() {
         val track = playbackState.value.track ?: return
         val key = track.globalId.serialized
@@ -652,7 +661,6 @@ class AuralisPlaybackEngine(
         }
     }
 
-    /** 用户手动重试。 */
     private suspend fun retryPlayback() {
         val track = playbackState.value.track ?: return
         playbackState.value = playbackState.value.copy(state = PlaybackState.Buffering)
@@ -673,16 +681,13 @@ class AuralisPlaybackEngine(
         player.play()
     }
 
-    // ------------------------------------------------------------------ 工具
-
     private fun logicalIndexOf(entryId: QueueEntryId): Int? =
         logicalQueue.indexOfFirst { it.id == entryId }.takeIf { it >= 0 }
 
-    /** 队列编辑后保持当前曲目与进度：重建窗口并把播放器移到同一 logical index。 */
     private fun refreshWindowPreservingPosition() {
         scope.launch {
             if (logicalQueue.isEmpty()) return@launch
-            val logical = (currentLogical ?: 0).coerceIn(0, logicalQueue.size - 1)
+            val logical = currentLogical.coerceIn(0, logicalQueue.size - 1)
             currentLogical = logical
             val position = player.currentPosition.coerceAtLeast(0)
             val window = QueueWindowing.initialWindow(logicalQueue.size, logical)
@@ -701,7 +706,6 @@ class AuralisPlaybackEngine(
         }
     }
 
-    /** 仅替换当前窗口内当前曲目的 URI（失败重试用），保留窗口上下文与进度。 */
     private fun replaceCurrentWindowItem(uri: Uri) {
         val index = player.currentMediaItemIndex.coerceAtLeast(0)
         val count = player.mediaItemCount

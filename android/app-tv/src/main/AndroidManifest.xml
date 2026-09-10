@@ -9,10 +9,10 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
-    <!-- TV 形态：Leanback launcher 已在 activity；触屏非必需（纯 D-pad 可操作）。 -->
+    <!-- app-tv is a dedicated Leanback APK, not the shared mobile artifact. -->
     <uses-feature
         android:name="android.software.leanback"
-        android:required="false" />
+        android:required="true" />
     <uses-feature
         android:name="android.hardware.touchscreen"
         android:required="false" />
@@ -55,7 +55,6 @@
             </intent-filter>
         </service>
 
-        <!-- TV 复用移动端下载 UI，因此必须有同一后台下载服务与 dataSync FGS 能力。 -->
         <service
             android:name="com.auralis.core.offline.DownloadService"
             android:exported="false"

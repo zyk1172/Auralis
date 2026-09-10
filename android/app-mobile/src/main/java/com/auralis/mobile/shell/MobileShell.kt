@@ -28,12 +28,14 @@ import com.auralis.core.designsystem.AuralisChrome
 import com.auralis.core.designsystem.AuralisMotion
 import com.auralis.core.designsystem.LocalAuralisTheme
 import com.auralis.core.designsystem.LocalReduceMotion
+import com.auralis.core.designsystem.R as AuralisR
 import com.auralis.core.domain.BrowseDestination
 import com.auralis.core.domain.PlaybackState
 import com.auralis.core.domain.QueueEntry
 import com.auralis.core.domain.RecommendationIndexUiState
 import com.auralis.core.domain.Track
 import com.auralis.core.playback.LocalPlaybackHost
+import com.auralis.core.playback.PlaybackCapabilities
 import com.auralis.core.playback.PlaybackController
 import com.auralis.core.playback.PlaybackSnapshot
 import com.auralis.core.playback.QueueSnapshot
@@ -48,7 +50,6 @@ import com.auralis.feature.player.NowPlayingScreen
 import com.auralis.feature.player.PlayerTrackAction
 import com.auralis.feature.search.SearchScreen
 import kotlinx.coroutines.launch
-import com.auralis.core.designsystem.R as AuralisR
 
 /**
  * Mobile shell aligned to Apple `IOSMusicShell`.
@@ -97,7 +98,6 @@ fun MobileShell(
     val canCompactDock = section == AppSection.Assistant || hasPlaybackAccessory
 
     LaunchedEffect(section) {
-        // Apple resets the shared HomeChromeState whenever the top-level section changes.
         dockCompactTarget = false
     }
 
@@ -142,6 +142,15 @@ fun MobileShell(
             onTerminalRequest = ::setDockCompact,
         )
 
+    fun notifyPlaybackFailure(throwable: Throwable) {
+        val detail = throwable.message?.takeIf { it.isNotBlank() } ?: throwable::class.java.simpleName
+        android.widget.Toast.makeText(
+            context,
+            context.getString(AuralisR.string.action_failed, detail),
+            android.widget.Toast.LENGTH_SHORT,
+        ).show()
+    }
+
     suspend fun awaitControllerOrNotify(): PlaybackController? =
         runCatching { awaitPlaybackController(startService = { graph.startPlaybackService() }) }
             .onFailure {
@@ -159,21 +168,25 @@ fun MobileShell(
             val ready = awaitControllerOrNotify() ?: return@launch
             runCatching {
                 ready.playQueue(tracks.map { QueueEntry.of(it) }, startIndex.coerceIn(0, tracks.lastIndex))
-            }
+            }.onFailure(::notifyPlaybackFailure)
         }
     }
 
     fun playNextShelf(tracks: List<Track>) {
+        if (tracks.isEmpty()) return
         scope.launch {
             val ready = awaitControllerOrNotify() ?: return@launch
             runCatching { ready.insertNext(tracks.map { QueueEntry.of(it) }) }
+                .onFailure(::notifyPlaybackFailure)
         }
     }
 
     fun appendQueueShelf(tracks: List<Track>) {
+        if (tracks.isEmpty()) return
         scope.launch {
             val ready = awaitControllerOrNotify() ?: return@launch
             runCatching { ready.appendToQueue(tracks.map { QueueEntry.of(it) }) }
+                .onFailure(::notifyPlaybackFailure)
         }
     }
 
@@ -270,13 +283,14 @@ fun MobileShell(
             )
         }
 
-        val currentLogical = queue.currentLogicalIndex
+        val canGoPrevious = PlaybackCapabilities.canGoPrevious(playback, queue)
+        val canGoNext = PlaybackCapabilities.canGoNext(playback, queue)
         AppleBottomChrome(
             section = section,
             track = if (hasPlaybackAccessory) playback.track else null,
             playbackState = playback.state,
-            canGoPrevious = (currentLogical ?: 0) > 0,
-            canGoNext = queue.totalCount > (currentLogical ?: -1) + 1,
+            canGoPrevious = canGoPrevious,
+            canGoNext = canGoNext,
             collapseProgress = dockProgress,
             onCompactRequest = ::setDockCompact,
             onSelectSection = ::selectTopLevel,
