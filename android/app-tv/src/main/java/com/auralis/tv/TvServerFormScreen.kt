@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -39,24 +40,26 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.auralis.core.data.graph.AuralisGraph
-import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
 import com.auralis.core.designsystem.LocalReduceMotion
 import com.auralis.core.designsystem.R as AuralisR
@@ -68,9 +71,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 
 /**
- * TV-specific server editor. Material text fields are retained for IME compatibility, but focus is
- * rendered around the complete field bounds so a remote user can always see which value will be
- * edited before opening the on-screen keyboard.
+ * TV-specific server editor.
+ *
+ * Remote focus and text editing are separate states: moving onto a field only selects it; pressing
+ * OK enters edit mode and opens the IME. Back exits the IME first and restores focus to the same
+ * field. This mirrors native Android TV forms and prevents the keyboard from opening while users
+ * merely navigate through the page.
  */
 @Composable
 fun TvServerFormScreen(
@@ -83,7 +89,9 @@ fun TvServerFormScreen(
     val colors = LocalAuralisTheme.current.colors
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    val firstField = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val fieldFocus = remember { List(5) { FocusRequester() } }
+    var editingField by remember { mutableIntStateOf(-1) }
     val state = remember(graph, existing) {
         ServerFormState(
             context = context,
@@ -95,10 +103,23 @@ fun TvServerFormScreen(
         )
     }
 
-    BackHandler(enabled = !state.busy && !state.isTesting) { state.cancel() }
+    fun leaveEditing() {
+        val previous = editingField
+        if (previous < 0) return
+        editingField = -1
+        keyboard?.hide()
+        scope.launch {
+            yield()
+            runCatching { fieldFocus[previous].requestFocus() }
+        }
+    }
+
+    BackHandler(enabled = !state.busy && !state.isTesting) {
+        if (editingField >= 0) leaveEditing() else state.cancel()
+    }
     LaunchedEffect(Unit) {
         yield()
-        runCatching { firstField.requestFocus() }
+        runCatching { fieldFocus.first().requestFocus() }
     }
 
     Column(
@@ -115,7 +136,7 @@ fun TvServerFormScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(
-                onClick = { state.cancel() },
+                onClick = { if (editingField >= 0) leaveEditing() else state.cancel() },
                 enabled = !state.busy && !state.isTesting,
                 modifier = Modifier.tvFocusVisual(RoundedCornerShape(50)),
             ) {
@@ -149,7 +170,10 @@ fun TvServerFormScreen(
                     onValueChange = { state.displayName = it },
                     label = stringResource(ServerR.string.server_form_display_label),
                     enabled = !state.busy,
-                    modifier = Modifier.focusRequester(firstField),
+                    editing = editingField == 0,
+                    containerFocus = fieldFocus[0],
+                    onBeginEditing = { editingField = 0 },
+                    onFinishEditing = ::leaveEditing,
                 )
                 TvServerField(
                     value = state.serverUrl,
@@ -158,6 +182,10 @@ fun TvServerFormScreen(
                     placeholder = "http://192.168.1.10:4533",
                     keyboardType = KeyboardType.Uri,
                     enabled = !state.busy,
+                    editing = editingField == 1,
+                    containerFocus = fieldFocus[1],
+                    onBeginEditing = { editingField = 1 },
+                    onFinishEditing = ::leaveEditing,
                 )
                 TvServerField(
                     value = state.username,
@@ -165,6 +193,10 @@ fun TvServerFormScreen(
                     label = stringResource(ServerR.string.server_form_username_label),
                     keyboardType = KeyboardType.Ascii,
                     enabled = !state.busy,
+                    editing = editingField == 2,
+                    containerFocus = fieldFocus[2],
+                    onBeginEditing = { editingField = 2 },
+                    onFinishEditing = ::leaveEditing,
                 )
                 TvServerField(
                     value = state.password,
@@ -176,6 +208,10 @@ fun TvServerFormScreen(
                     keyboardType = KeyboardType.Password,
                     password = true,
                     enabled = !state.busy,
+                    editing = editingField == 3,
+                    containerFocus = fieldFocus[3],
+                    onBeginEditing = { editingField = 3 },
+                    onFinishEditing = ::leaveEditing,
                 )
                 TvServerField(
                     value = state.externalUrl,
@@ -184,6 +220,10 @@ fun TvServerFormScreen(
                     placeholder = "https://music.example.com",
                     keyboardType = KeyboardType.Uri,
                     enabled = !state.busy,
+                    editing = editingField == 4,
+                    containerFocus = fieldFocus[4],
+                    onBeginEditing = { editingField = 4 },
+                    onFinishEditing = ::leaveEditing,
                 )
 
                 Text(
@@ -191,9 +231,7 @@ fun TvServerFormScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     color = colors.secondaryText,
                 )
-                state.localError?.let { message ->
-                    TvServerStatus(message = message, error = true)
-                }
+                state.localError?.let { message -> TvServerStatus(message = message, error = true) }
                 if (state.busy && state.busyLabel != null) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = colors.accent)
@@ -226,7 +264,7 @@ fun TvServerFormScreen(
         ) {
             OutlinedButton(
                 onClick = { state.runTest() },
-                enabled = !state.busy && !state.isTesting,
+                enabled = !state.busy && !state.isTesting && editingField < 0,
                 modifier = Modifier.tvFocusVisual(RoundedCornerShape(22.dp)),
             ) {
                 if (state.isTesting) {
@@ -240,7 +278,7 @@ fun TvServerFormScreen(
             Spacer(Modifier.weight(1f))
             Button(
                 onClick = { state.save() },
-                enabled = state.canSave(),
+                enabled = state.canSave() && editingField < 0,
                 modifier = Modifier.tvFocusVisual(RoundedCornerShape(22.dp)),
             ) {
                 Text(stringResource(if (state.busy) ServerR.string.server_saving else AuralisR.string.save))
@@ -254,7 +292,10 @@ private fun TvServerField(
     value: String,
     onValueChange: (String) -> Unit,
     label: String,
-    modifier: Modifier = Modifier,
+    editing: Boolean,
+    containerFocus: FocusRequester,
+    onBeginEditing: () -> Unit,
+    onFinishEditing: () -> Unit,
     placeholder: String? = null,
     keyboardType: KeyboardType = KeyboardType.Text,
     password: Boolean = false,
@@ -262,45 +303,64 @@ private fun TvServerField(
 ) {
     val colors = LocalAuralisTheme.current.colors
     val reduceMotion = LocalReduceMotion.current
-    var focused by remember { mutableStateOf(false) }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val inputFocus = remember { FocusRequester() }
     val scale by animateFloatAsState(
-        targetValue = if (focused) 1.015f else 1f,
+        targetValue = if (editing) 1.018f else 1f,
         animationSpec = if (reduceMotion) androidx.compose.animation.core.snap() else androidx.compose.animation.core.tween(120),
-        label = "tv-server-field-focus",
+        label = "tv-server-field-edit",
     )
     val shape = RoundedCornerShape(18.dp)
 
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        label = { Text(label) },
-        placeholder = placeholder?.let { text -> { Text(text) } },
-        singleLine = true,
-        enabled = enabled,
-        visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
-        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = colors.accent,
-            focusedLabelColor = colors.accent,
-            cursorColor = colors.accent,
-            unfocusedBorderColor = colors.separator.copy(alpha = 0.85f),
-            focusedTextColor = colors.primaryText,
-            unfocusedTextColor = colors.primaryText,
-        ),
-        modifier = modifier
+    LaunchedEffect(editing) {
+        if (editing) {
+            yield()
+            if (runCatching { inputFocus.requestFocus() }.isSuccess) keyboard?.show()
+        }
+    }
+
+    Box(
+        modifier = Modifier
             .fillMaxWidth()
-            .height(74.dp)
-            .onFocusChanged { focused = it.isFocused }
+            .focusRequester(containerFocus)
+            .tvFocusableClick(shape = shape, enabled = enabled && !editing, onClick = onBeginEditing)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
             }
             .then(
-                if (focused) Modifier.border(3.dp, colors.accent.copy(alpha = 0.95f), shape)
+                if (editing) Modifier.border(3.dp, colors.accent, shape)
                 else Modifier,
             ),
-        shape = shape,
-    )
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text(label) },
+            placeholder = placeholder?.let { text -> { Text(text) } },
+            singleLine = true,
+            enabled = enabled,
+            readOnly = !editing,
+            visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
+            keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { onFinishEditing() }),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = colors.accent,
+                focusedLabelColor = colors.accent,
+                cursorColor = colors.accent,
+                unfocusedBorderColor = colors.separator.copy(alpha = 0.85f),
+                focusedTextColor = colors.primaryText,
+                unfocusedTextColor = colors.primaryText,
+                disabledTextColor = colors.primaryText.copy(alpha = 0.55f),
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(74.dp)
+                .focusRequester(inputFocus)
+                .focusProperties { canFocus = editing },
+            shape = shape,
+        )
+    }
 }
 
 @Composable
