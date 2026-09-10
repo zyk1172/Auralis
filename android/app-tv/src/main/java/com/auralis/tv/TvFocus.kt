@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.auralis.tv
 
-import android.view.KeyEvent as AndroidKeyEvent
 import android.view.SoundEffectConstants
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -35,8 +34,9 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.nativeKeyEvent
+import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.node.DelegatableNode
@@ -137,26 +137,35 @@ fun ProvideTvIndication(content: @Composable () -> Unit) {
     val colors = LocalAuralisTheme.current.colors
     val indication = remember(colors.accent) { TvIndication(colors.accent) }
     val view = LocalView.current
+    var soundKeyDown by remember { mutableStateOf<Key?>(null) }
 
     CompositionLocalProvider(LocalIndication provides indication) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .onPreviewKeyEvent { event ->
-                    if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0) {
-                        val effect = when (event.nativeKeyEvent.keyCode) {
-                            AndroidKeyEvent.KEYCODE_DPAD_LEFT -> SoundEffectConstants.NAVIGATION_LEFT
-                            AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> SoundEffectConstants.NAVIGATION_RIGHT
-                            AndroidKeyEvent.KEYCODE_DPAD_UP -> SoundEffectConstants.NAVIGATION_UP
-                            AndroidKeyEvent.KEYCODE_DPAD_DOWN -> SoundEffectConstants.NAVIGATION_DOWN
-                            AndroidKeyEvent.KEYCODE_DPAD_CENTER,
-                            AndroidKeyEvent.KEYCODE_ENTER,
-                            AndroidKeyEvent.KEYCODE_NUMPAD_ENTER,
-                            AndroidKeyEvent.KEYCODE_BUTTON_A,
-                            -> SoundEffectConstants.CLICK
-                            else -> null
+                    val key = event.key
+                    when (event.type) {
+                        KeyEventType.KeyDown -> {
+                            if (soundKeyDown != key) {
+                                soundKeyDown = key
+                                val effect = when (key) {
+                                    Key.DirectionLeft -> SoundEffectConstants.NAVIGATION_LEFT
+                                    Key.DirectionRight -> SoundEffectConstants.NAVIGATION_RIGHT
+                                    Key.DirectionUp -> SoundEffectConstants.NAVIGATION_UP
+                                    Key.DirectionDown -> SoundEffectConstants.NAVIGATION_DOWN
+                                    Key.DirectionCenter,
+                                    Key.Enter,
+                                    Key.NumPadEnter,
+                                    Key.ButtonA,
+                                    -> SoundEffectConstants.CLICK
+                                    else -> null
+                                }
+                                effect?.let(view::playSoundEffect)
+                            }
                         }
-                        effect?.let(view::playSoundEffect)
+
+                        KeyEventType.KeyUp -> if (soundKeyDown == key) soundKeyDown = null
                     }
                     false
                 },
