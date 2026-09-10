@@ -42,15 +42,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 
-/**
- * Media3 playback engine.
- *
- * The logical occurrence queue and the materialized Media3 list deliberately remain separate. A
- * requested track is installed first for low first-audio latency; neighbours are resolved later.
- * Crucially, [windowStart]/[windowEnd] always describe what Media3 actually contains at that moment,
- * not the desired prefetch range. That invariant prevents a temporary media index 0 from being
- * published as logical queue item 0 when the user actually selected item N.
- */
 @OptIn(UnstableApi::class)
 class AuralisPlaybackEngine(
     context: Context,
@@ -84,16 +75,10 @@ class AuralisPlaybackEngine(
     val position: StateFlow<Long> = positionTicker.asStateFlow()
 
     private val logicalQueue = ArrayList<QueueEntry>()
-
-    /** The range that is currently materialized inside [player], not a future prefetch target. */
     private var windowStart = 0
     private var windowEnd = 0
     private var currentLogical = -1
-
-    /** Invalidates slow background neighbour hydration after another user navigation wins. */
     private var windowGeneration = 0L
-
-    /** Suppresses transient Player callbacks while a Media3 list is being structurally rewritten. */
     private var playerListMutation = false
 
     private var playMode = PlayMode.Sequential
@@ -175,12 +160,6 @@ class AuralisPlaybackEngine(
         awaitPlayAt(logicalIndex = currentLogical, startAtMs = startAtMs, seekMode = true)
     }
 
-    /**
-     * Rebuilds the engine-side occurrence model before MediaSession applies a playback-resumption
-     * playlist. Neighbours that can no longer resolve are dropped; the current occurrence is
-     * mandatory. This prevents an externally restored Media3 playlist from existing without a
-     * corresponding Auralis logical queue.
-     */
     internal suspend fun preparePlaybackResumption(
         snapshot: PersistedPlaybackSession,
     ): MediaSession.MediaItemsWithStartPosition? {
@@ -371,6 +350,25 @@ class AuralisPlaybackEngine(
         publishAll()
     }
 
+    /** Mac `clearUpcoming`: keep the current occurrence and everything behind it, drop only future. */
+    fun clearUpcoming() {
+        if (currentLogical !in logicalQueue.indices || currentLogical >= logicalQueue.lastIndex) return
+        windowGeneration += 1
+        logicalQueue.subList(currentLogical + 1, logicalQueue.size).clear()
+
+        val playerIndex = player.currentMediaItemIndex
+        if (playerIndex in 0 until player.mediaItemCount && playerIndex + 1 < player.mediaItemCount) {
+            playerListMutation = true
+            try {
+                player.removeMediaItems(playerIndex + 1, player.mediaItemCount)
+            } finally {
+                playerListMutation = false
+            }
+        }
+        windowEnd = minOf(windowEnd, logicalQueue.size)
+        publishAll()
+    }
+
     fun clearQueue() {
         windowGeneration += 1
         logicalQueue.clear()
@@ -403,7 +401,6 @@ class AuralisPlaybackEngine(
         val targetWindow = QueueWindowing.initialWindow(logicalQueue.size, logicalIndex)
         val entry = logicalQueue.getOrNull(logicalIndex) ?: return
         val currentItem = buildMediaItem(entry, requireUri = true)
-
         if (generation != windowGeneration) return
 
         val currentOnly = PlaybackWindowIdentity.currentOnly(logicalIndex)
@@ -600,10 +597,6 @@ class AuralisPlaybackEngine(
         }
         val safeStart = windowStart.coerceIn(0, logicalQueue.size)
         val safeEnd = windowEnd.coerceIn(safeStart, logicalQueue.size)
-        // QueueSnapshot is a value object. Never expose ArrayList.SubList here: that object keeps a
-        // live modCount link to logicalQueue and throws ConcurrentModificationException as soon as
-        // playback hydration/navigation mutates the backing queue while an older UI snapshot is
-        // still being iterated.
         val entries = logicalQueue.subList(safeStart, safeEnd).toList()
         val playerIndex = player.currentMediaItemIndex
         val logicalWindowIndex = (currentLogical - safeStart).takeIf { it in entries.indices }
