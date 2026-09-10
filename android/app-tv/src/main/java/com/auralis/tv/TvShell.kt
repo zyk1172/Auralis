@@ -7,7 +7,9 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,11 +40,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.LocalAuralisTheme
@@ -70,10 +74,10 @@ import kotlinx.coroutines.yield
 /**
  * Real-device TV shell.
  *
- * The content shell and the full player are mutually exclusive in Composition, so D-pad focus can
- * never remain on controls hidden behind the player. The old bottom playback strip is removed;
- * Now Playing is a permanent rail destination that remains one-dimensional and reachable without
- * scrolling the current content to its end.
+ * Full-player/content routes are mutually exclusive. The content focus group also has a restorer:
+ * entering an album/artist detail and backing out returns to the card that opened it instead of
+ * jumping to the rail or the first card. Apple branding uses the same binary AppIcon asset as the
+ * Apple target, referenced into Android through Git rather than redrawn.
  */
 @Composable
 fun TvShell(
@@ -105,12 +109,20 @@ fun TvShell(
         else playback = PlaybackSnapshot.Empty
     }
     LaunchedEffect(controller, engineAvailable) {
-        if (engineAvailable) controller.queue.collect { queue = it }
-        else queue = QueueSnapshot.Empty
+        if (engineAvailable) {
+            controller.queue.collect { snapshot ->
+                // Defensive copy while core snapshots are being hardened as well. Never keep a UI
+                // reference to a mutable ArrayList.SubList across the next player mutation.
+                queue = snapshot.stableCopy()
+            }
+        } else {
+            queue = QueueSnapshot.Empty
+        }
     }
 
     val sectionFocus = remember { TvSection.entries.associateWith { FocusRequester() } }
     val nowPlayingFocus = remember { FocusRequester() }
+    val contentFocus = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
         yield()
@@ -134,6 +146,7 @@ fun TvShell(
         yield()
         val requester = when (target) {
             is TvFocusRestoreTarget.Section -> sectionFocus.getValue(target.section)
+            TvFocusRestoreTarget.Content -> contentFocus
             TvFocusRestoreTarget.NowPlaying -> nowPlayingFocus
         }
         if (runCatching { requester.requestFocus() }.isSuccess) pendingFocusRestore = null
@@ -160,29 +173,35 @@ fun TvShell(
             .getOrNull()
 
     fun playShelf(tracks: List<Track>, startIndex: Int) {
-        if (tracks.isEmpty()) return
+        val stableTracks = tracks.stableTrackCopy()
+        if (stableTracks.isEmpty()) return
         scope.launch {
             val ready = awaitControllerOrNotify() ?: return@launch
             runCatching {
-                ready.playQueue(tracks.map { QueueEntry.of(it) }, startIndex.coerceIn(0, tracks.lastIndex))
+                ready.playQueue(
+                    stableTracks.map { QueueEntry.of(it) },
+                    startIndex.coerceIn(0, stableTracks.lastIndex),
+                )
             }.onFailure(::notifyPlaybackFailure)
         }
     }
 
     fun playNextShelf(tracks: List<Track>) {
-        if (tracks.isEmpty()) return
+        val stableTracks = tracks.stableTrackCopy()
+        if (stableTracks.isEmpty()) return
         scope.launch {
             val ready = awaitControllerOrNotify() ?: return@launch
-            runCatching { ready.insertNext(tracks.map { QueueEntry.of(it) }) }
+            runCatching { ready.insertNext(stableTracks.map { QueueEntry.of(it) }) }
                 .onFailure(::notifyPlaybackFailure)
         }
     }
 
     fun appendQueueShelf(tracks: List<Track>) {
-        if (tracks.isEmpty()) return
+        val stableTracks = tracks.stableTrackCopy()
+        if (stableTracks.isEmpty()) return
         scope.launch {
             val ready = awaitControllerOrNotify() ?: return@launch
-            runCatching { ready.appendToQueue(tracks.map { QueueEntry.of(it) }) }
+            runCatching { ready.appendToQueue(stableTracks.map { QueueEntry.of(it) }) }
                 .onFailure(::notifyPlaybackFailure)
         }
     }
@@ -208,15 +227,13 @@ fun TvShell(
             playerOpen -> closePlayer()
             browseDestination != null -> {
                 browseDestination = null
-                pendingFocusRestore = TvFocusRestoreTarget.Section(TvSection.Library)
+                pendingFocusRestore = TvFocusRestoreTarget.Content
             }
         }
     }
 
     Box(modifier = modifier.fillMaxSize().background(colors.background)) {
         if (playerOpen && playback.track != null) {
-            // Dedicated full-screen route: the shell is not mounted behind it, eliminating focus
-            // fall-through into visually hidden menus/buttons on real televisions.
             TvNowPlayingScreen(
                 graph = graph,
                 controller = controller,
@@ -245,7 +262,10 @@ fun TvShell(
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .fillMaxHeight(),
+                        .fillMaxHeight()
+                        .focusRequester(contentFocus)
+                        .focusRestorer()
+                        .focusGroup(),
                 ) {
                     when (section) {
                         TvSection.Home -> HomeScreen(
@@ -282,7 +302,7 @@ fun TvShell(
                                     initial = destination,
                                     onBack = {
                                         browseDestination = null
-                                        pendingFocusRestore = TvFocusRestoreTarget.Section(TvSection.Library)
+                                        pendingFocusRestore = TvFocusRestoreTarget.Content
                                     },
                                     onPlayTracks = ::playShelf,
                                     onPlayNext = ::playNextShelf,
@@ -331,14 +351,16 @@ private fun TvNavigationRail(
             .padding(horizontal = 12.dp, vertical = 26.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(
-            "A",
-            style = MaterialTheme.typography.displaySmall,
-            fontWeight = FontWeight.Bold,
-            color = colors.accent,
+        Image(
+            painter = painterResource(R.drawable.auralis_apple_icon),
+            contentDescription = stringResource(R.string.app_name),
+            modifier = Modifier
+                .size(58.dp)
+                .clip(RoundedCornerShape(14.dp)),
         )
+        Spacer(Modifier.height(8.dp))
         Text("Auralis", style = MaterialTheme.typography.labelMedium, color = colors.secondaryText)
-        Spacer(Modifier.height(30.dp))
+        Spacer(Modifier.height(24.dp))
 
         Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
             TvSection.entries.forEach { entry ->
@@ -398,11 +420,6 @@ private fun TvRailItem(
     }
 }
 
-/**
- * Bottom rail playback destination. It replaces the duplicated Settings button. The equalizer is
- * intentionally restrained: it only animates while music is actually playing and freezes under
- * Reduce Motion.
- */
 @Composable
 private fun TvNowPlayingRailButton(
     playback: PlaybackSnapshot,
@@ -486,7 +503,18 @@ private fun TvEqualizer(active: Boolean) {
     }
 }
 
+private fun QueueSnapshot.stableCopy(): QueueSnapshot =
+    runCatching { copy(entries = entries.toList()) }.getOrElse { this }
+
+private fun List<Track>.stableTrackCopy(): List<Track> {
+    repeat(3) {
+        runCatching { return toList() }
+    }
+    return emptyList()
+}
+
 private sealed interface TvFocusRestoreTarget {
     data class Section(val section: TvSection) : TvFocusRestoreTarget
+    data object Content : TvFocusRestoreTarget
     data object NowPlaying : TvFocusRestoreTarget
 }
