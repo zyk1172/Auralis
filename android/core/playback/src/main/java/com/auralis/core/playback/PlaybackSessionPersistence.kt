@@ -41,14 +41,15 @@ class PlaybackSessionStore(context: Context) {
 
     fun capture(playback: PlaybackSnapshot, queue: QueueSnapshot, positionMs: Long) {
         val currentWindow = queue.currentWindowIndex
-        if (playback.track == null || currentWindow == null || queue.entries.isEmpty()) {
+        val stableEntries = queue.entries.toList()
+        if (playback.track == null || currentWindow == null || stableEntries.isEmpty()) {
             clear()
             return
         }
 
         val start = (currentWindow - PREVIOUS_CONTEXT).coerceAtLeast(0)
-        val endExclusive = (currentWindow + NEXT_CONTEXT + 1).coerceAtMost(queue.entries.size)
-        val slice = queue.entries.subList(start, endExclusive)
+        val endExclusive = (currentWindow + NEXT_CONTEXT + 1).coerceAtMost(stableEntries.size)
+        val slice = stableEntries.subList(start, endExclusive)
         if (slice.isEmpty()) {
             clear()
             return
