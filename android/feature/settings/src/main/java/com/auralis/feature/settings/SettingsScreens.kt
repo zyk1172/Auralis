@@ -19,10 +19,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -42,13 +44,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -69,16 +75,13 @@ import java.io.File
 import java.util.Locale
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 
 /**
  * 设置（对齐 Swift `SettingsView` 主表 + `SettingsDetailPages` 子页）。
  *
- * 结构：
- * - 设置：服务器 / AI 助手（S8 前如实置灰）/ 播放与音质 / 数据与备份
- * - 外观：首页布局（S3 已有）/ 主题（DataStore + 即时应用）
- * - 关于：版本（PackageManager 真实值）
- *
- * 每个控件都有真实读写（DataStore / 目录统计 / DAO 清理 / coil 缓存），无假开关。
+ * 根列表的滚动位置和最后进入的分类入口都是 saveable state。这样电视遥控器从任何子页
+ * 返回时会回到刚才的入口，不会每次重新从列表第一项开始；移动端也自然保留列表位置。
  */
 @Composable
 fun SettingsScreen(
@@ -93,33 +96,70 @@ fun SettingsScreen(
     onRefreshRecommendationIndex: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    var page by remember { mutableStateOf<SettingsPage?>(null) }
-    BackHandler(enabled = page != null) { page = null }
+    var pageOrdinal by rememberSaveable { mutableIntStateOf(NO_PAGE) }
+    var returnFocusItem by rememberSaveable { mutableIntStateOf(NO_FOCUS_ITEM) }
+    val rootListState = rememberLazyListState()
+    val page = SettingsPage.entries.getOrNull(pageOrdinal)
+
+    fun rememberEntry(itemIndex: Int) {
+        returnFocusItem = itemIndex
+    }
+
+    BackHandler(enabled = page != null) { pageOrdinal = NO_PAGE }
 
     when (page) {
         null -> SettingsRootPage(
             graph = graph,
             onBack = onBack,
-            onOpenServers = onOpenServers,
-            onEditHomeLayout = onEditHomeLayout,
-            onOpenAiSettings = onOpenAiSettings,
+            onOpenServers = {
+                rememberEntry(ROOT_ITEM_SERVERS)
+                onOpenServers()
+            },
+            onEditHomeLayout = {
+                rememberEntry(ROOT_ITEM_HOME_LAYOUT)
+                onEditHomeLayout()
+            },
+            onOpenAiSettings = {
+                rememberEntry(ROOT_ITEM_AI)
+                onOpenAiSettings()
+            },
             recommendationIndexState = recommendationIndexState,
             onStartRecommendationIndex = onStartRecommendationIndex,
             onCancelRecommendationIndex = onCancelRecommendationIndex,
             onRefreshRecommendationIndex = onRefreshRecommendationIndex,
-            onOpenQuality = { page = SettingsPage.Quality },
-            onOpenData = { page = SettingsPage.Data },
-            onOpenTheme = { page = SettingsPage.Theme },
+            onOpenQuality = {
+                rememberEntry(ROOT_ITEM_QUALITY)
+                pageOrdinal = SettingsPage.Quality.ordinal
+            },
+            onOpenData = {
+                rememberEntry(ROOT_ITEM_DATA)
+                pageOrdinal = SettingsPage.Data.ordinal
+            },
+            onOpenTheme = {
+                rememberEntry(ROOT_ITEM_THEME)
+                pageOrdinal = SettingsPage.Theme.ordinal
+            },
+            listState = rootListState,
+            restoreFocusItem = returnFocusItem,
             modifier = modifier,
         )
 
-        SettingsPage.Quality -> QualitySettingsPage(graph = graph, onBack = { page = null }, modifier = modifier)
-        SettingsPage.Data -> DataAndBackupPage(graph = graph, onBack = { page = null }, modifier = modifier)
-        SettingsPage.Theme -> ThemeSettingsPage(graph = graph, onBack = { page = null }, modifier = modifier)
+        SettingsPage.Quality -> QualitySettingsPage(graph = graph, onBack = { pageOrdinal = NO_PAGE }, modifier = modifier)
+        SettingsPage.Data -> DataAndBackupPage(graph = graph, onBack = { pageOrdinal = NO_PAGE }, modifier = modifier)
+        SettingsPage.Theme -> ThemeSettingsPage(graph = graph, onBack = { pageOrdinal = NO_PAGE }, modifier = modifier)
     }
 }
 
 private enum class SettingsPage { Quality, Data, Theme }
+
+private const val NO_PAGE = -1
+private const val NO_FOCUS_ITEM = -1
+private const val ROOT_ITEM_SERVERS = 2
+private const val ROOT_ITEM_AI = 4
+private const val ROOT_ITEM_QUALITY = 6
+private const val ROOT_ITEM_DATA = 8
+private const val ROOT_ITEM_HOME_LAYOUT = 10
+private const val ROOT_ITEM_THEME = 12
 
 @Composable
 private fun RecommendationIndexSettingsCard(
@@ -182,8 +222,6 @@ private fun RecommendationIndexSettingsCard(
     }
 }
 
-// ================================================================== 根页
-
 @Composable
 private fun SettingsRootPage(
     graph: AuralisGraph,
@@ -198,13 +236,31 @@ private fun SettingsRootPage(
     onOpenQuality: () -> Unit,
     onOpenData: () -> Unit,
     onOpenTheme: () -> Unit,
+    listState: LazyListState,
+    restoreFocusItem: Int,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
     val scope = rememberCoroutineScope()
     val context = LocalContext.current.applicationContext
+    val focusRequesters = remember {
+        mapOf(
+            ROOT_ITEM_SERVERS to FocusRequester(),
+            ROOT_ITEM_AI to FocusRequester(),
+            ROOT_ITEM_QUALITY to FocusRequester(),
+            ROOT_ITEM_DATA to FocusRequester(),
+            ROOT_ITEM_HOME_LAYOUT to FocusRequester(),
+            ROOT_ITEM_THEME to FocusRequester(),
+        )
+    }
 
-    // 服务器行副标题：激活服务器名 + 已同步歌曲数（真实查询，无激活则引导文案）。
+    LaunchedEffect(restoreFocusItem) {
+        val requester = focusRequesters[restoreFocusItem] ?: return@LaunchedEffect
+        listState.scrollToItem((restoreFocusItem - 1).coerceAtLeast(0))
+        yield()
+        runCatching { requester.requestFocus() }
+    }
+
     var serverSubtitle by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         serverSubtitle = null
@@ -227,7 +283,6 @@ private fun SettingsRootPage(
         }
     }
 
-    // AI 助手行副标题：模型接口配置状态（真实读取；未配置/已关闭如实显示）。
     var aiSubtitle by remember { mutableStateOf(context.getString(R.string.settings_ai_subtitle_default)) }
     LaunchedEffect(Unit) {
         val enabled = runCatching { graph.preferences.aiEnabledValue() }.getOrDefault(true)
@@ -242,7 +297,7 @@ private fun SettingsRootPage(
     val theme = AuralisThemeController.observe()
 
     SettingsPageContainer(modifier = modifier) {
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
             item { SettingsDetailTopBar(title = stringResource(AuralisR.string.settings), onBack = onBack) }
             item { SettingsSectionTitle(stringResource(AuralisR.string.settings)) }
             item {
@@ -251,6 +306,7 @@ private fun SettingsRootPage(
                     subtitle = serverSubtitle ?: "…",
                     icon = Icons.Filled.Dns,
                     onClick = onOpenServers,
+                    modifier = Modifier.focusRequester(focusRequesters.getValue(ROOT_ITEM_SERVERS)),
                 )
             }
             item { SettingsDivider() }
@@ -260,6 +316,7 @@ private fun SettingsRootPage(
                     subtitle = aiSubtitle,
                     icon = Icons.Filled.AutoAwesome,
                     onClick = onOpenAiSettings,
+                    modifier = Modifier.focusRequester(focusRequesters.getValue(ROOT_ITEM_AI)),
                 )
                 SettingsCaption(stringResource(R.string.settings_ai_caption))
             }
@@ -277,6 +334,7 @@ private fun SettingsRootPage(
                     subtitle = stringResource(R.string.settings_quality_subtitle),
                     icon = Icons.AutoMirrored.Filled.VolumeUp,
                     onClick = onOpenQuality,
+                    modifier = Modifier.focusRequester(focusRequesters.getValue(ROOT_ITEM_QUALITY)),
                 )
             }
             item { SettingsDivider() }
@@ -286,6 +344,7 @@ private fun SettingsRootPage(
                     subtitle = stringResource(R.string.settings_data_subtitle),
                     icon = Icons.Filled.Storage,
                     onClick = onOpenData,
+                    modifier = Modifier.focusRequester(focusRequesters.getValue(ROOT_ITEM_DATA)),
                 )
             }
 
@@ -296,6 +355,7 @@ private fun SettingsRootPage(
                     subtitle = stringResource(R.string.settings_home_layout_subtitle),
                     icon = Icons.Filled.Tune,
                     onClick = onEditHomeLayout,
+                    modifier = Modifier.focusRequester(focusRequesters.getValue(ROOT_ITEM_HOME_LAYOUT)),
                 )
             }
             item { SettingsDivider() }
@@ -305,6 +365,7 @@ private fun SettingsRootPage(
                     subtitle = stringResource(theme.nameRes),
                     icon = Icons.Filled.Palette,
                     onClick = onOpenTheme,
+                    modifier = Modifier.focusRequester(focusRequesters.getValue(ROOT_ITEM_THEME)),
                 )
             }
 
@@ -336,7 +397,6 @@ private fun SettingsRootPage(
     }
 }
 
-/** 无图标信息行（对齐 Swift LabeledContent）。 */
 @Composable
 internal fun SettingsValueRow(
     title: String,
@@ -355,9 +415,6 @@ internal fun SettingsValueRow(
     }
 }
 
-// ================================================================== 播放与音质
-
-/** 对齐 Swift `PlaybackSettingsPage`：网络音质 + ReplayGain（Music Haptics 平台裁剪）。 */
 @Composable
 private fun QualitySettingsPage(
     graph: AuralisGraph,
@@ -448,7 +505,7 @@ private fun QualitySettingsPage(
                         preampDrag = null
                     },
                     valueRange = -12f..12f,
-                    steps = 47, // 0.5 dB 步长
+                    steps = 47,
                     enabled = replayGain.mode != ReplayGainMode.Off,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -471,17 +528,12 @@ private fun QualitySettingsPage(
                     enabled = replayGain.mode != ReplayGainMode.Off,
                 )
             }
-            item {
-                SettingsCaption(stringResource(R.string.settings_replaygain_default_note))
-            }
+            item { SettingsCaption(stringResource(R.string.settings_replaygain_default_note)) }
             item { Spacer(Modifier.height(AuralisSpacing.large)) }
         }
     }
 }
 
-// ================================================================== 数据与备份
-
-/** 对齐 Swift `DataSettingsPage`：本地缓存统计 + 清理（封面/歌词带确认语义；无临时音频流缓存，如实说明）。 */
 @Composable
 private fun DataAndBackupPage(
     graph: AuralisGraph,
@@ -492,13 +544,10 @@ private fun DataAndBackupPage(
     val scope = rememberCoroutineScope()
     val context = graph.appContext
 
-    // 统计（真实目录/行数）。
     var metadataBytes by remember { mutableStateOf<Long?>(null) }
     var lyricCount by remember { mutableStateOf<Int?>(null) }
     var downloadedCount by remember { mutableStateOf<Int?>(null) }
     var coverCacheBytes by remember { mutableStateOf<Long?>(null) }
-    var refreshing by remember { mutableStateOf(false) }
-
     var confirmClearArtwork by remember { mutableStateOf(false) }
     var workingLyrics by remember { mutableStateOf(false) }
     var workingArtwork by remember { mutableStateOf(false) }
@@ -507,24 +556,15 @@ private fun DataAndBackupPage(
         metadataBytes = dirBytes(File(context.applicationInfo.dataDir, "databases"))
             .plus(dirBytes(File(context.filesDir, "datastore")))
         lyricCount = runCatching { graph.lyricCacheCount() }.getOrNull()
-        downloadedCount = runCatching {
-            graph.catalogRepository.observeAll(null).first().size
-        }.getOrNull()
-        coverCacheBytes = runCatching {
-            dirBytes(File(context.cacheDir, "image_cache"))
-        }.getOrNull()
+        downloadedCount = runCatching { graph.catalogRepository.observeAll(null).first().size }.getOrNull()
+        coverCacheBytes = runCatching { dirBytes(File(context.cacheDir, "image_cache")) }.getOrNull()
     }
 
-    LaunchedEffect(Unit) {
-        refreshing = true
-        refresh()
-        refreshing = false
-    }
+    LaunchedEffect(Unit) { refresh() }
 
     fun clearLyrics() {
         scope.launch {
             workingLyrics = true
-            // 清空 Room 歌词表（歌词按需从服务器重新加载；不删除任何其它数据）。
             runCatching { graph.clearLyricCache() }
             refresh()
             workingLyrics = false
@@ -557,9 +597,7 @@ private fun DataAndBackupPage(
                     value = downloadedCount?.let { stringResource(AuralisR.string.count_songs, it) } ?: "…",
                 )
             }
-            item {
-                SettingsCaption(stringResource(R.string.settings_downloads_note))
-            }
+            item { SettingsCaption(stringResource(R.string.settings_downloads_note)) }
             item { SettingsDivider() }
             item {
                 SettingsValueRow(
@@ -571,11 +609,8 @@ private fun DataAndBackupPage(
                     enabled = !workingLyrics && (lyricCount ?: 0) > 0,
                     modifier = Modifier.padding(start = AuralisSpacing.medium),
                 ) {
-                    if (workingLyrics) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    } else {
-                        Text(stringResource(R.string.settings_clear_lyrics), color = colors.accent)
-                    }
+                    if (workingLyrics) CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    else Text(stringResource(R.string.settings_clear_lyrics), color = colors.accent)
                 }
             }
             item { SettingsDivider() }
@@ -589,16 +624,11 @@ private fun DataAndBackupPage(
                     enabled = !workingArtwork && (coverCacheBytes ?: 0) > 0,
                     modifier = Modifier.padding(start = AuralisSpacing.medium),
                 ) {
-                    if (workingArtwork) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    } else {
-                        Text(stringResource(R.string.settings_clear_cover), color = colors.accent)
-                    }
+                    if (workingArtwork) CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    else Text(stringResource(R.string.settings_clear_cover), color = colors.accent)
                 }
             }
-            item {
-                SettingsCaption(stringResource(R.string.settings_data_note))
-            }
+            item { SettingsCaption(stringResource(R.string.settings_data_note)) }
             item { Spacer(Modifier.height(AuralisSpacing.large)) }
         }
     }
@@ -626,9 +656,6 @@ private fun dirBytes(dir: File): Long {
     return dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
 }
 
-// ================================================================== 主题
-
-/** 对齐 Swift `ThemeSettingsPage`：主题网格 + 点击即时应用（DataStore 持久化 + 进程内即时生效）。 */
 @Composable
 private fun ThemeSettingsPage(
     graph: AuralisGraph,
@@ -657,7 +684,6 @@ private fun ThemeSettingsPage(
                         theme = theme,
                         selected = selected,
                         onClick = {
-                            // 立即进程内生效 + DataStore 持久化（下次冷启动恢复）。
                             AuralisThemeController.current = theme
                             scope.launch { runCatching { graph.preferences.setSelectedTheme(theme.id) } }
                         },
