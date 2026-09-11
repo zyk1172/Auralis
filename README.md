@@ -134,6 +134,7 @@ Fork 可以依法修改和重新分发 GPL 源码，但发行版应使用自己�
 - [隐私模型](Docs/PrivacyModel.md)
 - [测试策略](Docs/TestingStrategy.md)
 - [手工验收](Docs/ManualValidation.md)
+- [跨平台发布](Docs/Release.md)
 - [开源审计](Docs/OpenSourceAudit.md)
 - [安全政策](SECURITY.md)
 
