@@ -41,6 +41,9 @@ class HomeState(
         private set
     var hasServer by mutableStateOf(false)
         private set
+    // Home's large title is intentionally title-only. Server identity belongs in server/settings UI;
+    // keeping a mutable account label directly beneath the title caused one-character/draft-looking
+    // residue to appear on TV and made unrelated state corruption look like Home content.
     var serverName by mutableStateOf<String?>(null)
         private set
 
@@ -98,7 +101,6 @@ class HomeState(
                 HomeModuleId.FavoriteRandom -> repo.favoriteRandom(sid, HomeModuleId.RESHUFFLE_SAMPLE)
                 else -> return@launch
             }
-            // 把换一批结果写回对应模块快照。
             contentModules = contentModules.map { module ->
                 if (module.id == moduleId) module.withTracks(sampled) else module
             }
@@ -107,6 +109,7 @@ class HomeState(
 
     private suspend fun refresh(serverId: ServerId?) {
         activeServer = serverId
+        serverName = null
         if (serverId == null) {
             hasServer = false
             loaded = true
@@ -115,7 +118,6 @@ class HomeState(
         }
         val accounts = runCatching { repo.servers() }.getOrDefault(emptyList())
         hasServer = accounts.isNotEmpty()
-        serverName = accounts.firstOrNull { it.id == serverId }?.displayName
         refreshing = true
         try {
             stats = repo.stats(serverId)
@@ -145,7 +147,7 @@ class HomeState(
             .mapNotNull { entry ->
                 val id = runCatching { HomeQuickEntry.valueOf(entry.id) }.getOrNull() ?: return@mapNotNull null
                 val count = counts[id] ?: 0
-                if (count <= 0) return@mapNotNull null // 开启但无数据 → 暂不渲染（配置保持）
+                if (count <= 0) return@mapNotNull null
                 QuickEntryModule(id = id, count = count)
             }
     }
@@ -154,7 +156,7 @@ class HomeState(
     private suspend fun buildContentModules(serverId: ServerId) {
         val built = ArrayList<HomeModuleSnapshot>()
         for (entry in layout.contentModules) {
-            if (!entry.visible) continue // 关闭的模块完全不查询数据
+            if (!entry.visible) continue
             val id = runCatching { HomeModuleId.valueOf(entry.id) }.getOrNull() ?: continue
             val snapshot = when (id) {
                 HomeModuleId.RandomSongs -> tracksModule(id, repo.randomTracks(serverId, HomeModuleId.RESHUFFLE_SAMPLE))
@@ -167,7 +169,7 @@ class HomeState(
                 HomeModuleId.TopArtists -> artistsModule(id, repo.homeTopArtists(serverId, MODULE_SHELF_LIMIT))
                 HomeModuleId.TopAlbums -> albumsModule(id, repo.homeTopAlbums(serverId, MODULE_SHELF_LIMIT))
             }
-            if (snapshot.hasData) built.add(snapshot) // 无数据 → 暂不渲染（配置保持）
+            if (snapshot.hasData) built.add(snapshot)
         }
         contentModules = built
     }
@@ -182,21 +184,15 @@ class HomeState(
         HomeModuleSnapshot(id = id, albums = albums)
 
     companion object {
-        /** 内容货架单模块条数上限（对齐 Apple 各 prefix 24）。 */
         const val MODULE_SHELF_LIMIT = 24
     }
 }
 
-/** 快捷入口渲染单元：icon + count。 */
 data class QuickEntryModule(
     val id: HomeQuickEntry,
     val count: Int,
 )
 
-/**
- * 内容模块渲染快照：歌曲货架 / 艺人货架 / 专辑货架三选一，
- * 与 Apple `HomeView.moduleSection` 的 trackShelf / artistShelf / albumShelf 对应。
- */
 data class HomeModuleSnapshot(
     val id: HomeModuleId,
     val tracks: List<Track> = emptyList(),

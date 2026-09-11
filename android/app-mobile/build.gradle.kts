@@ -14,8 +14,8 @@ android {
         applicationId = "com.auralis.mobile"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionName = System.getenv("GITHUB_RUN_NUMBER")?.let { "0.1.0-ci.$it" } ?: "0.1.0"
     }
 
     compileOptions {

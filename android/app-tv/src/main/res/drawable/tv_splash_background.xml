@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Leanback 16:9 banner using the cropped Android wrapper around current Auralis master artwork. -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item>
         <shape android:shape="rectangle">
@@ -10,5 +9,5 @@
         android:width="112dp"
         android:height="112dp"
         android:gravity="center"
-        android:drawable="@drawable/ic_tv_logo" />
+        android:drawable="@drawable/auralis_apple_icon" />
 </layer-list>

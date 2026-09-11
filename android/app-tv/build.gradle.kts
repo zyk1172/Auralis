@@ -14,15 +14,20 @@ android {
         applicationId = "com.auralis.tv"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI artifacts are handed directly to physical TV testers. A monotonically increasing
+        // versionCode lets Android treat the next artifact as an update instead of a reinstall.
+        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionName = System.getenv("GITHUB_RUN_NUMBER")?.let { "0.1.0-ci.$it" } ?: "0.1.0"
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+    kotlinOptions {
+        jvmTarget = "17"
+        freeCompilerArgs += "-opt-in=androidx.compose.ui.ExperimentalComposeUiApi"
+    }
     buildFeatures { compose = true }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -45,6 +50,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     debugImplementation(libs.androidx.compose.ui.tooling)
+
     implementation(project(":core:common"))
     implementation(project(":core:domain"))
     implementation(project(":core:opensubsonic"))
@@ -59,6 +65,7 @@ dependencies {
     implementation(project(":feature:library"))
     implementation(project(":feature:player"))
     implementation(project(":feature:search"))
+    implementation(project(":feature:assistant"))
     implementation(project(":feature:settings"))
     implementation(project(":feature:server"))
 }

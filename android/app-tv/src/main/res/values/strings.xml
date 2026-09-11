@@ -2,9 +2,24 @@
 <resources>
     <string name="app_name">Auralis TV</string>
 
-    <!-- ============ 一级分区（顶栏导航） ============ -->
+    <!-- ============ 一级分区（TV 左侧导航） ============ -->
     <string name="tv_search">搜索</string>
+    <string name="tv_assistant">AI 助手</string>
+    <string name="tv_now_playing">正在播放</string>
+    <string name="tv_no_playback">暂无播放</string>
+    <string name="tv_audio_info">音频信息</string>
 
-    <!-- ============ 正在播放条 / Toast ============ -->
+    <!-- ============ TV 操作反馈 ============ -->
     <string name="tv_buffering">缓冲中</string>
+    <string name="tv_seek_back_10">后退 10 秒</string>
+    <string name="tv_seek_forward_10">前进 10 秒</string>
+
+    <!-- ============ Mac 风格展开播放页 ============ -->
+    <string name="tv_close_player">收起播放器</string>
+    <string name="tv_volume">音量</string>
+    <string name="tv_shuffle">随机播放</string>
+    <string name="tv_repeat">循环模式</string>
+    <string name="tv_up_next">继续播放</string>
+    <string name="tv_clear_up_next">清除</string>
+    <string name="tv_queue_empty">队列中无音乐。</string>
 </resources>

@@ -2,9 +2,15 @@
 <resources>
     <string name="app_name">Auralis TV</string>
 
-    <!-- ============ Top-level sections (top-bar navigation) ============ -->
+    <!-- ============ Top-level TV navigation ============ -->
     <string name="tv_search">Search</string>
+    <string name="tv_assistant">AI Assistant</string>
+    <string name="tv_now_playing">Now Playing</string>
+    <string name="tv_no_playback">Nothing Playing</string>
+    <string name="tv_audio_info">Audio Info</string>
 
-    <!-- ============ Now-playing strip / Toast ============ -->
+    <!-- ============ TV interaction feedback ============ -->
     <string name="tv_buffering">Buffering…</string>
+    <string name="tv_seek_back_10">Back 10 seconds</string>
+    <string name="tv_seek_forward_10">Forward 10 seconds</string>
 </resources>

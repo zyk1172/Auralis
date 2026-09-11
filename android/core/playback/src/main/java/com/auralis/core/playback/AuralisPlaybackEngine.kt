@@ -17,7 +17,6 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
-import com.auralis.core.domain.DownloadRepository
 import com.auralis.core.domain.PlayMode
 import com.auralis.core.domain.PlaybackError
 import com.auralis.core.domain.PlaybackSourceResolver
@@ -43,15 +42,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 
-/**
- * Media3 播放引擎。
- *
- * - 单一 ExoPlayer 实例，服务生命周期内长期复用；
- * - 逻辑队列 + 有界 Media3 窗口，MediaItem.mediaId 始终是 occurrence QueueEntryId；
- * - position 高频流与低频队列/状态流分离；
- * - 首曲解析失败直接进入可诊断 Failed，而不是交给一个无 URI MediaItem 后再泛化失败；
- * - 支持从持久化的有界 occurrence 上下文恢复逻辑队列与 Media3 播放列表。
- */
 @OptIn(UnstableApi::class)
 class AuralisPlaybackEngine(
     context: Context,
@@ -88,6 +78,8 @@ class AuralisPlaybackEngine(
     private var windowStart = 0
     private var windowEnd = 0
     private var currentLogical = -1
+    private var windowGeneration = 0L
+    private var playerListMutation = false
 
     private var playMode = PlayMode.Sequential
     private var userVolume = 1f
@@ -103,6 +95,7 @@ class AuralisPlaybackEngine(
     init {
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
+                if (playerListMutation) return
                 when (state) {
                     Player.STATE_BUFFERING -> if (player.playWhenReady) enterBuffering()
                     Player.STATE_READY -> {
@@ -119,11 +112,13 @@ class AuralisPlaybackEngine(
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (playerListMutation) return
                 if (isPlaying) stallTimeoutJob?.cancel()
                 publishPlaybackState()
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                if (playerListMutation) return
                 updateCurrentFromPlayer()
                 notifyActivated()
                 publishPlaybackState()
@@ -139,6 +134,7 @@ class AuralisPlaybackEngine(
                 newPosition: Player.PositionInfo,
                 reason: Int,
             ) {
+                if (playerListMutation) return
                 updateCurrentFromPlayer()
                 publishPlaybackState()
             }
@@ -164,12 +160,6 @@ class AuralisPlaybackEngine(
         awaitPlayAt(logicalIndex = currentLogical, startAtMs = startAtMs, seekMode = true)
     }
 
-    /**
-     * Rebuilds the engine-side occurrence model before MediaSession applies a playback-resumption
-     * playlist. Neighbours that can no longer resolve are dropped; the current occurrence is
-     * mandatory. This prevents an externally restored Media3 playlist from existing without a
-     * corresponding Auralis logical queue.
-     */
     internal suspend fun preparePlaybackResumption(
         snapshot: PersistedPlaybackSession,
     ): MediaSession.MediaItemsWithStartPosition? {
@@ -192,6 +182,7 @@ class AuralisPlaybackEngine(
         }
         if (resolvedCurrent !in resolvedItems.indices) return null
 
+        windowGeneration += 1
         logicalQueue.clear()
         logicalQueue.addAll(resolvedEntries)
         currentLogical = resolvedCurrent
@@ -319,6 +310,7 @@ class AuralisPlaybackEngine(
             currentLogical = PlaybackLogic.currentAfterRemove(index, currentLogical)
         }
         if (logicalQueue.isEmpty()) {
+            windowGeneration += 1
             player.stop()
             player.clearMediaItems()
             currentLogical = -1
@@ -358,7 +350,27 @@ class AuralisPlaybackEngine(
         publishAll()
     }
 
+    /** Mac `clearUpcoming`: keep the current occurrence and everything behind it, drop only future. */
+    fun clearUpcoming() {
+        if (currentLogical !in logicalQueue.indices || currentLogical >= logicalQueue.lastIndex) return
+        windowGeneration += 1
+        logicalQueue.subList(currentLogical + 1, logicalQueue.size).clear()
+
+        val playerIndex = player.currentMediaItemIndex
+        if (playerIndex in 0 until player.mediaItemCount && playerIndex + 1 < player.mediaItemCount) {
+            playerListMutation = true
+            try {
+                player.removeMediaItems(playerIndex + 1, player.mediaItemCount)
+            } finally {
+                playerListMutation = false
+            }
+        }
+        windowEnd = minOf(windowEnd, logicalQueue.size)
+        publishAll()
+    }
+
     fun clearQueue() {
+        windowGeneration += 1
         logicalQueue.clear()
         player.stop()
         player.clearMediaItems()
@@ -371,6 +383,7 @@ class AuralisPlaybackEngine(
     }
 
     fun release() {
+        windowGeneration += 1
         stallTimeoutJob?.cancel()
         player.release()
         scope.cancel()
@@ -384,15 +397,25 @@ class AuralisPlaybackEngine(
     }
 
     private suspend fun awaitPlayAt(logicalIndex: Int, startAtMs: Long, seekMode: Boolean) {
-        val window = QueueWindowing.initialWindow(logicalQueue.size, logicalIndex)
-        windowStart = window.first
-        windowEnd = window.last + 1
+        val generation = ++windowGeneration
+        val targetWindow = QueueWindowing.initialWindow(logicalQueue.size, logicalIndex)
         val entry = logicalQueue.getOrNull(logicalIndex) ?: return
         val currentItem = buildMediaItem(entry, requireUri = true)
+        if (generation != windowGeneration) return
+
+        val currentOnly = PlaybackWindowIdentity.currentOnly(logicalIndex)
+        currentLogical = logicalIndex
+        windowStart = currentOnly.first
+        windowEnd = currentOnly.last + 1
+
         if (currentItem == null) {
-            currentLogical = logicalIndex
-            player.stop()
-            player.clearMediaItems()
+            playerListMutation = true
+            try {
+                player.stop()
+                player.clearMediaItems()
+            } finally {
+                playerListMutation = false
+            }
             positionTicker.value = 0L
             playbackState.value = PlaybackSnapshot(
                 state = PlaybackState.Failed(PlaybackError.EngineFailure("无法解析播放地址")),
@@ -408,32 +431,58 @@ class AuralisPlaybackEngine(
             publishQueueState()
             return
         }
-        player.setMediaItems(listOf(currentItem), 0, startAtMs)
+
+        playerListMutation = true
+        try {
+            player.setMediaItems(listOf(currentItem), 0, startAtMs)
+        } finally {
+            playerListMutation = false
+        }
         player.prepare()
         player.play()
-        updateCurrentFromPlayer()
         currentLogical = logicalIndex
         notifyActivated()
         publishAll()
-        scope.launch { fillWindowAround(logicalIndex) }
+
+        scope.launch {
+            fillWindowAround(
+                currentIndex = logicalIndex,
+                targetStart = targetWindow.first,
+                targetEnd = targetWindow.last + 1,
+                generation = generation,
+            )
+        }
     }
 
-    private suspend fun fillWindowAround(currentIndex: Int) {
-        val before = buildMediaItems(windowStart, currentIndex).orEmpty()
-        if (before.isNotEmpty()) {
-            withContext(Dispatchers.Main) { player.addMediaItems(0, before) }
-        }
-        val after = buildMediaItems(currentIndex + 1, windowEnd).orEmpty()
-        if (after.isNotEmpty()) {
-            withContext(Dispatchers.Main) { player.addMediaItems(after) }
-        }
+    private suspend fun fillWindowAround(
+        currentIndex: Int,
+        targetStart: Int,
+        targetEnd: Int,
+        generation: Long,
+    ) {
+        val before = buildMediaItems(targetStart, currentIndex).orEmpty()
+        if (generation != windowGeneration) return
+        val after = buildMediaItems(currentIndex + 1, targetEnd).orEmpty()
+        if (generation != windowGeneration) return
+
         withContext(Dispatchers.Main) {
+            if (generation != windowGeneration || currentLogical != currentIndex) return@withContext
+            playerListMutation = true
+            try {
+                if (before.isNotEmpty()) player.addMediaItems(0, before)
+                if (after.isNotEmpty()) player.addMediaItems(after)
+                windowStart = targetStart
+                windowEnd = targetEnd
+                currentLogical = currentIndex
+            } finally {
+                playerListMutation = false
+            }
+            updateCurrentFromPlayer()
             currentLogical = currentIndex
             publishAll()
         }
     }
 
-    /** Background window entries may keep an unresolved placeholder; active/resumed entries may not. */
     private suspend fun buildMediaItems(start: Int, end: Int): List<MediaItem>? {
         if (logicalQueue.isEmpty()) return null
         val items = ArrayList<MediaItem>(end - start)
@@ -480,7 +529,7 @@ class AuralisPlaybackEngine(
     private fun updateCurrentFromPlayer() {
         val indexInWindow = player.currentMediaItemIndex
         if (indexInWindow in 0 until player.mediaItemCount && indexInWindow >= 0) {
-            currentLogical = windowStart + indexInWindow
+            currentLogical = PlaybackWindowIdentity.logicalIndex(windowStart, indexInWindow)
         }
     }
 
@@ -510,7 +559,9 @@ class AuralisPlaybackEngine(
     private fun publishPlaybackState() {
         val mediaItemIndex = player.currentMediaItemIndex
         val entry = if (mediaItemIndex in 0 until player.mediaItemCount) {
-            logicalQueue.getOrNull(windowStart + mediaItemIndex)
+            logicalQueue.getOrNull(
+                PlaybackWindowIdentity.logicalIndex(windowStart, mediaItemIndex),
+            )
         } else {
             logicalQueue.getOrNull(currentLogical)
         }
@@ -546,7 +597,7 @@ class AuralisPlaybackEngine(
         }
         val safeStart = windowStart.coerceIn(0, logicalQueue.size)
         val safeEnd = windowEnd.coerceIn(safeStart, logicalQueue.size)
-        val entries = logicalQueue.subList(safeStart, safeEnd)
+        val entries = logicalQueue.subList(safeStart, safeEnd).toList()
         val playerIndex = player.currentMediaItemIndex
         val logicalWindowIndex = (currentLogical - safeStart).takeIf { it in entries.indices }
         val windowIndex = playerIndex.takeIf { it in entries.indices } ?: logicalWindowIndex
@@ -565,8 +616,11 @@ class AuralisPlaybackEngine(
         val atLogicalEnd = windowEnd >= logicalQueue.size
         if (!atLogicalEnd && logicalQueue.size > QueueWindowing.LARGE_CONTEXT_THRESHOLD) {
             scope.launch {
-                val newEnd = minOf(logicalQueue.size, windowEnd + QueueWindowing.LARGE_WINDOW_REFILL_BATCH)
-                val extra = buildMediaItems(windowEnd, newEnd) ?: return@launch
+                val generation = windowGeneration
+                val oldEnd = windowEnd
+                val newEnd = minOf(logicalQueue.size, oldEnd + QueueWindowing.LARGE_WINDOW_REFILL_BATCH)
+                val extra = buildMediaItems(oldEnd, newEnd) ?: return@launch
+                if (generation != windowGeneration) return@launch
                 player.addMediaItems(extra)
                 windowEnd = newEnd
                 if (player.playbackState == Player.STATE_ENDED) player.prepare()
@@ -690,12 +744,23 @@ class AuralisPlaybackEngine(
             val logical = currentLogical.coerceIn(0, logicalQueue.size - 1)
             currentLogical = logical
             val position = player.currentPosition.coerceAtLeast(0)
-            val window = QueueWindowing.initialWindow(logicalQueue.size, logical)
-            windowStart = window.first
-            windowEnd = window.last + 1
-            val items = buildMediaItems(windowStart, windowEnd) ?: return@launch
-            val windowIndex = logical - windowStart
-            player.setMediaItems(items, windowIndex, position)
+            val targetWindow = QueueWindowing.initialWindow(logicalQueue.size, logical)
+            val targetStart = targetWindow.first
+            val targetEnd = targetWindow.last + 1
+            val generation = ++windowGeneration
+            val items = buildMediaItems(targetStart, targetEnd) ?: return@launch
+            if (generation != windowGeneration) return@launch
+            val windowIndex = logical - targetStart
+
+            playerListMutation = true
+            try {
+                player.setMediaItems(items, windowIndex, position)
+                windowStart = targetStart
+                windowEnd = targetEnd
+                currentLogical = logical
+            } finally {
+                playerListMutation = false
+            }
             if (player.playWhenReady) {
                 player.prepare()
                 player.play()

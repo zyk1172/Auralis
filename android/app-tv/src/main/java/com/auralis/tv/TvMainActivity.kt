@@ -3,21 +3,34 @@ package com.auralis.tv
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.dp
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.AuralisTheme
 import com.auralis.core.designsystem.AuralisThemeController
@@ -25,15 +38,19 @@ import com.auralis.core.designsystem.BuiltInThemes
 import com.auralis.core.designsystem.LocalAuralisTheme
 import com.auralis.core.designsystem.rememberSystemReduceMotion
 import com.auralis.core.domain.ServerAccount
+import com.auralis.feature.assistant.AssistantCoordinator
 import com.auralis.feature.home.HomeLayoutEditScreen
-import com.auralis.feature.server.ServerFormScreen
 import com.auralis.feature.server.ServerListScreen
 import com.auralis.feature.settings.AiSettingsPage
 import com.auralis.feature.settings.SettingsScreen
 
 /**
- * TV single-activity composition root. The shell stays alive behind route overlays so focus,
- * selected section and browse state survive settings/server management round-trips.
+ * TV single-activity composition root.
+ *
+ * Full-screen routes are mutually exclusive in the focus tree. Shell/settings keep their own
+ * saveable state buckets while they are temporarily removed, so entering a detail route no longer
+ * forces the user to start again from the top-level destination. Hardware Back is handled here for
+ * top-level TV routes; only the first-run server picker may fall through to Activity exit.
  */
 class TvMainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -69,6 +86,12 @@ private sealed interface Route {
 private fun AppRoot(graph: AuralisGraph) {
     var route by remember { mutableStateOf<Route>(Route.Boot) }
     var shellReady by remember { mutableStateOf(false) }
+    var startRecommendationIndexToken by remember { mutableIntStateOf(0) }
+    val shellStateHolder = rememberSaveableStateHolder()
+    val settingsStateHolder = rememberSaveableStateHolder()
+    val scope = rememberCoroutineScope()
+    val assistantCoordinator = remember(graph, scope) { AssistantCoordinator(graph, scope) }
+    val recommendationIndexState by assistantCoordinator.recommendationIndex.collectAsState()
 
     LaunchedEffect(graph) {
         runCatching { graph.bootstrapFromLocal() }
@@ -79,18 +102,46 @@ private fun AppRoot(graph: AuralisGraph) {
         route = if (shellReady) Route.Shell else Route.ManageServers(showBack = false)
     }
 
-    Box(Modifier.fillMaxSize()) {
-        if (shellReady && route != Route.Boot) {
-            TvShell(
-                graph = graph,
-                onOpenSettings = { route = Route.Settings },
-                onOpenServers = { route = Route.ManageServers(showBack = true) },
-            )
+    val currentRoute = route
+    val handleBackAtRoot = when (currentRoute) {
+        Route.Boot, Route.Shell -> false
+        is Route.ManageServers -> currentRoute.showBack
+        else -> true
+    }
+    BackHandler(enabled = handleBackAtRoot) {
+        route = when (val current = route) {
+            Route.Settings -> Route.Shell
+            Route.AiSettings -> Route.Settings
+            Route.HomeLayoutEdit -> Route.Settings
+            is Route.ManageServers -> if (current.showBack) Route.Shell else current
+            is Route.AddServer -> Route.ManageServers(showBack = shellReady)
+            is Route.EditServer -> Route.ManageServers(showBack = true)
+            Route.Boot, Route.Shell -> current
         }
+    }
 
+    Box(Modifier.fillMaxSize()) {
         when (val current = route) {
             Route.Boot -> TvSplash()
-            Route.Shell -> Unit
+
+            Route.Shell -> {
+                if (shellReady) {
+                    shellStateHolder.SaveableStateProvider("tv-shell") {
+                        TvShell(
+                            graph = graph,
+                            assistantCoordinator = assistantCoordinator,
+                            onOpenSettings = { route = Route.Settings },
+                            onOpenServers = { route = Route.ManageServers(showBack = true) },
+                            onOpenAiSettings = { route = Route.AiSettings },
+                            recommendationIndexState = recommendationIndexState,
+                            startRecommendationIndexToken = startRecommendationIndexToken,
+                            onRecommendationIndexStartConsumed = { startRecommendationIndexToken = 0 },
+                        )
+                    }
+                } else {
+                    TvSplash()
+                }
+            }
 
             is Route.ManageServers -> ServerListScreen(
                 graph = graph,
@@ -103,7 +154,7 @@ private fun AppRoot(graph: AuralisGraph) {
                 onBack = if (current.showBack) ({ route = Route.Shell }) else null,
             )
 
-            is Route.AddServer -> ServerFormScreen(
+            is Route.AddServer -> TvServerFormScreen(
                 graph = graph,
                 existing = null,
                 onSuccess = {
@@ -115,7 +166,7 @@ private fun AppRoot(graph: AuralisGraph) {
                 },
             )
 
-            is Route.EditServer -> ServerFormScreen(
+            is Route.EditServer -> TvServerFormScreen(
                 graph = graph,
                 existing = current.account,
                 onSuccess = {
@@ -125,22 +176,35 @@ private fun AppRoot(graph: AuralisGraph) {
                 onBack = { route = Route.ManageServers(showBack = true) },
             )
 
-            Route.Settings -> SettingsScreen(
-                graph = graph,
-                onBack = { route = Route.Shell },
-                onOpenServers = { route = Route.ManageServers(showBack = true) },
-                onEditHomeLayout = { route = Route.HomeLayoutEdit },
-                onOpenAiSettings = { route = Route.AiSettings },
-            )
+            Route.Settings -> settingsStateHolder.SaveableStateProvider("tv-settings") {
+                SettingsScreen(
+                    graph = graph,
+                    onBack = { route = Route.Shell },
+                    onOpenServers = { route = Route.ManageServers(showBack = true) },
+                    onEditHomeLayout = { route = Route.HomeLayoutEdit },
+                    onOpenAiSettings = { route = Route.AiSettings },
+                    recommendationIndexState = recommendationIndexState,
+                    onStartRecommendationIndex = {
+                        assistantCoordinator.startRecommendationIndexBuild()
+                        startRecommendationIndexToken += 1
+                        route = Route.Shell
+                    },
+                    onCancelRecommendationIndex = assistantCoordinator::cancelRecommendationIndexBuild,
+                    onRefreshRecommendationIndex = assistantCoordinator::refreshRecommendationIndexStatus,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
 
             Route.AiSettings -> AiSettingsPage(
                 graph = graph,
                 onBack = { route = Route.Settings },
+                modifier = Modifier.fillMaxSize(),
             )
 
             Route.HomeLayoutEdit -> HomeLayoutEditScreen(
                 graph = graph,
                 onBack = { route = Route.Settings },
+                modifier = Modifier.fillMaxSize(),
             )
         }
     }
@@ -155,10 +219,19 @@ private fun TvSplash() {
             .background(colors.background),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = "Auralis TV",
-            style = MaterialTheme.typography.headlineMedium,
-            color = colors.primaryText,
-        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Image(
+                painter = painterResource(R.drawable.auralis_apple_icon),
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.size(112.dp),
+            )
+            Spacer(Modifier.height(18.dp))
+            Text(
+                text = "Auralis",
+                style = MaterialTheme.typography.headlineMedium,
+                color = colors.primaryText,
+            )
+        }
     }
 }
