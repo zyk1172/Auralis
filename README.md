@@ -140,5 +140,6 @@ Fork 可以依法修改和重新分发 GPL 源码，但发行版应使用自己�
 
 ## Project status
 
-本次治理目标是 open-source readiness，不自动发布 GitHub Release，不自动合并 pull request，
-也不改变仓库可见性。正式版本号、设备验收和真实服务集成应在独立的发布审查中确认。
+本项目的测试发布 workflow 会在推送版本 tag 后生成 GitHub pre-release；它不会自动合并
+pull request，也不改变仓库可见性。正式版本号、设备验收和真实服务集成仍应在独立的发布
+审查中确认。

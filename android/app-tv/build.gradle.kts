@@ -10,11 +10,11 @@ android {
     namespace = "com.auralis.tv"
     compileSdk = 34
 
-    val releaseVersionName = providers.gradleProperty("auralisVersionName")
+    val buildVersionName = providers.gradleProperty("auralisVersionName")
         .orElse(providers.environmentVariable("GITHUB_RUN_NUMBER").map { "0.1.0-ci.$it" })
         .orElse("0.1.0")
         .get()
-    val releaseVersionCode = providers.gradleProperty("auralisVersionCode")
+    val buildVersionCode = providers.gradleProperty("auralisVersionCode")
         .orElse(providers.environmentVariable("GITHUB_RUN_NUMBER"))
         .orElse("1")
         .get()
@@ -22,36 +22,14 @@ android {
         ?.also { require(it > 0) { "auralisVersionCode must be a positive integer" } }
         ?: error("auralisVersionCode must be a positive integer")
 
-    val releaseKeystoreFile = providers.environmentVariable("ANDROID_KEYSTORE_FILE").orNull
-    val releaseKeystorePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull
-    val releaseKeyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull
-    val releaseKeyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").orNull
-    val hasReleaseSigning = listOf(
-        releaseKeystoreFile,
-        releaseKeystorePassword,
-        releaseKeyAlias,
-        releaseKeyPassword,
-    ).all { !it.isNullOrBlank() }
-
-    if (hasReleaseSigning) {
-        signingConfigs {
-            create("release") {
-                storeFile = file(releaseKeystoreFile!!)
-                storePassword = releaseKeystorePassword
-                keyAlias = releaseKeyAlias
-                keyPassword = releaseKeyPassword
-            }
-        }
-    }
-
     defaultConfig {
         applicationId = "com.auralis.tv"
         minSdk = 26
         targetSdk = 34
         // CI artifacts are handed directly to physical TV testers. A monotonically increasing
         // versionCode lets Android treat the next artifact as an update instead of a reinstall.
-        versionCode = releaseVersionCode
-        versionName = releaseVersionName
+        versionCode = buildVersionCode
+        versionName = buildVersionName
     }
 
     compileOptions {
@@ -65,13 +43,6 @@ android {
     buildFeatures { compose = true }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
-    }
-    buildTypes {
-        getByName("release") {
-            if (hasReleaseSigning) {
-                signingConfig = signingConfigs.getByName("release")
-            }
-        }
     }
 }
 
