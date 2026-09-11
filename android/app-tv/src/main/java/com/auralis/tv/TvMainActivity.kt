@@ -6,9 +6,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -23,6 +28,9 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.dp
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.AuralisTheme
 import com.auralis.core.designsystem.AuralisThemeController
@@ -183,8 +191,6 @@ private fun AppRoot(graph: AuralisGraph) {
                     },
                     onCancelRecommendationIndex = assistantCoordinator::cancelRecommendationIndexBuild,
                     onRefreshRecommendationIndex = assistantCoordinator::refreshRecommendationIndexStatus,
-                    // The settings surface itself must cover the complete television viewport.
-                    // Individual rows already own their readable-content insets.
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -213,10 +219,19 @@ private fun TvSplash() {
             .background(colors.background),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = "Auralis TV",
-            style = MaterialTheme.typography.headlineMedium,
-            color = colors.primaryText,
-        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Image(
+                painter = painterResource(R.drawable.auralis_apple_icon),
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.size(112.dp),
+            )
+            Spacer(Modifier.height(18.dp))
+            Text(
+                text = "Auralis",
+                style = MaterialTheme.typography.headlineMedium,
+                color = colors.primaryText,
+            )
+        }
     }
 }
