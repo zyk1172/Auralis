@@ -10,12 +10,24 @@ android {
     namespace = "com.auralis.mobile"
     compileSdk = 36
 
+    val buildVersionName = providers.gradleProperty("auralisVersionName")
+        .orElse(providers.environmentVariable("GITHUB_RUN_NUMBER").map { "0.1.0-ci.$it" })
+        .orElse("0.1.0")
+        .get()
+    val buildVersionCode = providers.gradleProperty("auralisVersionCode")
+        .orElse(providers.environmentVariable("GITHUB_RUN_NUMBER"))
+        .orElse("1")
+        .get()
+        .toIntOrNull()
+        ?.also { require(it > 0) { "auralisVersionCode must be a positive integer" } }
+        ?: error("auralisVersionCode must be a positive integer")
+
     defaultConfig {
         applicationId = "com.auralis.mobile"
         minSdk = 26
         targetSdk = 36
-        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
-        versionName = System.getenv("GITHUB_RUN_NUMBER")?.let { "0.1.0-ci.$it" } ?: "0.1.0"
+        versionCode = buildVersionCode
+        versionName = buildVersionName
     }
 
     compileOptions {
