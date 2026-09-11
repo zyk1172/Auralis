@@ -14,8 +14,10 @@ android {
         applicationId = "com.auralis.tv"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI artifacts are handed directly to physical TV testers. A monotonically increasing
+        // versionCode lets Android treat the next artifact as an update instead of a reinstall.
+        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionName = System.getenv("GITHUB_RUN_NUMBER")?.let { "0.1.0-ci.$it" } ?: "0.1.0"
     }
 
     compileOptions {
