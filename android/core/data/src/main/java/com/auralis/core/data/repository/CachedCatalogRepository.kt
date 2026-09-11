@@ -68,6 +68,17 @@ class CachedCatalogRepository(
     override fun observeFavoriteTracks(serverId: ServerId?): Flow<List<Track>> =
         cached(favorites, serverId) { delegate.observeFavoriteTracks(serverId) }
 
+    /**
+     * Keep the lightweight Home invalidation signal available through the cache facade.
+     *
+     * This signal intentionally remains count-based in Room (tracks/albums/playlists/favorites/
+     * history/downloads) and does not collect or decode the replayed metadata lists. Home can
+     * therefore rebuild its derived shelves when catalog state changes without bypassing the
+     * public repository object or defeating the metadata cache.
+     */
+    fun homeChangeSignals(serverId: ServerId?): Flow<Unit> =
+        delegate.homeChangeSignals(serverId)
+
     /** Concrete helper retained for Library's explicit remote genre refresh. */
     suspend fun mergeGenres(serverId: ServerId, values: List<Genre>) {
         delegate.mergeGenres(serverId, values)
