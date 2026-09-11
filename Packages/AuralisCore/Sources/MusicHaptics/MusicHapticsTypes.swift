@@ -350,9 +350,9 @@ public struct MusicHapticsTimeline: Codable, Hashable, Sendable {
     /// changes. Stored timelines from an older algorithm deliberately become
     /// cache misses so playback cannot silently mix old and new tactile
     /// semantics.
-    /// v2.5 isolates texture controls from attacks and makes low-power DSP
-    /// adaptation track elapsed audio time. Reanalyze older cached timelines.
-    public static let algorithmVersion = "auralis-haptics-v2.5"
+    /// v3 localizes attacks inside overlapped FFT frames and maps transient
+    /// timbre into a compressed tactile intensity/sharpness space.
+    public static let algorithmVersion = "auralis-haptics-v3.0"
     public var formatVersion: Int
     public var algorithmVersion: String
     public var identity: MusicHapticsIdentity

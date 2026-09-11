@@ -365,7 +365,25 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         let onsetThreshold = adaptiveThreshold(onsetHistory, multiplier: 2.8, floor: 0.0005)
         let rmsThreshold = adaptiveThreshold(rmsHistory, multiplier: 2.2, floor: 0.004)
         let isTransient = onset >= onsetThreshold && safeRMS >= rmsThreshold && safeRMS > 0.004
-        let beat = beatTracker.update(time: time, onset: onset, threshold: onsetThreshold, energy: safeRMS)
+        let hasBeatOnsetCandidate = onset >= onsetThreshold && safeRMS > 0.003
+        let frameCenterTime = time + Double(frameSize) / (2 * sampleRate)
+        let localizedAttackTime = hasBeatOnsetCandidate
+            ? time + MusicHapticsAttackShaper.localizedAttackOffset(
+                samples: frame,
+                sampleRate: sampleRate,
+                hopSize: hopSize,
+                frameStride: configuration.fftFrameStride
+            )
+            : frameCenterTime
+        // Beat phase must use the audible attack, not the leading edge of the
+        // overlapped FFT window. Otherwise a 1024/256 analysis grid can make
+        // tactile attacks lead the music by a perceptible fraction of a beat.
+        let beat = beatTracker.update(
+            time: localizedAttackTime,
+            onset: onset,
+            threshold: onsetThreshold,
+            energy: safeRMS
+        )
         let classAndShape = classify(
             bands: bands,
             onset: onset,
@@ -404,13 +422,23 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
                 1,
                 max(0, 0.10 + energyPosition * 0.42 + attackStrength * 0.34 + beatAccent)
             )
-            let intensity = Float(pow(Double(perceptualBase), 0.85))
-            let duration: TimeInterval = eventClass == .highPercussion ? 0.045 : 0.085
+            let tactileShape = MusicHapticsAttackShaper.shape(
+                classification: eventClass,
+                baseSharpness: classAndShape.sharpness,
+                attackStrength: attackStrength,
+                spectralCentroid: centroid,
+                spectralFlatness: flatness,
+                beat: beat
+            )
+            let intensity = min(
+                1,
+                Float(pow(Double(perceptualBase), 0.85)) * tactileShape.intensityScale
+            )
             events.append(MusicHapticsEvent(
-                time: time,
-                duration: duration,
+                time: localizedAttackTime,
+                duration: tactileShape.duration,
                 intensity: intensity,
-                sharpness: classAndShape.sharpness,
+                sharpness: tactileShape.sharpness,
                 kind: .transient,
                 classification: eventClass
             ))
@@ -460,11 +488,19 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
             && beat.isBeat
             && beat.confidence >= 0.45
         if climax {
+            let climaxShape = MusicHapticsAttackShaper.shape(
+                classification: .climax,
+                baseSharpness: min(0.78, classAndShape.sharpness + 0.06),
+                attackStrength: min(1, onset / max(onsetThreshold, 0.0005) - 1),
+                spectralCentroid: centroid,
+                spectralFlatness: flatness,
+                beat: beat
+            )
             events.append(MusicHapticsEvent(
-                time: time,
-                duration: 0.11,
-                intensity: 0.60,
-                sharpness: min(0.78, classAndShape.sharpness + 0.06),
+                time: localizedAttackTime,
+                duration: climaxShape.duration,
+                intensity: 0.60 * climaxShape.intensityScale,
+                sharpness: climaxShape.sharpness,
                 kind: .transient,
                 classification: .climax,
                 climaxAmount: 0.60
