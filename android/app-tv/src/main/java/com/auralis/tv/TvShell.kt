@@ -44,7 +44,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -77,9 +76,10 @@ import kotlinx.coroutines.yield
 /**
  * Real-device TV shell.
  *
- * Full-player/content routes are mutually exclusive. The content focus group also has a restorer:
- * entering an album/artist detail and backing out returns to the card that opened it instead of
- * jumping to the rail or the first card. Each top-level destination owns an independent saveable
+ * Full-player/content routes are mutually exclusive. Focus restoration is explicit rather than
+ * relying on Compose's experimental focusRestorer pinning across changing Lazy layouts: several TV
+ * Compose versions can double-release a pinned item while crossing rail/content, which manifests as
+ * a process crash on physical devices. Each top-level destination owns an independent saveable
  * state bucket so an Assistant draft cannot be reused by Home/Library/Search when the branch swaps.
  */
 @Composable
@@ -211,6 +211,10 @@ fun TvShell(
     fun openBrowse(destination: BrowseDestination) {
         browseDestination = destination
         section = TvSection.Library
+        // The card that opened a detail disappears in the next composition. Explicitly move the
+        // focus into the new content tree; otherwise Android's fallback search often chooses the
+        // still-mounted navigation rail.
+        pendingFocusRestore = TvFocusRestoreTarget.Content
     }
 
     fun selectSection(target: TvSection) {
@@ -266,7 +270,6 @@ fun TvShell(
                         .weight(1f)
                         .fillMaxHeight()
                         .focusRequester(contentFocus)
-                        .focusRestorer()
                         .focusGroup(),
                 ) {
                     sectionStateHolder.SaveableStateProvider("tv-section-${section.name}") {
@@ -358,8 +361,6 @@ private fun TvNavigationRail(
             .padding(horizontal = 12.dp, vertical = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // Crop a few percent from the master-artwork edge. Icon Composer normally applies its own
-        // mask/fill; showing the raw artwork edge-to-edge on a white rail exposes that source rim.
         Box(
             modifier = Modifier
                 .size(56.dp)
@@ -370,21 +371,13 @@ private fun TvNavigationRail(
                 painter = painterResource(R.drawable.auralis_apple_icon),
                 contentDescription = stringResource(R.string.app_name),
                 contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        scaleX = 1.08f
-                        scaleY = 1.08f
-                    },
+                modifier = Modifier.fillMaxSize(),
             )
         }
         Spacer(Modifier.height(6.dp))
         Text("Auralis", style = MaterialTheme.typography.labelMedium, color = colors.secondaryText)
         Spacer(Modifier.height(18.dp))
 
-        // Home / Library / Search / Assistant / Now Playing are one five-row system. Keeping them
-        // in the same column with exactly the same height prevents the bottom player row from being
-        // compressed by a weighted spacer on shorter 720p/overscanned televisions.
         Column(verticalArrangement = Arrangement.spacedBy(itemGap)) {
             TvSection.entries.forEach { entry ->
                 TvRailItem(
