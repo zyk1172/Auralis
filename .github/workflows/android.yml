@@ -55,6 +55,16 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # GitHub hosted runners otherwise generate a new ~/.android/debug.keystore on every run.
+      # Android correctly rejects that as a different signer, forcing TV testers to uninstall and
+      # lose server/settings state. This cache contains only the standard disposable debug key and
+      # intentionally has no production signing value.
+      - name: Restore stable Android debug signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: auralis-android-debug-keystore-v1
+
       - name: Set up Gradle (cached)
         uses: gradle/actions/setup-gradle@v3
 
