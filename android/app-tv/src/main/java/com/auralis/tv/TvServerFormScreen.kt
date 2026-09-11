@@ -43,12 +43,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -75,8 +77,8 @@ import kotlinx.coroutines.yield
  *
  * Remote focus and text editing are separate states: moving onto a field only selects it; pressing
  * OK enters edit mode and opens the IME. Back exits the IME first and restores focus to the same
- * field. This mirrors native Android TV forms and prevents the keyboard from opening while users
- * merely navigate through the page.
+ * field. The last selected field is saveable, so an IME/window recreation never sends the remote
+ * back to the first field.
  */
 @Composable
 fun TvServerFormScreen(
@@ -92,6 +94,7 @@ fun TvServerFormScreen(
     val keyboard = LocalSoftwareKeyboardController.current
     val fieldFocus = remember { List(5) { FocusRequester() } }
     var editingField by remember { mutableIntStateOf(-1) }
+    var lastFocusedField by rememberSaveable { mutableIntStateOf(0) }
     val state = remember(graph, existing) {
         ServerFormState(
             context = context,
@@ -106,6 +109,7 @@ fun TvServerFormScreen(
     fun leaveEditing() {
         val previous = editingField
         if (previous < 0) return
+        lastFocusedField = previous
         editingField = -1
         keyboard?.hide()
         scope.launch {
@@ -119,7 +123,7 @@ fun TvServerFormScreen(
     }
     LaunchedEffect(Unit) {
         yield()
-        runCatching { fieldFocus.first().requestFocus() }
+        runCatching { fieldFocus[lastFocusedField.coerceIn(0, fieldFocus.lastIndex)].requestFocus() }
     }
 
     Column(
@@ -172,7 +176,8 @@ fun TvServerFormScreen(
                     enabled = !state.busy,
                     editing = editingField == 0,
                     containerFocus = fieldFocus[0],
-                    onBeginEditing = { editingField = 0 },
+                    onFocused = { lastFocusedField = 0 },
+                    onBeginEditing = { lastFocusedField = 0; editingField = 0 },
                     onFinishEditing = ::leaveEditing,
                 )
                 TvServerField(
@@ -184,7 +189,8 @@ fun TvServerFormScreen(
                     enabled = !state.busy,
                     editing = editingField == 1,
                     containerFocus = fieldFocus[1],
-                    onBeginEditing = { editingField = 1 },
+                    onFocused = { lastFocusedField = 1 },
+                    onBeginEditing = { lastFocusedField = 1; editingField = 1 },
                     onFinishEditing = ::leaveEditing,
                 )
                 TvServerField(
@@ -195,7 +201,8 @@ fun TvServerFormScreen(
                     enabled = !state.busy,
                     editing = editingField == 2,
                     containerFocus = fieldFocus[2],
-                    onBeginEditing = { editingField = 2 },
+                    onFocused = { lastFocusedField = 2 },
+                    onBeginEditing = { lastFocusedField = 2; editingField = 2 },
                     onFinishEditing = ::leaveEditing,
                 )
                 TvServerField(
@@ -210,7 +217,8 @@ fun TvServerFormScreen(
                     enabled = !state.busy,
                     editing = editingField == 3,
                     containerFocus = fieldFocus[3],
-                    onBeginEditing = { editingField = 3 },
+                    onFocused = { lastFocusedField = 3 },
+                    onBeginEditing = { lastFocusedField = 3; editingField = 3 },
                     onFinishEditing = ::leaveEditing,
                 )
                 TvServerField(
@@ -222,7 +230,8 @@ fun TvServerFormScreen(
                     enabled = !state.busy,
                     editing = editingField == 4,
                     containerFocus = fieldFocus[4],
-                    onBeginEditing = { editingField = 4 },
+                    onFocused = { lastFocusedField = 4 },
+                    onBeginEditing = { lastFocusedField = 4; editingField = 4 },
                     onFinishEditing = ::leaveEditing,
                 )
 
@@ -294,6 +303,7 @@ private fun TvServerField(
     label: String,
     editing: Boolean,
     containerFocus: FocusRequester,
+    onFocused: () -> Unit,
     onBeginEditing: () -> Unit,
     onFinishEditing: () -> Unit,
     placeholder: String? = null,
@@ -323,6 +333,7 @@ private fun TvServerField(
         modifier = Modifier
             .fillMaxWidth()
             .focusRequester(containerFocus)
+            .onFocusChanged { if (it.hasFocus) onFocused() }
             .tvFocusableClick(shape = shape, enabled = enabled && !editing, onClick = onBeginEditing)
             .graphicsLayer {
                 scaleX = scale
