@@ -7,6 +7,24 @@ import LocalCatalog
 import MusicHaptics
 import SwiftUI
 import ThemeEngine
+#if os(iOS)
+import UIKit
+#endif
+
+private extension View {
+    @ViewBuilder
+    func iPadNowPlayingPresentationSizing(_ enabled: Bool) -> some View {
+#if os(iOS)
+        if enabled {
+            self.presentationSizing(.page)
+        } else {
+            self
+        }
+#else
+        self
+#endif
+    }
+}
 
 /// 迷你播放条内部内容（不含背景与外壳）。iOS 双层 Dock 共用同一套布局，
 /// 外层尺寸、玻璃材质与边距由调用方（BottomGlassBarShell）统一决定。
@@ -249,6 +267,26 @@ struct NowPlayingView: View {
         self.theme = theme
     }
 
+    private var isPad: Bool {
+#if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .pad
+#else
+        false
+#endif
+    }
+
+    private var nowPlayingContentMaxWidth: CGFloat {
+        if isPad { return 900 }
+        return horizontalSizeClass == .regular ? IOSLayoutMetrics.playerContentMaxWidth : .infinity
+    }
+
+    private func artworkSizeCap(for availableWidth: CGFloat) -> CGFloat {
+        guard isPad else { return 350 }
+        // iPad 不按具体型号分支，而按播放内容实际拿到的宽度连续缩放。
+        // mini、分屏等窄窗口会自然靠近 350pt；大尺寸 iPad 最多放大到 460pt。
+        return min(460, max(350, availableWidth * 0.58))
+    }
+
     var body: some View {
         ZStack {
             LinearGradient(
@@ -269,12 +307,14 @@ struct NowPlayingView: View {
                 }
             }
             .padding(AuralisSpacing.large)
-            // iPad 宽屏可读宽度：内容居中并限宽（IOSLayoutMetrics.playerContentMaxWidth），
-            // 避免整页被拉成一条横贯全屏的宽条；iPhone 紧凑布局保持原样（不限宽）。
-            // 这是同一 View 的局部宽度自适应，不切换 UI 架构。
-            .frame(maxWidth: horizontalSizeClass == .regular ? IOSLayoutMetrics.playerContentMaxWidth : .infinity)
+            // 900pt 只是大尺寸 iPad 的内容上限；较小 iPad、分屏和台前调度窗口
+            // 会由 SwiftUI 根据实际可用宽度自然收缩，不依赖具体设备型号。
+            .frame(maxWidth: nowPlayingContentMaxWidth)
         }
         .foregroundStyle(theme.colorTokens.primaryText.color)
+        // iOS 18+ 的默认 automatic sizing 在 iPad 会收敛为较窄的 form sheet。
+        // 仅 iPad 改为系统 page sizing，扩大播放页同时保留原生下拉关闭手势。
+        .iPadNowPlayingPresentationSizing(isPad)
         .sheet(isPresented: $isPlaylistSheetPresented) {
             AddToPlaylistSheet(model: model, theme: theme, track: model.currentTrack)
         }
@@ -371,13 +411,17 @@ struct NowPlayingView: View {
     /// 三个页面只替换上方内容区；曲目信息、进度和控制区始终是同一套视图固定在底部。
     /// 这样切到歌词 / 队列时不会把整个播放界面换走，布局也不会上下跳动。
     private func playbackContent(in geo: GeometryProxy) -> some View {
+        // iPhone 保持既有按高度收紧的规则；iPad 额外根据当前窗口宽度判断。
+        // 因此 iPad mini、Split View、台前调度窄窗口都会自动进入更紧凑的控制区。
         let compactHeight = geo.size.height < 650
-        let sectionSpacing: CGFloat = compactHeight ? 10 : 15
-        let playButtonSize: CGFloat = compactHeight ? 56 : 64
-        let estimatedControlHeight: CGFloat = compactHeight ? 264 : 294
+        let compactPadWidth = isPad && geo.size.width < 620
+        let compactLayout = compactHeight || compactPadWidth
+        let sectionSpacing: CGFloat = compactLayout ? 10 : 15
+        let playButtonSize: CGFloat = compactLayout ? 56 : 64
+        let estimatedControlHeight: CGFloat = compactLayout ? 264 : 294
         let heroHeight = max(geo.size.height - estimatedControlHeight, 190)
-        // 保留海报主体感，但四周留出明确呼吸空间，避免贴近分段控件和曲目信息。
-        let artworkSide = min(350, geo.size.width * 0.84, heroHeight * 0.88)
+        let maxArtworkSide = artworkSizeCap(for: geo.size.width)
+        let artworkSide = min(maxArtworkSide, geo.size.width * 0.84, heroHeight * 0.88)
         // Glow 画布以封面为中心向外扩散；允许的最大值不超过页面可用高度，
         // 避免光效被 TabView 页面边缘裁成方框，同时封面本体尺寸不受影响。
         let glowCanvasSize = max(0, heroHeight - AuralisSpacing.medium * 2)
