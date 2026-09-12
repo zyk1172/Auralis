@@ -280,6 +280,13 @@ struct NowPlayingView: View {
         return horizontalSizeClass == .regular ? IOSLayoutMetrics.playerContentMaxWidth : .infinity
     }
 
+    private func artworkSizeCap(for availableWidth: CGFloat) -> CGFloat {
+        guard isPad else { return 350 }
+        // iPad 不按具体型号分支，而按播放内容实际拿到的宽度连续缩放。
+        // mini、分屏等窄窗口会自然靠近 350pt；大尺寸 iPad 最多放大到 460pt。
+        return min(460, max(350, availableWidth * 0.58))
+    }
+
     var body: some View {
         ZStack {
             LinearGradient(
@@ -300,8 +307,8 @@ struct NowPlayingView: View {
                 }
             }
             .padding(AuralisSpacing.large)
-            // iPad 使用更大的可读宽度以适配平板播放页；iPhone 维持既有布局与尺寸。
-            // 仍保留上限，避免大尺寸 iPad 横屏时进度条和控制区被无限横向拉伸。
+            // 900pt 只是大尺寸 iPad 的内容上限；较小 iPad、分屏和台前调度窗口
+            // 会由 SwiftUI 根据实际可用宽度自然收缩，不依赖具体设备型号。
             .frame(maxWidth: nowPlayingContentMaxWidth)
         }
         .foregroundStyle(theme.colorTokens.primaryText.color)
@@ -404,13 +411,16 @@ struct NowPlayingView: View {
     /// 三个页面只替换上方内容区；曲目信息、进度和控制区始终是同一套视图固定在底部。
     /// 这样切到歌词 / 队列时不会把整个播放界面换走，布局也不会上下跳动。
     private func playbackContent(in geo: GeometryProxy) -> some View {
+        // iPhone 保持既有按高度收紧的规则；iPad 额外根据当前窗口宽度判断。
+        // 因此 iPad mini、Split View、台前调度窄窗口都会自动进入更紧凑的控制区。
         let compactHeight = geo.size.height < 650
-        let sectionSpacing: CGFloat = compactHeight ? 10 : 15
-        let playButtonSize: CGFloat = compactHeight ? 56 : 64
-        let estimatedControlHeight: CGFloat = compactHeight ? 264 : 294
+        let compactPadWidth = isPad && geo.size.width < 620
+        let compactLayout = compactHeight || compactPadWidth
+        let sectionSpacing: CGFloat = compactLayout ? 10 : 15
+        let playButtonSize: CGFloat = compactLayout ? 56 : 64
+        let estimatedControlHeight: CGFloat = compactLayout ? 264 : 294
         let heroHeight = max(geo.size.height - estimatedControlHeight, 190)
-        // iPad 利用更大的播放页空间放大封面；iPhone 继续使用原来的 350pt 上限。
-        let maxArtworkSide: CGFloat = isPad ? 460 : 350
+        let maxArtworkSide = artworkSizeCap(for: geo.size.width)
         let artworkSide = min(maxArtworkSide, geo.size.width * 0.84, heroHeight * 0.88)
         // Glow 画布以封面为中心向外扩散；允许的最大值不超过页面可用高度，
         // 避免光效被 TabView 页面边缘裁成方框，同时封面本体尺寸不受影响。
