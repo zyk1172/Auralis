@@ -1,0 +1,721 @@
+name: Local music PR2 bootstrap
+
+on:
+  push:
+    branches: [feat/local-music-playback]
+    paths: [.github/workflows/local-music-pr2-bootstrap.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/local-music-playback
+          fetch-depth: 0
+      - name: Apply PR2
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def write(path, content):
+              p=Path(path); p.parent.mkdir(parents=True, exist_ok=True); p.write_text(content, encoding='utf-8')
+          def replace(path, old, new, count=1):
+              p=Path(path); text=p.read_text(encoding='utf-8')
+              if old not in text: raise SystemExit(f'needle not found {path}: {old[:120]!r}')
+              p.write_text(text.replace(old,new,count), encoding='utf-8')
+
+          # Apple: turn TrackCache into the app-managed Downloads source under LocalMusic.
+          p=Path('Packages/AuralisCore/Sources/OfflineManager/TrackCacheStore.swift')
+          text=p.read_text(encoding='utf-8')
+          text=text.replace('''    private let directory: URL\n    private let indexURL: URL\n    /// 组合键描述（"serverID:trackID"）→ 缓存文件名\n    private var index: [String: String] = [:]\n''','''    public struct PromotedTrackEntry: Hashable, Sendable {\n        public let cacheID: TrackCacheID\n        public let localTrackID: TrackID\n        public let fileURL: URL\n\n        public init(cacheID: TrackCacheID, localTrackID: TrackID, fileURL: URL) {\n            self.cacheID = cacheID\n            self.localTrackID = localTrackID\n            self.fileURL = fileURL\n        }\n    }\n\n    /// App-managed local library source used for server downloads. The old remote GlobalID\n    /// remains an alias; the local ID is canonical for unified-library presentation.\n    public static let downloadsLibraryID = LocalLibraryID(rawValue: "downloads")\n    public static let localNamespace = ServerID(rawValue: "auralis-local")\n\n    private let directory: URL\n    private let indexURL: URL\n    private let promotionsURL: URL\n    /// 组合键描述（"serverID:trackID"）→ 本地文件名。\n    private var index: [String: String] = [:]\n    /// remote GlobalID description → canonical local TrackID raw value.\n    private var promotions: [String: String] = [:]\n''')
+          old_init='''        let manager = FileManager.default\n        let base = directory ?? {\n            let support = manager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first\n                ?? manager.temporaryDirectory\n            return support.appendingPathComponent("Auralis/TrackCache", isDirectory: true)\n        }()\n        self.directory = base\n        self.indexURL = base.appendingPathComponent("index.json")\n        try? manager.createDirectory(at: base, withIntermediateDirectories: true)\n        if let data = try? Data(contentsOf: indexURL),\n'''
+          new_init='''        let manager = FileManager.default\n        let support = manager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first\n            ?? manager.temporaryDirectory\n        let base: URL\n        if let directory {\n            base = directory\n        } else {\n            let localMusicRoot = support.appendingPathComponent("Auralis/LocalMusic", isDirectory: true)\n            let downloads = localMusicRoot.appendingPathComponent("Downloads", isDirectory: true)\n            let legacy = support.appendingPathComponent("Auralis/TrackCache", isDirectory: true)\n            // One-time in-place migration. Existing offline files are not copied or re-downloaded.\n            if !manager.fileExists(atPath: downloads.path), manager.fileExists(atPath: legacy.path) {\n                try? manager.createDirectory(at: localMusicRoot, withIntermediateDirectories: true)\n                try? manager.moveItem(at: legacy, to: downloads)\n            }\n            base = downloads\n        }\n        self.directory = base\n        self.indexURL = base.appendingPathComponent("index.json")\n        self.promotionsURL = base.appendingPathComponent("identity-promotions.json")\n        try? manager.createDirectory(at: base, withIntermediateDirectories: true)\n        if let data = try? Data(contentsOf: indexURL),\n'''
+          if old_init not in text: raise SystemExit('TrackCache init needle missing')
+          text=text.replace(old_init,new_init,1)
+          needle='''            if let migrated = try? JSONEncoder().encode([String: String]()) {\n                try? migrated.write(to: indexURL, options: .atomic)\n            }\n        }\n    }\n'''
+          repl='''            if let migrated = try? JSONEncoder().encode([String: String]()) {\n                try? migrated.write(to: indexURL, options: .atomic)\n            }\n        }\n        if let data = try? Data(contentsOf: promotionsURL),\n           let decoded = try? JSONDecoder().decode([String: String].self, from: data) {\n            promotions = decoded\n        }\n        // Older downloads gain deterministic local identities without touching audio bytes.\n        var promotionChanged = false\n        for key in index.keys where Self.cacheID(from: key) != nil && promotions[key] == nil {\n            promotions[key] = Self.promotedTrackIDRaw(forGlobalKey: key)\n            promotionChanged = true\n        }\n        if promotionChanged { try? persistPromotions() }\n    }\n'''
+          if needle not in text: raise SystemExit('TrackCache init end needle missing')
+          text=text.replace(needle,repl,1)
+          # Add promotion registration after successful index writes in both store paths.
+          text=text.replace('''            try persistIndex()\n        } catch {\n            index[id.description] = previousName\n''','''            try persistIndex()\n            try registerPromotion(for: id)\n        } catch {\n            index[id.description] = previousName\n''',2)
+          # Remove promotion on per-track remove.
+          text=text.replace('''        let previousName = index[id.description]\n        index[id.description] = nil\n        do {\n            try persistIndex()\n        } catch {\n            index[id.description] = previousName\n            throw error\n        }\n''','''        let previousName = index[id.description]\n        let previousPromotion = promotions[id.description]\n        index[id.description] = nil\n        promotions[id.description] = nil\n        do {\n            try persistIndex()\n            try persistPromotions()\n        } catch {\n            index[id.description] = previousName\n            promotions[id.description] = previousPromotion\n            throw error\n        }\n''',1)
+          # removeAll server: clear promotions.
+          text=text.replace('''            index[key] = nil\n        }\n        try? persistIndex()\n    }\n''','''            index[key] = nil\n            promotions[key] = nil\n        }\n        try? persistIndex()\n        try? persistPromotions()\n    }\n''',1)
+          # removeAll: save previous promotions and clear.
+          text=text.replace('''    public func removeAll() throws {\n        let previousIndex = index\n''','''    public func removeAll() throws {\n        let previousIndex = index\n        let previousPromotions = promotions\n''',1)
+          text=text.replace('''        index = [:]\n        do {\n            try persistIndex()\n        } catch {\n            index = previousIndex\n            throw error\n        }\n    }\n''','''        index = [:]\n        promotions = [:]\n        do {\n            try persistIndex()\n            try persistPromotions()\n        } catch {\n            index = previousIndex\n            promotions = previousPromotions\n            throw error\n        }\n    }\n''',1)
+          # Insert promoted API before totalBytes.
+          marker='''    /// 缓存总大小（字节），供设置页展示。\n    public func totalBytes() -> Int64 {\n'''
+          insert='''    /// Server downloads are first-class local-library files. This returns their canonical\n    /// local identity while retaining the remote cache key as a backwards-compatible alias.\n    public func promotedEntries() -> [PromotedTrackEntry] {\n        promotions.compactMap { key, localID in\n            guard let cacheID = Self.cacheID(from: key),\n                  let name = index[key] else { return nil }\n            let url = directory.appendingPathComponent(name)\n            guard FileManager.default.fileExists(atPath: url.path) else { return nil }\n            return PromotedTrackEntry(\n                cacheID: cacheID,\n                localTrackID: TrackID(rawValue: localID),\n                fileURL: url\n            )\n        }.sorted { $0.localTrackID.rawValue < $1.localTrackID.rawValue }\n    }\n\n    public func canonicalLocalTrackID(for remote: TrackCacheID) -> TrackID? {\n        promotions[remote.description].map(TrackID.init(rawValue:))\n    }\n\n    public func identityTransition(for remote: TrackCacheID) -> TrackIdentityTransition? {\n        guard let localTrackID = canonicalLocalTrackID(for: remote) else { return nil }\n        return TrackIdentityTransition(\n            remoteServerID: remote.serverID,\n            remoteTrackID: remote.trackID,\n            localLibraryID: Self.downloadsLibraryID,\n            localTrackID: localTrackID\n        )\n    }\n\n    /// 缓存总大小（字节），供设置页展示。\n    public func totalBytes() -> Int64 {\n'''
+          if marker not in text: raise SystemExit('totalBytes marker missing')
+          text=text.replace(marker,insert,1)
+          # Add promotion persistence before persistIndex.
+          marker='''    private func persistIndex() throws {\n'''
+          helper='''    private func registerPromotion(for id: TrackCacheID) throws {\n        promotions[id.description] = Self.promotedTrackIDRaw(forGlobalKey: id.description)\n        try persistPromotions()\n    }\n\n    private func persistPromotions() throws {\n        let data = try JSONEncoder().encode(promotions)\n        try data.write(to: promotionsURL, options: .atomic)\n    }\n\n    private static func promotedTrackIDRaw(forGlobalKey key: String) -> String {\n        var hash: UInt64 = 14_695_981_039_346_656_037\n        for byte in key.utf8 {\n            hash ^= UInt64(byte)\n            hash &*= 1_099_511_628_211\n        }\n        return "local-download-\\(String(hash, radix: 16))"\n    }\n\n    private func persistIndex() throws {\n'''
+          if marker not in text: raise SystemExit('persistIndex marker missing')
+          text=text.replace(marker,helper,1)
+          p.write_text(text,encoding='utf-8')
+
+          write('Packages/AuralisCore/Sources/AppShell/LocalMusicLibraryStore.swift', r'''// SPDX-License-Identifier: GPL-3.0-only
+import AVFoundation
+import Combine
+import Domain
+import Foundation
+
+/// Apple local-library runtime. It owns security-scoped roots and emits real `Track` values
+/// that the existing AVFoundation player can consume without a parallel playback stack.
+@MainActor
+final class LocalMusicLibraryStore: ObservableObject {
+    static let shared = LocalMusicLibraryStore()
+    static let localServerID = ServerID(rawValue: "auralis-local")
+
+    @Published private(set) var sources: [LocalMusicSource] = []
+    @Published private(set) var tracks: [Track] = []
+    @Published private(set) var lastScan: LocalLibraryScanSnapshot?
+    @Published private(set) var isScanning = false
+    @Published private(set) var lastError: String?
+
+    private let sourcesURL: URL
+    private var accessedRoots: [LocalLibraryID: URL] = [:]
+    private static let supportedExtensions: Set<String> = [
+        "mp3", "m4a", "aac", "alac", "flac", "wav", "aiff", "aif", "ogg", "opus"
+    ]
+
+    init(directory: URL? = nil) {
+        let manager = FileManager.default
+        let support = manager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? manager.temporaryDirectory
+        let root = directory ?? support.appendingPathComponent("Auralis/LocalMusic", isDirectory: true)
+        try? manager.createDirectory(at: root, withIntermediateDirectories: true)
+        sourcesURL = root.appendingPathComponent("sources.json")
+        if let data = try? Data(contentsOf: sourcesURL),
+           let decoded = try? JSONDecoder().decode([LocalMusicSource].self, from: data) {
+            sources = decoded
+        }
+        restoreSecurityScopedRoots()
+    }
+
+    deinit {
+        for url in accessedRoots.values { url.stopAccessingSecurityScopedResource() }
+    }
+
+    func addSource(url: URL) async {
+        do {
+            let data = try url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+            let token = data.base64EncodedString()
+            let id = LocalLibraryID(rawValue: "folder-\(Self.fnv64(token))")
+            if let old = accessedRoots[id] { old.stopAccessingSecurityScopedResource() }
+            _ = url.startAccessingSecurityScopedResource()
+            accessedRoots[id] = url
+            let source = LocalMusicSource(id: id, displayName: url.lastPathComponent, locationToken: token)
+            if let index = sources.firstIndex(where: { $0.id == id }) { sources[index] = source }
+            else { sources.append(source) }
+            try persistSources()
+            _ = await scan(source: source)
+        } catch {
+            lastError = "无法保存本地音乐文件夹授权"
+        }
+    }
+
+    func removeSource(_ source: LocalMusicSource) {
+        if let root = accessedRoots.removeValue(forKey: source.id) { root.stopAccessingSecurityScopedResource() }
+        sources.removeAll { $0.id == source.id }
+        tracks.removeAll { $0.id.rawValue.hasPrefix("local-file-\(Self.fnv64(source.id.rawValue))-" ) }
+        try? persistSources()
+    }
+
+    @discardableResult
+    func scanAll() async -> LocalLibraryScanSnapshot {
+        isScanning = true
+        lastError = nil
+        defer { isScanning = false }
+        var total = LocalLibraryScanSnapshot()
+        for source in sources where source.isEnabled {
+            let snapshot = await scan(source: source, manageState: false)
+            total.discoveredFiles += snapshot.discoveredFiles
+            total.importedTracks += snapshot.importedTracks
+            total.updatedTracks += snapshot.updatedTracks
+            total.removedTracks += snapshot.removedTracks
+            total.failedFiles += snapshot.failedFiles
+        }
+        total.completedAt = .now
+        lastScan = total
+        return total
+    }
+
+    @discardableResult
+    func scan(source: LocalMusicSource, manageState: Bool = true) async -> LocalLibraryScanSnapshot {
+        if manageState { isScanning = true; lastError = nil }
+        defer { if manageState { isScanning = false } }
+        guard let root = resolveRoot(source) else {
+            lastError = "本地音乐文件夹授权已失效，请重新添加"
+            return LocalLibraryScanSnapshot(failedFiles: 1)
+        }
+        let manager = FileManager.default
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
+        let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])
+        var imported: [Track] = []
+        var failed = 0
+        var discovered = 0
+        while let file = enumerator?.nextObject() as? URL {
+            let ext = file.pathExtension.lowercased()
+            guard Self.supportedExtensions.contains(ext) else { continue }
+            discovered += 1
+            if let track = await Self.makeTrack(file: file, source: source, root: root) { imported.append(track) }
+            else { failed += 1 }
+        }
+        let oldIDs = Set(tracks.filter { Self.belongs($0, to: source.id) }.map(\.id))
+        let newIDs = Set(imported.map(\.id))
+        tracks.removeAll { Self.belongs($0, to: source.id) }
+        tracks.append(contentsOf: imported)
+        let snapshot = LocalLibraryScanSnapshot(
+            discoveredFiles: discovered,
+            importedTracks: newIDs.subtracting(oldIDs).count,
+            updatedTracks: newIDs.intersection(oldIDs).count,
+            removedTracks: oldIDs.subtracting(newIDs).count,
+            failedFiles: failed,
+            completedAt: .now
+        )
+        lastScan = snapshot
+        return snapshot
+    }
+
+    private func restoreSecurityScopedRoots() {
+        for source in sources { _ = resolveRoot(source) }
+    }
+
+    private func resolveRoot(_ source: LocalMusicSource) -> URL? {
+        if let existing = accessedRoots[source.id] { return existing }
+        guard let data = Data(base64Encoded: source.locationToken) else { return nil }
+        var stale = false
+        guard let url = try? URL(
+            resolvingBookmarkData: data,
+            options: [.withSecurityScope, .withoutUI],
+            relativeTo: nil,
+            bookmarkDataIsStale: &stale
+        ), !stale else { return nil }
+        _ = url.startAccessingSecurityScopedResource()
+        accessedRoots[source.id] = url
+        return url
+    }
+
+    private func persistSources() throws {
+        try JSONEncoder().encode(sources).write(to: sourcesURL, options: .atomic)
+    }
+
+    private static func belongs(_ track: Track, to sourceID: LocalLibraryID) -> Bool {
+        track.id.rawValue.hasPrefix("local-file-\(fnv64(sourceID.rawValue))-")
+    }
+
+    private static func makeTrack(file: URL, source: LocalMusicSource, root: URL) async -> Track? {
+        let asset = AVURLAsset(url: file)
+        let durationTime = try? await asset.load(.duration)
+        let duration = durationTime.map(CMTimeGetSeconds) ?? 0
+        guard duration.isFinite, duration >= 0 else { return nil }
+        let common = (try? await asset.load(.commonMetadata)) ?? []
+        var title: String?
+        var artist: String?
+        var album: String?
+        for item in common {
+            let value = try? await item.load(.stringValue)
+            switch item.commonKey?.rawValue {
+            case "title": title = value
+            case "artist": artist = value
+            case "albumName": album = value
+            default: break
+            }
+        }
+        let relative = file.path.replacingOccurrences(of: root.path, with: "")
+        let sourceHash = fnv64(source.id.rawValue)
+        let fileHash = fnv64(relative)
+        let artistName = artist?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "未知艺术家"
+        let albumTitle = album?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "未知专辑"
+        return Track(
+            id: TrackID(rawValue: "local-file-\(sourceHash)-\(fileHash)"),
+            serverID: localServerID,
+            albumID: AlbumID(rawValue: "local-album-\(fnv64(artistName + "|" + albumTitle))"),
+            artistID: ArtistID(rawValue: "local-artist-\(fnv64(artistName))"),
+            title: title?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? file.deletingPathExtension().lastPathComponent,
+            artistName: artistName,
+            albumTitle: albumTitle,
+            duration: duration,
+            sourceInfo: AudioSourceInfo(codec: file.pathExtension.lowercased()),
+            streamURL: file
+        )
+    }
+
+    private static func fnv64(_ value: String) -> String {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in value.utf8 { hash ^= UInt64(byte); hash &*= 1_099_511_628_211 }
+        return String(hash, radix: 16)
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+''')
+
+          write('Packages/AuralisCore/Sources/AppShell/LocalMusicSettingsPage.swift', r'''// SPDX-License-Identifier: GPL-3.0-only
+import SwiftUI
+import ThemeEngine
+import UniformTypeIdentifiers
+
+/// Local-library management intentionally lives only in Settings.
+struct LocalMusicSettingsPage: View {
+    let theme: BuiltInTheme
+    @StateObject private var library = LocalMusicLibraryStore.shared
+    @State private var isImporting = false
+
+    var body: some View {
+        Form {
+            Section("本地音乐库") {
+                LabeledContent("已扫描歌曲", value: "\(library.tracks.count)")
+                if let scan = library.lastScan {
+                    LabeledContent("最近扫描", value: "\(scan.discoveredFiles) 个文件 · \(scan.failedFiles) 个失败")
+                }
+                Button {
+                    isImporting = true
+                } label: {
+                    Label("添加音乐文件夹", systemImage: "folder.badge.plus")
+                }
+                Button {
+                    Task { _ = await library.scanAll() }
+                } label: {
+                    Label(library.isScanning ? "正在扫描…" : "重新扫描全部", systemImage: "arrow.clockwise")
+                }
+                .disabled(library.isScanning || library.sources.isEmpty)
+            }
+            Section("来源") {
+                if library.sources.isEmpty {
+                    Text("尚未添加本地音乐文件夹。服务器下载的歌曲会自动进入 Auralis 管理的本地音乐库。")
+                        .foregroundStyle(theme.colorTokens.secondaryText.color)
+                }
+                ForEach(library.sources) { source in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(source.displayName)
+                            Text("已持久授权")
+                                .font(.caption)
+                                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                        }
+                        Spacer()
+                        Button(role: .destructive) { library.removeSource(source) } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+            }
+            Section("下载") {
+                Text("服务器下载保存到 Auralis/LocalMusic/Downloads。下载完成后建立本地 canonical 身份，同时保留服务器身份作为兼容别名，现有队列、历史和歌单不会因身份切换失效。")
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+            }
+            if let error = library.lastError {
+                Section("错误") { Text(error).foregroundStyle(theme.colorTokens.error.color) }
+            }
+        }
+        .navigationTitle("本地音乐")
+        .scrollContentBackground(.hidden)
+        .background(theme.colorTokens.background.color)
+        .fileImporter(isPresented: $isImporting, allowedContentTypes: [.folder], allowsMultipleSelection: true) { result in
+            guard case let .success(urls) = result else { return }
+            Task { for url in urls { await library.addSource(url: url) } }
+        }
+    }
+}
+''')
+
+          # Android promotion store.
+          write('android/core/offline/src/main/java/com/auralis/core/offline/DownloadPromotionStore.kt', r'''// SPDX-License-Identifier: GPL-3.0-only
+package com.auralis.core.offline
+
+import android.content.Context
+import com.auralis.core.domain.GlobalId
+import com.auralis.core.domain.LocalLibraryId
+import com.auralis.core.domain.ServerId
+import com.auralis.core.domain.TrackId
+import com.auralis.core.domain.TrackIdentityTransition
+
+/** Persistent remote -> canonical-local alias table for completed server downloads. */
+class DownloadPromotionStore(context: Context) {
+    private val prefs = context.getSharedPreferences("auralis_download_promotions", Context.MODE_PRIVATE)
+
+    fun promote(remote: GlobalId): GlobalId {
+        val existing = prefs.getString(remote.serialized, null)
+        if (existing != null) return GlobalId.parse(existing)
+        val local = GlobalId(LOCAL_SERVER_ID, "local-download-${fnv64(remote.serialized)}")
+        prefs.edit().putString(remote.serialized, local.serialized).apply()
+        return local
+    }
+
+    fun canonicalLocalId(remote: GlobalId): GlobalId? =
+        prefs.getString(remote.serialized, null)?.let(GlobalId::parse)
+
+    fun transition(remote: GlobalId): TrackIdentityTransition? {
+        val local = canonicalLocalId(remote) ?: return null
+        return TrackIdentityTransition(
+            remoteServerId = remote.serverId,
+            remoteTrackId = TrackId(remote.remoteId),
+            localLibraryId = DOWNLOADS_LIBRARY_ID,
+            localTrackId = TrackId(local.remoteId),
+        )
+    }
+
+    fun mappings(): Map<GlobalId, GlobalId> = prefs.all.mapNotNull { (key, value) ->
+        val raw = value as? String ?: return@mapNotNull null
+        runCatching { GlobalId.parse(key) to GlobalId.parse(raw) }.getOrNull()
+    }.toMap()
+
+    fun remove(remote: GlobalId) { prefs.edit().remove(remote.serialized).apply() }
+    fun clear() { prefs.edit().clear().apply() }
+
+    companion object {
+        val LOCAL_SERVER_ID = ServerId("auralis-local")
+        val DOWNLOADS_LIBRARY_ID = LocalLibraryId("downloads")
+
+        internal fun fnv64(value: String): String {
+            var hash = 0xcbf29ce484222325UL
+            for (byte in value.encodeToByteArray()) {
+                hash = hash xor byte.toUByte().toULong()
+                hash *= 0x100000001b3UL
+            }
+            return hash.toString(16)
+        }
+    }
+}
+''')
+
+          # Android downloads move into LocalMusic/Downloads and publish identity mapping.
+          p=Path('android/core/offline/src/main/java/com/auralis/core/offline/DownloadManager.kt')
+          text=p.read_text(encoding='utf-8')
+          text=text.replace('''    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)\n    private val cacheDir = File(context.filesDir, CACHE_DIR_NAME).apply { mkdirs() }\n    private val stagingDir = File(context.filesDir, STAGING_DIR_NAME).apply { mkdirs() }\n''','''    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)\n    private val promotionStore = DownloadPromotionStore(context)\n    private val cacheDir = prepareLocalMusicDownloadDirectory(context)\n    private val stagingDir = File(context.filesDir, STAGING_DIR_NAME).apply { mkdirs() }\n''',1)
+          text=text.replace('''    fun deleteCached(gid: GlobalId) {\n        cacheFor(gid)?.delete()\n        scope.launch { downloads.remove(gid) }\n    }\n''','''    fun deleteCached(gid: GlobalId) {\n        cacheFor(gid)?.delete()\n        promotionStore.remove(gid)\n        scope.launch { downloads.remove(gid) }\n    }\n\n    fun canonicalLocalId(gid: GlobalId): GlobalId? = promotionStore.canonicalLocalId(gid)\n    fun promotedMappings(): Map<GlobalId, GlobalId> = promotionStore.mappings()\n''',1)
+          text=text.replace('''            downloads.remove(gid)\n            cacheFor(gid)?.delete()\n            stagingFor(key)?.delete()\n''','''            downloads.remove(gid)\n            cacheFor(gid)?.delete()\n            promotionStore.remove(gid)\n            stagingFor(key)?.delete()\n''',1)
+          text=text.replace('''                downloads.record(DownloadRecord(gid, DownloadStatus.Downloaded, 1f, cacheFile.absolutePath))\n''','''                promotionStore.promote(gid)\n                downloads.record(DownloadRecord(gid, DownloadStatus.Downloaded, 1f, cacheFile.absolutePath))\n''',1)
+          text=text.replace('''        private const val CACHE_DIR_NAME = "trackcache"\n        private const val STAGING_DIR_NAME = "downloadstaging"\n''','''        private const val LEGACY_CACHE_DIR_NAME = "trackcache"\n        private const val STAGING_DIR_NAME = "downloadstaging"\n\n        private fun prepareLocalMusicDownloadDirectory(context: Context): File {\n            val root = File(context.filesDir, "localmusic").apply { mkdirs() }\n            val downloads = File(root, "downloads")\n            val legacy = File(context.filesDir, LEGACY_CACHE_DIR_NAME)\n            if (!downloads.exists() && legacy.exists()) {\n                downloads.parentFile?.mkdirs()\n                if (!legacy.renameTo(downloads)) {\n                    downloads.mkdirs()\n                    legacy.listFiles()?.forEach { old -> old.copyTo(File(downloads, old.name), overwrite = true) }\n                    legacy.deleteRecursively()\n                }\n            }\n            downloads.mkdirs()\n            return downloads\n        }\n''',1)
+          p.write_text(text,encoding='utf-8')
+
+          # Android local library scanner (SAF persisted roots + metadata).
+          write('android/core/data/src/main/java/com/auralis/core/data/local/AndroidLocalMusicLibrary.kt', r'''// SPDX-License-Identifier: GPL-3.0-only
+package com.auralis.core.data.local
+
+import android.content.Context
+import android.content.Intent
+import android.media.MediaMetadataRetriever
+import android.net.Uri
+import android.provider.DocumentsContract
+import com.auralis.core.domain.AlbumId
+import com.auralis.core.domain.ArtistId
+import com.auralis.core.domain.AudioSourceInfo
+import com.auralis.core.domain.LocalLibraryId
+import com.auralis.core.domain.LocalLibraryScanSnapshot
+import com.auralis.core.domain.LocalMusicSource
+import com.auralis.core.domain.ServerId
+import com.auralis.core.domain.Track
+import com.auralis.core.domain.TrackId
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
+
+/** Android SAF-backed local music catalog. Mobile and TV share this exact implementation. */
+class AndroidLocalMusicLibrary(private val context: Context) {
+    private val prefs = context.getSharedPreferences("auralis_local_music_sources", Context.MODE_PRIVATE)
+    private val _sources = MutableStateFlow(loadSources())
+    private val _tracks = MutableStateFlow<List<Track>>(emptyList())
+    val sources: StateFlow<List<LocalMusicSource>> = _sources.asStateFlow()
+    val tracks: StateFlow<List<Track>> = _tracks.asStateFlow()
+
+    fun addTree(uri: Uri) {
+        context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val raw = uri.toString()
+        val set = prefs.getStringSet(SOURCE_URIS, emptySet()).orEmpty().toMutableSet()
+        set += raw
+        prefs.edit().putStringSet(SOURCE_URIS, set).apply()
+        _sources.value = loadSources()
+    }
+
+    fun removeSource(source: LocalMusicSource) {
+        val set = prefs.getStringSet(SOURCE_URIS, emptySet()).orEmpty().toMutableSet()
+        set.remove(source.locationToken)
+        prefs.edit().putStringSet(SOURCE_URIS, set).apply()
+        runCatching { context.contentResolver.releasePersistableUriPermission(Uri.parse(source.locationToken), Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        _sources.value = loadSources()
+        _tracks.value = _tracks.value.filterNot { belongs(it, source.id) }
+    }
+
+    suspend fun scanAll(): LocalLibraryScanSnapshot = withContext(Dispatchers.IO) {
+        val next = ArrayList<Track>()
+        var discovered = 0
+        var failed = 0
+        for (source in _sources.value) {
+            val tree = Uri.parse(source.locationToken)
+            walkTree(tree) { document, name, mime ->
+                if (mime.startsWith("audio/") || supported(name)) {
+                    discovered++
+                    val track = runCatching { trackFor(document, name, source) }.getOrNull()
+                    if (track != null) next += track else failed++
+                }
+            }
+        }
+        val oldIds = _tracks.value.mapTo(HashSet()) { it.id }
+        val newIds = next.mapTo(HashSet()) { it.id }
+        _tracks.value = next
+        LocalLibraryScanSnapshot(
+            discoveredFiles = discovered,
+            importedTracks = (newIds - oldIds).size,
+            updatedTracks = newIds.intersect(oldIds).size,
+            removedTracks = (oldIds - newIds).size,
+            failedFiles = failed,
+        )
+    }
+
+    private fun loadSources(): List<LocalMusicSource> =
+        prefs.getStringSet(SOURCE_URIS, emptySet()).orEmpty().sorted().map { raw ->
+            val uri = Uri.parse(raw)
+            LocalMusicSource(
+                id = LocalLibraryId("tree-${fnv64(raw)}"),
+                displayName = uri.lastPathSegment?.substringAfterLast(':')?.ifBlank { "本地音乐" } ?: "本地音乐",
+                locationToken = raw,
+            )
+        }
+
+    private fun walkTree(tree: Uri, onAudio: (Uri, String, String) -> Unit) {
+        val rootId = DocumentsContract.getTreeDocumentId(tree)
+        walkDocument(tree, DocumentsContract.buildDocumentUriUsingTree(tree, rootId), onAudio)
+    }
+
+    private fun walkDocument(tree: Uri, document: Uri, onAudio: (Uri, String, String) -> Unit) {
+        val docId = DocumentsContract.getDocumentId(document)
+        val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId)
+        context.contentResolver.query(
+            children,
+            arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE),
+            null, null, null,
+        )?.use { cursor ->
+            val idCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+            val nameCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            val mimeCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+            while (cursor.moveToNext()) {
+                val child = DocumentsContract.buildDocumentUriUsingTree(tree, cursor.getString(idCol))
+                val name = cursor.getString(nameCol) ?: ""
+                val mime = cursor.getString(mimeCol) ?: ""
+                if (mime == DocumentsContract.Document.MIME_TYPE_DIR) walkDocument(tree, child, onAudio)
+                else onAudio(child, name, mime)
+            }
+        }
+    }
+
+    private fun trackFor(uri: Uri, fileName: String, source: LocalMusicSource): Track {
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, uri)
+            val title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)?.takeIf { it.isNotBlank() }
+                ?: fileName.substringBeforeLast('.', fileName)
+            val artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)?.takeIf { it.isNotBlank() } ?: "未知艺术家"
+            val album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)?.takeIf { it.isNotBlank() } ?: "未知专辑"
+            val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            val bitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull()
+            val year = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR)?.toIntOrNull()
+            val sourceHash = fnv64(source.id.value)
+            val idHash = fnv64(uri.toString())
+            return Track(
+                id = TrackId("local-file-$sourceHash-$idHash"),
+                serverId = LOCAL_SERVER_ID,
+                albumId = AlbumId("local-album-${fnv64("$artist|$album")}"),
+                artistId = ArtistId("local-artist-${fnv64(artist)}"),
+                title = title,
+                artistName = artist,
+                albumTitle = album,
+                durationSeconds = durationMs / 1000.0,
+                year = year,
+                sourceInfo = AudioSourceInfo(codec = fileName.substringAfterLast('.', "").lowercase(), bitRate = bitrate),
+                streamUrl = uri.toString(),
+            )
+        } finally {
+            retriever.release()
+        }
+    }
+
+    private fun belongs(track: Track, sourceId: LocalLibraryId): Boolean =
+        track.id.value.startsWith("local-file-${fnv64(sourceId.value)}-")
+
+    private fun supported(name: String): Boolean = name.substringAfterLast('.', "").lowercase() in EXTENSIONS
+
+    companion object {
+        val LOCAL_SERVER_ID = ServerId("auralis-local")
+        private const val SOURCE_URIS = "tree_uris"
+        private val EXTENSIONS = setOf("mp3", "m4a", "aac", "alac", "flac", "wav", "aiff", "aif", "ogg", "opus")
+
+        internal fun fnv64(value: String): String {
+            var hash = 0xcbf29ce484222325UL
+            for (byte in value.encodeToByteArray()) { hash = hash xor byte.toUByte().toULong(); hash *= 0x100000001b3UL }
+            return hash.toString(16)
+        }
+    }
+}
+''')
+
+          # Graph owns one scanner/store for both phone and TV.
+          p=Path('android/core/data/src/main/java/com/auralis/core/data/graph/AuralisGraph.kt')
+          text=p.read_text(encoding='utf-8')
+          text=text.replace('''import com.auralis.core.data.db.AuralisDatabaseProvider\n''','''import com.auralis.core.data.db.AuralisDatabaseProvider\nimport com.auralis.core.data.local.AndroidLocalMusicLibrary\n''',1)
+          text=text.replace('''    val preferences = AuralisPreferences(appContext)\n    val vault = KeystoreCredentialVault(appContext)\n''','''    val preferences = AuralisPreferences(appContext)\n    val vault = KeystoreCredentialVault(appContext)\n    val localMusicLibrary: AndroidLocalMusicLibrary by lazy { AndroidLocalMusicLibrary(appContext) }\n''',1)
+          p.write_text(text,encoding='utf-8')
+
+          # Resolver + playback engine recognise content/file URI as local media.
+          p=Path('android/core/playback/src/main/java/com/auralis/core/playback/DefaultPlaybackSourceResolver.kt')
+          text=p.read_text(encoding='utf-8')
+          text=text.replace('''        val existingUrl = track.streamUrl\n        if (!forceRefresh && existingUrl != null && existingUrl.isNotEmpty()) {\n            return ResolvedSource.Remote(existingUrl)\n        }\n''','''        val existingUrl = track.streamUrl\n        if (!forceRefresh && existingUrl != null && existingUrl.isNotEmpty()) {\n            if (existingUrl.startsWith("content://") || existingUrl.startsWith("file://")) {\n                return ResolvedSource.Local(existingUrl)\n            }\n            return ResolvedSource.Remote(existingUrl)\n        }\n''',1)
+          p.write_text(text,encoding='utf-8')
+
+          p=Path('android/core/playback/src/main/java/com/auralis/core/playback/AuralisPlaybackEngine.kt')
+          text=p.read_text(encoding='utf-8')
+          old='''            is com.auralis.core.domain.ResolvedSource.Local -> Uri.fromFile(File(resolved.path))\n            is com.auralis.core.domain.ResolvedSource.Remote -> Uri.parse(resolved.url)\n'''
+          new='''            is com.auralis.core.domain.ResolvedSource.Local -> {\n                if (resolved.path.startsWith("content://") || resolved.path.startsWith("file://")) Uri.parse(resolved.path)\n                else Uri.fromFile(File(resolved.path))\n            }\n            is com.auralis.core.domain.ResolvedSource.Remote -> Uri.parse(resolved.url)\n'''
+          if old not in text: raise SystemExit('playback engine source needle missing')
+          text=text.replace(old,new,1)
+          p.write_text(text,encoding='utf-8')
+
+          # Functional shared Settings page for Android mobile + TV.
+          write('android/feature/settings/src/main/java/com/auralis/feature/settings/LocalMusicSettingsPage.kt', r'''// SPDX-License-Identifier: GPL-3.0-only
+package com.auralis.feature.settings
+
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import com.auralis.core.data.graph.AuralisGraph
+import com.auralis.core.designsystem.LocalAuralisTheme
+import kotlinx.coroutines.launch
+
+/** Local-library management is exposed only from Settings and shared by phone + TV. */
+@Composable
+internal fun LocalMusicSettingsPage(
+    graph: AuralisGraph,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalAuralisTheme.current.colors
+    val sources by graph.localMusicLibrary.sources.collectAsState()
+    val tracks by graph.localMusicLibrary.tracks.collectAsState()
+    val scope = rememberCoroutineScope()
+    var scanStatus by remember { mutableStateOf<String?>(null) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            scope.launch {
+                runCatching {
+                    graph.localMusicLibrary.addTree(uri)
+                    graph.localMusicLibrary.scanAll()
+                }.onSuccess { result -> scanStatus = "扫描 ${result.discoveredFiles} 个文件，失败 ${result.failedFiles} 个" }
+                    .onFailure { scanStatus = "无法读取所选音乐文件夹" }
+            }
+        }
+    }
+
+    SettingsPageContainer(modifier = modifier) {
+        LazyColumn(Modifier.fillMaxSize()) {
+            item { SettingsDetailTopBar(title = "本地音乐", onBack = onBack) }
+            item { SettingsSectionTitle("本地音乐库") }
+            item { SettingsValueRow(title = "已扫描歌曲", value = tracks.size.toString()) }
+            item {
+                TextButton(onClick = { runCatching { picker.launch(null) }.onFailure { scanStatus = "此设备没有可用的文件夹选择器" } }) {
+                    Text("添加音乐文件夹")
+                }
+            }
+            item {
+                TextButton(enabled = sources.isNotEmpty(), onClick = {
+                    scope.launch {
+                        runCatching { graph.localMusicLibrary.scanAll() }
+                            .onSuccess { scanStatus = "扫描 ${it.discoveredFiles} 个文件，失败 ${it.failedFiles} 个" }
+                            .onFailure { scanStatus = "扫描失败" }
+                    }
+                }) { Text("重新扫描全部") }
+            }
+            if (scanStatus != null) item { SettingsCaption(scanStatus!!) }
+            item { SettingsSectionTitle("来源") }
+            if (sources.isEmpty()) item { SettingsCaption("尚未添加本地音乐文件夹。服务器下载会自动进入 Auralis 管理的本地音乐库。") }
+            sources.forEach { source ->
+                item {
+                    SettingsValueRow(title = source.displayName, value = "已持久授权")
+                    TextButton(onClick = { graph.localMusicLibrary.removeSource(source) }) { Text("移除来源") }
+                }
+            }
+            item { SettingsSectionTitle("下载") }
+            item {
+                Text(
+                    "服务器下载保存到 LocalMusic/Downloads。完成后建立本地 canonical 身份，并保留服务器身份作为兼容别名。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.secondaryText,
+                )
+            }
+        }
+    }
+}
+''')
+          replace(
+              'android/feature/settings/src/main/java/com/auralis/feature/settings/SettingsScreens.kt',
+              'SettingsPage.LocalMusic -> LocalMusicSettingsPage(onBack = { pageOrdinal = NO_PAGE }, modifier = modifier)',
+              'SettingsPage.LocalMusic -> LocalMusicSettingsPage(graph = graph, onBack = { pageOrdinal = NO_PAGE }, modifier = modifier)'
+          )
+
+          # Tests: identity stability and local URI routing.
+          write('Packages/AuralisCore/Tests/OfflineManagerTests/TrackCachePromotionTests.swift', r'''// SPDX-License-Identifier: GPL-3.0-only
+import Domain
+import Foundation
+import OfflineManager
+import Testing
+
+@Test func downloadedTrackGetsStableCanonicalLocalIdentity() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let store = TrackCacheStore(directory: root)
+    let remote = TrackCacheStore.TrackCacheID(serverID: ServerID(rawValue: "srv"), trackID: TrackID(rawValue: "42"))
+    _ = try await store.store(data: Data([1, 2, 3]), for: remote, codec: "mp3")
+    let first = await store.canonicalLocalTrackID(for: remote)
+    #expect(first != nil)
+    let transition = await store.identityTransition(for: remote)
+    #expect(transition?.remoteTrackID == remote.trackID)
+    #expect(transition?.localTrackID == first)
+    let restored = TrackCacheStore(directory: root)
+    #expect(await restored.canonicalLocalTrackID(for: remote) == first)
+}
+''')
+
+          # Append Android playback resolver local URI test inside existing test class before final brace.
+          p=Path('android/core/playback/src/test/java/com/auralis/core/playback/DefaultPlaybackSourceResolverTest.kt')
+          text=p.read_text(encoding='utf-8')
+          idx=text.rfind('\n}')
+          if idx < 0: raise SystemExit('resolver test class end missing')
+          test=r'''\n\n    @Test\n    fun `content URI is treated as a local playback source`() = runTest {\n        val r = resolver(downloadPath = null, provider = StreamUrlProvider { _, _ -> "http://remote/should-not-be-used" })\n        val result = r.resolve(track(streamUrl = "content://media/external/audio/42"))\n        assertThat(result).isEqualTo(ResolvedSource.Local("content://media/external/audio/42"))\n    }\n'''
+          text=text[:idx]+test+text[idx:]
+          p.write_text(text,encoding='utf-8')
+          PY
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/local-music-pr2-bootstrap.yml
+          git add Packages android
+          git commit -m "feat(local-music): scan play and promote downloads"
+          git push origin HEAD:feat/local-music-playback
