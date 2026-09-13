@@ -8,7 +8,7 @@ import com.auralis.core.domain.StreamUrlProvider
 import com.auralis.core.domain.Track
 import java.io.File
 
-/** Local complete files/content URIs first, remote OpenSubsonic streams second. */
+/** Existing downloaded files are local paths; local-library URIs are passed directly to Media3. */
 class DefaultPlaybackSourceResolver(
     private val downloads: DownloadRepository,
     private val streamUrlProvider: StreamUrlProvider,
@@ -22,12 +22,12 @@ class DefaultPlaybackSourceResolver(
         }
         val existingUrl = track.streamUrl
         if (!forceRefresh && !existingUrl.isNullOrEmpty()) {
-            if (existingUrl.startsWith("content://") || existingUrl.startsWith("file://")) {
-                return ResolvedSource.Local(existingUrl)
-            }
+            // Media3 consumes content:// and file:// via Uri.parse on the existing URL path.
+            // They are local-library sources semantically even though the legacy transport enum
+            // calls every URI-valued source Remote.
             return ResolvedSource.Remote(existingUrl)
         }
-        // Local-library tracks never fall through into the server connector.
+        // Local-library tracks must never fall through into an OpenSubsonic connector.
         if (track.serverId.value == "auralis-local") return ResolvedSource.Unavailable
         val url = streamUrlProvider.streamUrl(track, forceRefresh)
         if (url.isNullOrEmpty()) return ResolvedSource.Unavailable
