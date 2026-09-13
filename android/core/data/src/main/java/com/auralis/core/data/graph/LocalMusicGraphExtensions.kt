@@ -2,12 +2,7 @@
 package com.auralis.core.data.graph
 
 import com.auralis.core.data.local.AndroidLocalMusicLibrary
-import java.util.WeakHashMap
 
-private val localMusicStores = WeakHashMap<AuralisGraph, AndroidLocalMusicLibrary>()
-
-/** One local-library runtime per application graph without widening the existing composition constructor. */
+/** Shared process-level local-library runtime used by Settings, Library and Agent surfaces. */
 val AuralisGraph.localMusicLibrary: AndroidLocalMusicLibrary
-    get() = synchronized(localMusicStores) {
-        localMusicStores.getOrPut(this) { AndroidLocalMusicLibrary(appContext) }
-    }
+    get() = AndroidLocalMusicLibrary.get(appContext)
