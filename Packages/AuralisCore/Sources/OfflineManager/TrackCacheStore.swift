@@ -82,12 +82,6 @@ public actor TrackCacheStore {
            let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
             promotions = decoded
         }
-        var changed = false
-        for key in index.keys where Self.cacheID(from: key) != nil && promotions[key] == nil {
-            promotions[key] = Self.promotedTrackIDRaw(forGlobalKey: key)
-            changed = true
-        }
-        if changed { try? persistPromotions() }
     }
 
     public func migrateLegacyEntries(to serverID: ServerID) {
@@ -128,6 +122,7 @@ public actor TrackCacheStore {
     }
 
     public func cachedEntries() -> [CachedTrackEntry] {
+        backfillPromotionsIfNeeded()
         var result: [CachedTrackEntry] = []
         var staleKeys: [String] = []
         for (key, name) in index {
@@ -259,7 +254,8 @@ public actor TrackCacheStore {
     }
 
     public func promotedEntries() -> [PromotedTrackEntry] {
-        promotions.compactMap { key, localID in
+        backfillPromotionsIfNeeded()
+        return promotions.compactMap { key, localID in
             guard let cacheID = Self.cacheID(from: key), let name = index[key] else { return nil }
             let url = directory.appendingPathComponent(name)
             guard FileManager.default.fileExists(atPath: url.path) else { return nil }
@@ -272,7 +268,8 @@ public actor TrackCacheStore {
     }
 
     public func canonicalLocalTrackID(for remote: TrackCacheID) -> TrackID? {
-        promotions[remote.description].map(TrackID.init(rawValue:))
+        backfillPromotionsIfNeeded()
+        return promotions[remote.description].map(TrackID.init(rawValue:))
     }
 
     public func identityTransition(for remote: TrackCacheID) -> TrackIdentityTransition? {
@@ -287,6 +284,16 @@ public actor TrackCacheStore {
 
     public func totalBytes() -> Int64 {
         cachedEntries().reduce(into: Int64(0)) { $0 += $1.byteCount }
+    }
+
+    private func backfillPromotionsIfNeeded() {
+        var changed = false
+        for key in index.keys {
+            guard Self.cacheID(from: key) != nil, promotions[key] == nil else { continue }
+            promotions[key] = Self.promotedTrackIDRaw(forGlobalKey: key)
+            changed = true
+        }
+        if changed { try? persistPromotions() }
     }
 
     private func persistIndex() throws {
