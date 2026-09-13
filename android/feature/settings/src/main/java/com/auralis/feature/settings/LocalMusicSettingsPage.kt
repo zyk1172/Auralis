@@ -16,29 +16,30 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import com.auralis.core.data.graph.AuralisGraph
-import com.auralis.core.data.graph.localMusicLibrary
+import androidx.compose.ui.platform.LocalContext
+import com.auralis.core.data.local.AndroidLocalMusicLibrary
 import com.auralis.core.designsystem.LocalAuralisTheme
 import kotlinx.coroutines.launch
 
 /** Local-library management is exposed only from Settings and shared by phone + TV. */
 @Composable
 internal fun LocalMusicSettingsPage(
-    graph: AuralisGraph,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
-    val sources by graph.localMusicLibrary.sources.collectAsState()
-    val tracks by graph.localMusicLibrary.tracks.collectAsState()
+    val context = LocalContext.current
+    val library = remember(context.applicationContext) { AndroidLocalMusicLibrary.get(context) }
+    val sources by library.sources.collectAsState()
+    val tracks by library.tracks.collectAsState()
     val scope = rememberCoroutineScope()
     var scanStatus by remember { mutableStateOf<String?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             scope.launch {
                 runCatching {
-                    graph.localMusicLibrary.addTree(uri)
-                    graph.localMusicLibrary.scanAll()
+                    library.addTree(uri)
+                    library.scanAll()
                 }.onSuccess {
                     scanStatus = "扫描 ${it.discoveredFiles} 个文件，失败 ${it.failedFiles} 个"
                 }.onFailure {
@@ -66,7 +67,7 @@ internal fun LocalMusicSettingsPage(
                     enabled = sources.isNotEmpty(),
                     onClick = {
                         scope.launch {
-                            runCatching { graph.localMusicLibrary.scanAll() }
+                            runCatching { library.scanAll() }
                                 .onSuccess { scanStatus = "扫描 ${it.discoveredFiles} 个文件，失败 ${it.failedFiles} 个" }
                                 .onFailure { scanStatus = "扫描失败" }
                         }
@@ -83,7 +84,7 @@ internal fun LocalMusicSettingsPage(
             sources.forEach { source ->
                 item {
                     SettingsValueRow(title = source.displayName, value = "已持久授权")
-                    TextButton(onClick = { graph.localMusicLibrary.removeSource(source) }) {
+                    TextButton(onClick = { library.removeSource(source) }) {
                         Text("移除来源")
                     }
                 }
