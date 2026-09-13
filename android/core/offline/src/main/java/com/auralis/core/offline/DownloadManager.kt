@@ -18,28 +18,24 @@ import com.auralis.core.domain.Track
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
-/**
- * 下载错误分类。对齐 Apple `DownloadFailureKind` 8 类语义。
- * UI 只展示脱敏 [message]，绝不直接显示 OkHttp 的原始异常长文本。
- */
 sealed interface DownloadFailureKind {
     data object NetworkUnavailable : DownloadFailureKind
     data object TimedOut : DownloadFailureKind
@@ -53,18 +49,7 @@ sealed interface DownloadFailureKind {
 
 data class DownloadFailure(val kind: DownloadFailureKind, val message: String)
 
-/**
- * 后台下载管理器。
- *
- * 对应 Apple `DownloadManager`：
- * - 身份 = `serverId:trackId`（[GlobalId]），**禁止** `Map<TrackId, ...>`；
- * - 最大并发 3；
- * - 下载 URL **运行时**由 urlFactory 生成，绝不持久化带认证的 URL；
- * - 临时文件 → `.download` staging → 成功后原子移入 TrackCache；
- * - 取消用墓碑集合防重绑；重启时从仓储水合中断任务。
- *
- * 由 [DownloadService] 持有，进程级生命周期，**不是** Activity 里的 coroutine。
- */
+/** Background downloader. Completed server tracks are promoted into LocalMusic/downloads. */
 class DownloadManager(
     private val context: Context,
     private val downloads: DownloadRepository,
@@ -72,27 +57,20 @@ class DownloadManager(
     private val okHttp: OkHttpClient = defaultOkHttpClient(),
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val cacheDir = File(context.filesDir, CACHE_DIR_NAME).apply { mkdirs() }
+    private val promotionStore = DownloadPromotionStore(context)
+    private val cacheDir = prepareLocalMusicDownloadDirectory(context)
     private val stagingDir = File(context.filesDir, STAGING_DIR_NAME).apply { mkdirs() }
 
     private val activeTasks = ConcurrentHashMap<String, Job>()
     private val tombstones = ConcurrentHashMap.newKeySet<String>()
-
-    /** 全局并发闸门：最多同时下载 3 个（注释里写了就必须真的限制）。 */
     private val semaphore = Semaphore(MAX_CONCURRENT_DOWNLOADS)
-    /** 真正在跑的任务（受闸门限制）。 */
     private val runningKeys = ConcurrentHashMap.newKeySet<String>()
-    /** 等待闸门的任务队列（先到先服务）。 */
     private val pendingQueue = ConcurrentLinkedQueue<Pair<String, Track>>()
-
     private val _activeCount = MutableStateFlow(0)
     private val _runningCount = MutableStateFlow(0)
     private val _failures = MutableStateFlow<Map<String, DownloadFailure>>(emptyMap())
 
-    /** 在办任务数（等待中 + 下载中）：服务据此起停前台。 */
     val activeCount: StateFlow<Int> = _activeCount.asStateFlow()
-
-    /** 真正并发下载中的数量（永远 ≤ [MAX_CONCURRENT_DOWNLOADS]）。 */
     val runningCount: StateFlow<Int> = _runningCount.asStateFlow()
     val failures: StateFlow<Map<String, DownloadFailure>> = _failures.asStateFlow()
 
@@ -112,11 +90,11 @@ class DownloadManager(
             downloads.record(DownloadRecord(gid, DownloadStatus.NotDownloaded, 0f, null))
             downloads.remove(gid)
             cacheFor(gid)?.delete()
-            stagingFor(key)?.delete()
+            promotionStore.remove(gid)
+            stagingFor(key).delete()
         }
     }
 
-    /** 取消下载但保留已缓存文件（对应 UI「取消下载」vs「删除本地缓存」）。 */
     fun cancelDownloadOnly(gid: GlobalId) {
         val key = gid.serialized
         tombstones.add(key)
@@ -124,34 +102,31 @@ class DownloadManager(
         scope.launch {
             downloads.record(DownloadRecord(gid, DownloadStatus.NotDownloaded, 0f, null))
             downloads.remove(gid)
-            stagingFor(key)?.delete()
+            stagingFor(key).delete()
         }
     }
 
-    /** 删除已下载缓存。 */
     fun deleteCached(gid: GlobalId) {
-        cacheFor(gid)?.delete()
+        cacheFor(gid).delete()
+        promotionStore.remove(gid)
         scope.launch { downloads.remove(gid) }
     }
 
     fun localCachePath(gid: GlobalId): String? {
         val file = cacheFor(gid)
-        return if (file != null && file.exists() && file.length() > 0) file.absolutePath else null
+        return if (file.exists() && file.length() > 0) file.absolutePath else null
     }
 
-    /**
-     * 启动时水合：把 Queued/Downloading 的记录恢复为任务；找不到对应曲目
-     * （目录已被清理）时标记为中断失败，避免永久卡在 downloading。
-     */
+    fun canonicalLocalId(gid: GlobalId): GlobalId? = promotionStore.canonicalLocalId(gid)
+    fun promotedMappings(): Map<GlobalId, GlobalId> = promotionStore.mappings()
+
     suspend fun hydrate(trackFor: suspend (GlobalId) -> Track?) {
         downloads.observeAll(null).first().forEach { record ->
             when (record.status) {
                 DownloadStatus.Queued, DownloadStatus.Downloading -> {
                     val track = trackFor(record.globalId)
                     if (track != null && !activeTasks.containsKey(record.globalId.serialized)) {
-                        downloads.record(
-                            DownloadRecord(record.globalId, DownloadStatus.Queued, 0f, null),
-                        )
+                        downloads.record(DownloadRecord(record.globalId, DownloadStatus.Queued, 0f, null))
                         submit(record.globalId.serialized, track)
                     } else {
                         downloads.record(
@@ -165,7 +140,10 @@ class DownloadManager(
                         )
                     }
                 }
-
+                DownloadStatus.Downloaded -> {
+                    // Migrate identities for downloads created before this feature.
+                    if (localCachePath(record.globalId) != null) promotionStore.promote(record.globalId)
+                }
                 else -> Unit
             }
         }
@@ -175,12 +153,6 @@ class DownloadManager(
         scope.cancel()
     }
 
-    // ------------------------------------------------------------------
-
-    /**
-     * 提交任务：先入等待队列，拿到闸门许可才真正开跑。
-     * enqueue 与水合走同一条路径——**进程启动不会把 100 条恢复任务同时 launch**。
-     */
     private fun submit(key: String, track: Track) {
         if (tombstones.contains(key)) tombstones.remove(key)
         if (activeTasks.containsKey(key)) return
@@ -212,7 +184,7 @@ class DownloadManager(
         staging.parentFile?.mkdirs()
         try {
             val url = urlFactory(track)
-            if (url == null || url.isBlank()) {
+            if (url.isNullOrBlank()) {
                 fail(gid, key, DownloadFailure(DownloadFailureKind.InvalidResponse, "无法生成下载地址"))
                 return
             }
@@ -242,9 +214,7 @@ class DownloadManager(
                         }
                         output.write(buffer, 0, read)
                         total += read
-                        val progress = if (contentLength > 0) (total.toFloat() / contentLength) else 0f
-                        // 节流：进度变化 ≥1% 或距上次落库 ≥250ms 才写 Room，
-                        // UI 的高频显示走内存 StateFlow，不要每几 KB 打一次数据库。
+                        val progress = if (contentLength > 0) total.toFloat() / contentLength else 0f
                         val now = System.currentTimeMillis()
                         if (progress - lastWrittenProgress >= PROGRESS_WRITE_DELTA ||
                             now - lastWriteAt >= PROGRESS_WRITE_INTERVAL_MS
@@ -258,11 +228,12 @@ class DownloadManager(
                     }
                 }
                 if (tombstones.contains(key)) return
-                val cacheFile = cacheFor(gid) ?: return
+                val cacheFile = cacheFor(gid)
                 if (!staging.renameTo(cacheFile)) {
                     staging.copyTo(cacheFile, overwrite = true)
                     staging.delete()
                 }
+                promotionStore.promote(gid)
                 downloads.record(DownloadRecord(gid, DownloadStatus.Downloaded, 1f, cacheFile.absolutePath))
             }
         } catch (e: CancellationException) {
@@ -284,7 +255,7 @@ class DownloadManager(
     }
 
     private suspend fun fail(gid: GlobalId, key: String, failure: DownloadFailure) {
-        stagingFor(key)?.delete()
+        stagingFor(key).delete()
         _failures.value = _failures.value + (key to failure)
         downloads.record(DownloadRecord(gid, DownloadStatus.Failed, 0f, null))
     }
@@ -296,39 +267,44 @@ class DownloadManager(
         else -> DownloadFailure(DownloadFailureKind.Unknown, "HTTP $code")
     }
 
-    private fun cacheFor(gid: GlobalId): File? = File(cacheDir, "${sanitize(gid.serialized)}.cache")
-
+    private fun cacheFor(gid: GlobalId): File = File(cacheDir, "${sanitize(gid.serialized)}.cache")
     private fun stagingFor(key: String): File = File(stagingDir, "${sanitize(key)}.download")
-
-    private fun sanitize(raw: String): String =
-        raw.replace(Regex("[^A-Za-z0-9_.-]"), "_").take(120)
+    private fun sanitize(raw: String): String = raw.replace(Regex("[^A-Za-z0-9_.-]"), "_").take(120)
 
     companion object {
-        private const val CACHE_DIR_NAME = "trackcache"
+        private const val LEGACY_CACHE_DIR_NAME = "trackcache"
         private const val STAGING_DIR_NAME = "downloadstaging"
-
-        /** 全局最大并发下载数（对齐 Apple 侧限制）。 */
         const val MAX_CONCURRENT_DOWNLOADS = 3
         private const val PROGRESS_WRITE_DELTA = 0.01f
         private const val PROGRESS_WRITE_INTERVAL_MS = 250L
 
+        private fun prepareLocalMusicDownloadDirectory(context: Context): File {
+            val root = File(context.filesDir, "localmusic").apply { mkdirs() }
+            val target = File(root, "downloads")
+            val legacy = File(context.filesDir, LEGACY_CACHE_DIR_NAME)
+            if (!target.exists() && legacy.exists()) {
+                target.parentFile?.mkdirs()
+                if (!legacy.renameTo(target)) {
+                    target.mkdirs()
+                    legacy.listFiles()?.forEach { old ->
+                        old.copyTo(File(target, old.name), overwrite = true)
+                    }
+                    legacy.deleteRecursively()
+                }
+            }
+            target.mkdirs()
+            return target
+        }
+
         private fun defaultOkHttpClient(): OkHttpClient =
             OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(0, TimeUnit.MILLISECONDS) // 流式下载，无限读超时
+                .readTimeout(0, TimeUnit.MILLISECONDS)
                 .build()
     }
 }
 
-/**
- * 下载前台服务：存在下载任务时保持前台通知，全部结束后 stopSelf。
- * （对应 Apple background URLSession 的后台下载语义；不依赖 UI 生命周期。）
- *
- * 前台状态只有一个入口 [updateForegroundState]，并且整个 Service 生命周期只有一个
- * activeCount collector。避免 onStartCommand 重入时重复 collect，造成重复 start/stopForeground。
- */
 class DownloadService : Service() {
-
     private var manager: DownloadManager? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var activeCountJob: Job? = null
@@ -348,10 +324,7 @@ class DownloadService : Service() {
             return START_NOT_STICKY
         }
         manager = mgr
-
-        // startForegroundService 后必须尽快进入前台；没有活动任务则立即自停。
         updateForegroundState(mgr.activeCount.value)
-
         if (activeCountJob == null) {
             activeCountJob = scope.launch {
                 mgr.activeCount.collect { count -> updateForegroundState(count) }
@@ -377,7 +350,6 @@ class DownloadService : Service() {
             }
             return
         }
-
         if (isForegrounded) {
             stopForeground(STOP_FOREGROUND_REMOVE)
             isForegrounded = false
@@ -385,24 +357,18 @@ class DownloadService : Service() {
         stopSelf()
     }
 
-    private fun buildNotification(): Notification {
-        val text = "正在下载歌曲…"
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+    private fun buildNotification(): Notification =
+        NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Auralis")
-            .setContentText(text)
+            .setContentText("正在下载歌曲…")
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
-    }
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "下载",
-                NotificationManager.IMPORTANCE_LOW,
-            )
+            val channel = NotificationChannel(CHANNEL_ID, "下载", NotificationManager.IMPORTANCE_LOW)
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
@@ -413,7 +379,6 @@ class DownloadService : Service() {
     }
 }
 
-/** 服务与管理器之间的进程内桥（由 Application 装配）。 */
 object DownloadServiceHolder {
     @Volatile
     var manager: DownloadManager? = null
