@@ -1,0 +1,388 @@
+name: Local music PR1 bootstrap
+
+on:
+  push:
+    branches: [feat/local-music-foundation]
+    paths: [.github/workflows/local-music-pr1-bootstrap.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/local-music-foundation
+          fetch-depth: 0
+      - name: Apply foundation changes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def write(path, content):
+              p = Path(path)
+              p.parent.mkdir(parents=True, exist_ok=True)
+              p.write_text(content, encoding='utf-8')
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'needle not found in {path}: {old[:120]!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          write('Packages/AuralisCore/Sources/Domain/MusicSource.swift', '''// SPDX-License-Identifier: GPL-3.0-only
+          import Foundation
+
+          /// A stable identifier for a user-managed local music root. The location itself is
+          /// deliberately stored outside the domain model because Apple security-scoped bookmarks
+          /// and Android persisted document URIs are platform-specific capabilities.
+          public struct LocalLibraryID: RawRepresentable, Codable, Hashable, Sendable, Identifiable, ExpressibleByStringLiteral {
+              public let rawValue: String
+              public var id: String { rawValue }
+              public init(rawValue: String) { self.rawValue = rawValue }
+              public init(stringLiteral value: String) { rawValue = value }
+          }
+
+          public struct LocalMusicSource: Codable, Hashable, Sendable, Identifiable {
+              public let id: LocalLibraryID
+              public var displayName: String
+              /// Opaque platform-owned token. Apple stores a bookmark key; Android stores a persisted URI string.
+              /// Consumers must never assume this is a filesystem path.
+              public var locationToken: String
+              public var isEnabled: Bool
+              public var addedAt: Date
+
+              public init(
+                  id: LocalLibraryID,
+                  displayName: String,
+                  locationToken: String,
+                  isEnabled: Bool = true,
+                  addedAt: Date = .now
+              ) {
+                  self.id = id
+                  self.displayName = displayName
+                  self.locationToken = locationToken
+                  self.isEnabled = isEnabled
+                  self.addedAt = addedAt
+              }
+          }
+
+          /// Source identity is separate from ServerID. Existing remote models continue to carry
+          /// ServerID for wire/storage compatibility while local-library code uses this type at
+          /// boundaries so a local source is never sent through a server connector by accident.
+          public enum MusicSource: Codable, Hashable, Sendable {
+              case server(ServerID)
+              case local(LocalLibraryID)
+          }
+
+          public struct LocalTrackReference: Codable, Hashable, Sendable {
+              public let libraryID: LocalLibraryID
+              /// Stable scanner identity, independent of a temporary playback URL.
+              public let stableFileID: String
+              /// Opaque platform token that can be resolved into file:// or content:// only at playback time.
+              public let locationToken: String
+
+              public init(libraryID: LocalLibraryID, stableFileID: String, locationToken: String) {
+                  self.libraryID = libraryID
+                  self.stableFileID = stableFileID
+                  self.locationToken = locationToken
+              }
+          }
+
+          public enum PlaybackSourceReference: Codable, Hashable, Sendable {
+              case remote(serverID: ServerID, trackID: TrackID)
+              case local(LocalTrackReference)
+          }
+
+          /// Records the one-way canonicalisation performed when a server download is promoted
+          /// into the user's local music library. Old remote IDs remain valid aliases so queues,
+          /// history and playlists created before the download do not break.
+          public struct TrackIdentityTransition: Codable, Hashable, Sendable {
+              public let remoteServerID: ServerID
+              public let remoteTrackID: TrackID
+              public let localLibraryID: LocalLibraryID
+              public let localTrackID: TrackID
+              public let promotedAt: Date
+
+              public init(
+                  remoteServerID: ServerID,
+                  remoteTrackID: TrackID,
+                  localLibraryID: LocalLibraryID,
+                  localTrackID: TrackID,
+                  promotedAt: Date = .now
+              ) {
+                  self.remoteServerID = remoteServerID
+                  self.remoteTrackID = remoteTrackID
+                  self.localLibraryID = localLibraryID
+                  self.localTrackID = localTrackID
+                  self.promotedAt = promotedAt
+              }
+          }
+
+          public struct LocalLibraryScanSnapshot: Codable, Hashable, Sendable {
+              public var discoveredFiles: Int
+              public var importedTracks: Int
+              public var updatedTracks: Int
+              public var removedTracks: Int
+              public var failedFiles: Int
+              public var completedAt: Date
+
+              public init(
+                  discoveredFiles: Int = 0,
+                  importedTracks: Int = 0,
+                  updatedTracks: Int = 0,
+                  removedTracks: Int = 0,
+                  failedFiles: Int = 0,
+                  completedAt: Date = .now
+              ) {
+                  self.discoveredFiles = discoveredFiles
+                  self.importedTracks = importedTracks
+                  self.updatedTracks = updatedTracks
+                  self.removedTracks = removedTracks
+                  self.failedFiles = failedFiles
+                  self.completedAt = completedAt
+              }
+          }
+
+          public protocol LocalMusicSourceStore: Sendable {
+              func sources() async throws -> [LocalMusicSource]
+              func saveSource(_ source: LocalMusicSource) async throws
+              func removeSource(id: LocalLibraryID) async throws
+          }
+
+          public protocol LocalMusicScanning: Sendable {
+              func scan(source: LocalMusicSource) async throws -> LocalLibraryScanSnapshot
+          }
+
+          public protocol PlaybackSourceResolving: Sendable {
+              func resolve(_ source: PlaybackSourceReference) async throws -> URL
+          }
+          ''')
+
+          write('Packages/AuralisCore/Sources/AppShell/LocalMusicSettingsPage.swift', '''// SPDX-License-Identifier: GPL-3.0-only
+          import SwiftUI
+          import ThemeEngine
+
+          /// Local-library management intentionally lives only in Settings. PR1 exposes the
+          /// architecture boundary; PR2 supplies platform folder pickers, scanning and playback.
+          struct LocalMusicSettingsPage: View {
+              let theme: BuiltInTheme
+
+              var body: some View {
+                  Form {
+                      Section {
+                          LabeledContent {
+                              Text(verbatim: "已启用")
+                                  .foregroundStyle(theme.colorTokens.secondaryText.color)
+                          } label: {
+                              Label("本地音乐基础架构", systemImage: "music.note.house")
+                          }
+                          Text(verbatim: "本地音乐来源、扫描状态、重新扫描和存储位置都将在这里管理，不在资料库主页增加独立设置入口。")
+                              .font(.caption)
+                              .foregroundStyle(theme.colorTokens.secondaryText.color)
+                      }
+                      Section("来源") {
+                          Text(verbatim: "尚未添加本地音乐来源。文件夹授权与扫描将在下一阶段启用。")
+                              .foregroundStyle(theme.colorTokens.secondaryText.color)
+                      }
+                  }
+                  .navigationTitle("本地音乐")
+                  .scrollContentBackground(.hidden)
+                  .background(theme.colorTokens.background.color)
+              }
+          }
+          ''')
+
+          replace(
+              'Packages/AuralisCore/Sources/AppShell/SettingsView.swift',
+              '''                NavigationLink {\n                    AgentSettingsPage(model: model, theme: theme)\n''',
+              '''                NavigationLink {\n                    LocalMusicSettingsPage(theme: theme)\n                } label: {\n                    SettingsCategoryRow(\n                        title: "本地音乐",\n                        subtitle: "音乐来源、扫描与本地存储",\n                        icon: "music.note.house"\n                    )\n                }\n                NavigationLink {\n                    AgentSettingsPage(model: model, theme: theme)\n'''
+          )
+
+          write('android/core/domain/src/main/java/com/auralis/core/domain/MusicSource.kt', '''// SPDX-License-Identifier: GPL-3.0-only
+          package com.auralis.core.domain
+
+          import kotlinx.serialization.Serializable
+
+          @JvmInline
+          @Serializable
+          value class LocalLibraryId(val value: String)
+
+          @Serializable
+          data class LocalMusicSource(
+              val id: LocalLibraryId,
+              val displayName: String,
+              /** Persisted SAF/MediaStore URI or another platform-owned opaque token; never assume a raw path. */
+              val locationToken: String,
+              val isEnabled: Boolean = true,
+              val addedAtMillis: Long = System.currentTimeMillis(),
+          )
+
+          @Serializable
+          sealed interface MusicSource {
+              @Serializable
+              data class Server(val serverId: ServerId) : MusicSource
+
+              @Serializable
+              data class Local(val libraryId: LocalLibraryId) : MusicSource
+          }
+
+          @Serializable
+          data class LocalTrackReference(
+              val libraryId: LocalLibraryId,
+              val stableFileId: String,
+              /** Resolved to content:// or file:// only when playback needs it. */
+              val locationToken: String,
+          )
+
+          @Serializable
+          sealed interface PlaybackSourceReference {
+              @Serializable
+              data class Remote(val serverId: ServerId, val trackId: TrackId) : PlaybackSourceReference
+
+              @Serializable
+              data class Local(val reference: LocalTrackReference) : PlaybackSourceReference
+          }
+
+          /** Remote IDs remain aliases after a downloaded server track becomes a canonical local-library track. */
+          @Serializable
+          data class TrackIdentityTransition(
+              val remoteServerId: ServerId,
+              val remoteTrackId: TrackId,
+              val localLibraryId: LocalLibraryId,
+              val localTrackId: TrackId,
+              val promotedAtMillis: Long = System.currentTimeMillis(),
+          )
+
+          @Serializable
+          data class LocalLibraryScanSnapshot(
+              val discoveredFiles: Int = 0,
+              val importedTracks: Int = 0,
+              val updatedTracks: Int = 0,
+              val removedTracks: Int = 0,
+              val failedFiles: Int = 0,
+              val completedAtMillis: Long = System.currentTimeMillis(),
+          )
+
+          interface LocalMusicSourceStore {
+              suspend fun sources(): List<LocalMusicSource>
+              suspend fun saveSource(source: LocalMusicSource)
+              suspend fun removeSource(id: LocalLibraryId)
+          }
+
+          fun interface LocalMusicScanner {
+              suspend fun scan(source: LocalMusicSource): LocalLibraryScanSnapshot
+          }
+
+          fun interface PlaybackSourceResolver {
+              suspend fun resolve(source: PlaybackSourceReference): String
+          }
+          ''')
+
+          write('android/feature/settings/src/main/java/com/auralis/feature/settings/LocalMusicSettingsPage.kt', '''// SPDX-License-Identifier: GPL-3.0-only
+          package com.auralis.feature.settings
+
+          import androidx.compose.foundation.layout.fillMaxSize
+          import androidx.compose.foundation.lazy.LazyColumn
+          import androidx.compose.material3.MaterialTheme
+          import androidx.compose.material3.Text
+          import androidx.compose.runtime.Composable
+          import androidx.compose.ui.Modifier
+          import com.auralis.core.designsystem.LocalAuralisTheme
+
+          /** Local library configuration is intentionally exposed only from Settings. */
+          @Composable
+          internal fun LocalMusicSettingsPage(
+              onBack: () -> Unit,
+              modifier: Modifier = Modifier,
+          ) {
+              val colors = LocalAuralisTheme.current.colors
+              SettingsPageContainer(modifier = modifier) {
+                  LazyColumn(Modifier.fillMaxSize()) {
+                      item { SettingsDetailTopBar(title = "本地音乐", onBack = onBack) }
+                      item { SettingsSectionTitle("本地音乐基础架构") }
+                      item {
+                          Text(
+                              "本地音乐来源、扫描状态、重新扫描和存储位置统一在设置中管理。文件夹授权与扫描将在下一阶段启用。",
+                              style = MaterialTheme.typography.bodyMedium,
+                              color = colors.secondaryText,
+                          )
+                      }
+                      item { SettingsSectionTitle("来源") }
+                      item { SettingsCaption("尚未添加本地音乐来源。") }
+                  }
+              }
+          }
+          ''')
+
+          settings = Path('android/feature/settings/src/main/java/com/auralis/feature/settings/SettingsScreens.kt')
+          text = settings.read_text(encoding='utf-8')
+          replacements = [
+              (
+                  '            onOpenQuality = {\n',
+                  '            onOpenLocalMusic = {\n                rememberEntry(ROOT_ITEM_LOCAL_MUSIC)\n                pageOrdinal = SettingsPage.LocalMusic.ordinal\n            },\n            onOpenQuality = {\n'
+              ),
+              (
+                  '        SettingsPage.Quality -> QualitySettingsPage(graph = graph, onBack = { pageOrdinal = NO_PAGE }, modifier = modifier)\n',
+                  '        SettingsPage.LocalMusic -> LocalMusicSettingsPage(onBack = { pageOrdinal = NO_PAGE }, modifier = modifier)\n        SettingsPage.Quality -> QualitySettingsPage(graph = graph, onBack = { pageOrdinal = NO_PAGE }, modifier = modifier)\n'
+              ),
+              (
+                  'private enum class SettingsPage { Quality, Data, Theme }',
+                  'private enum class SettingsPage { LocalMusic, Quality, Data, Theme }'
+              ),
+              (
+                  'private const val ROOT_ITEM_SERVERS = 2\nprivate const val ROOT_ITEM_AI = 4\nprivate const val ROOT_ITEM_QUALITY = 6\nprivate const val ROOT_ITEM_DATA = 8\nprivate const val ROOT_ITEM_HOME_LAYOUT = 10\nprivate const val ROOT_ITEM_THEME = 12',
+                  'private const val ROOT_ITEM_SERVERS = 2\nprivate const val ROOT_ITEM_LOCAL_MUSIC = 4\nprivate const val ROOT_ITEM_AI = 6\nprivate const val ROOT_ITEM_QUALITY = 8\nprivate const val ROOT_ITEM_DATA = 10\nprivate const val ROOT_ITEM_HOME_LAYOUT = 12\nprivate const val ROOT_ITEM_THEME = 14'
+              ),
+              (
+                  '    onOpenAiSettings: () -> Unit,\n    recommendationIndexState:',
+                  '    onOpenAiSettings: () -> Unit,\n    onOpenLocalMusic: () -> Unit,\n    recommendationIndexState:'
+              ),
+              (
+                  '            ROOT_ITEM_SERVERS to FocusRequester(),\n            ROOT_ITEM_AI to FocusRequester(),',
+                  '            ROOT_ITEM_SERVERS to FocusRequester(),\n            ROOT_ITEM_LOCAL_MUSIC to FocusRequester(),\n            ROOT_ITEM_AI to FocusRequester(),'
+              ),
+              (
+                  '''            item { SettingsDivider() }\n            item {\n                SettingsCategoryRow(\n                    title = stringResource(R.string.settings_ai_title),''',
+                  '''            item { SettingsDivider() }\n            item {\n                SettingsCategoryRow(\n                    title = "本地音乐",\n                    subtitle = "音乐来源、扫描与本地存储",\n                    icon = Icons.Filled.Storage,\n                    onClick = onOpenLocalMusic,\n                    modifier = Modifier.focusRequester(focusRequesters.getValue(ROOT_ITEM_LOCAL_MUSIC)),\n                )\n            }\n            item { SettingsDivider() }\n            item {\n                SettingsCategoryRow(\n                    title = stringResource(R.string.settings_ai_title),'''
+              ),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'needle not found in SettingsScreens.kt: {old[:100]!r}')
+              text = text.replace(old, new, 1)
+          settings.write_text(text, encoding='utf-8')
+
+          write('Docs/LocalMusicArchitecture.md', '''# Local music architecture
+
+          Local music is a first-class music source, not a second player and not an OpenSubsonic server impersonation.
+
+          ## Ownership
+
+          - All source management lives under **Settings → Local Music** on Apple, Android mobile and Android TV.
+          - Existing library/player screens consume unified catalog results; they do not own folder permissions.
+          - Platform location tokens are opaque. Apple may persist security-scoped bookmarks; Android persists SAF/MediaStore URIs.
+          - Playback URLs are resolved just in time through `PlaybackSourceReference`.
+
+          ## Download promotion contract
+
+          PR2 promotes a completed server download into the configured local-music library instead of leaving it in a private cache. Promotion creates a `TrackIdentityTransition` from the old `(serverID, trackID)` to the canonical local track ID. The old remote identity remains a resolvable alias so active queues, history and playlists do not break during or after the transition.
+
+          ## Delivery sequence
+
+          1. PR1: source/identity/playback contracts plus Settings-only management surface.
+          2. PR2: platform source authorization, scanner/metadata ingestion, local playback, server-download promotion and alias persistence.
+          3. PR3: unified catalog/search/library/Agent/recommendation consumption.
+          ''')
+          PY
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/local-music-pr1-bootstrap.yml
+          git add Packages android Docs
+          git commit -m "feat(local-music): add cross-platform source foundation"
+          git push origin HEAD:feat/local-music-foundation
