@@ -173,13 +173,13 @@ struct AgentToolBrokerTests {
         }
     }
 
-    @Test("Broker 「来点适合深夜听的」→ recommend_by_mood 优先")
+    @Test("Broker 「来点适合深夜听的」→ 撞库第一召回且保留本地降级")
     func brokerMoodShortlist() {
         let plan = makePlan("推荐几首适合深夜听的歌")
         let selected = ToolSelector.select(plan: plan, all: AgentToolRegistry.all)
         let names = Set(selected.map(\.name))
-        #expect(names.contains("recommend_by_mood"), "深夜场景应召回情绪推荐")
-        // 推荐主要由 recommend_by_mood 产出候选；不强求 library_search 必须在首轮。
+        #expect(names.contains("recommendation_ground_candidates"), "开放语义推荐应召回批量撞库工具")
+        #expect(names.contains("recommend_by_mood"), "仍应保留本地情绪推荐作为降级")
     }
 
     @Test("Broker 「找20首中文摇滚」→ library_select_tracks 优先")

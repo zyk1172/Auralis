@@ -207,15 +207,15 @@ public enum AgentCapabilityCatalog {
         AgentCapability(
             id: "music_recommendation",
             title: "复杂音乐推荐",
-            summary: "基于真实曲库、推荐索引、用户偏好与播放历史做多条件复杂推荐，绝不随机冒充。",
+            summary: "开放语义请求优先由云端模型生成过采样候选，再由本地曲库批量撞库与确定性过滤；旧 Recommendation Index / 情绪 / 约束推荐作为降级，所有最终歌曲都必须是真实 GlobalTrackID。",
             requiresAIPlanning: true,
             runtimeDependencies: [.catalog],
             executionOwner: .agent,
-            modelRole: "理解用户场景与约束，组合真实筛选条件。",
-            runtimeRole: "执行真实曲库查询（约束/心情/智能队列/索引筛选）并返回真实候选。",
-            userFacingDescription: "根据场景、情绪、风格等条件做真实音乐推荐。",
-            relatedTools: ["recommend_by_constraints", "recommend_by_mood", "smart_queue_generate", "library_select_tracks", "library_get_catalog_tracks"],
-            limitations: ["Provider 不可用时不做随机/相似歌曲冒充推荐。"]
+            modelRole: "区分开放语义推荐与确定性筛选：开放语义先生成目标数量约 3-5 倍的 title+artist 候选并一次调用 recommendation_ground_candidates；纯年份/格式/收藏/离线等约束直接走本地查询。",
+            runtimeRole: "对模型候选做批量实体 grounding：规范化标题/艺人、保守模糊匹配、排除不喜欢、去重与艺人多样性；命中不足时再使用推荐索引、心情/约束推荐补足。",
+            userFacingDescription: "先理解自由描述并撞入真实本地曲库，再由本地规则过滤和降级补足。",
+            relatedTools: ["recommendation_ground_candidates", "recommend_by_constraints", "recommend_by_mood", "smart_queue_generate", "library_select_tracks", "library_get_catalog_tracks", "library_index_read"],
+            limitations: ["模型候选不是最终事实；未通过本地 grounding 的歌曲不得展示或写入队列。", "Provider 不可用或撞库不足时使用现有本地推荐链路降级。"]
         ),
         AgentCapability(
             id: "music_appreciation",

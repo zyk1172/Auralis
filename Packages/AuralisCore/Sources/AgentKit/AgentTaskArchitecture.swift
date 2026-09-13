@@ -194,7 +194,7 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
         case .musicDiscovery:
             return [
                 "library_search", "library_select_tracks", "library_get_catalog_index", "library_get_catalog_tracks",
-                "library_index_read", "server_search", "recommend_by_mood", "recommend_by_constraints",
+                "library_index_read", "server_search", "recommendation_ground_candidates", "recommend_by_mood", "recommend_by_constraints",
                 "result_present_tracks", "getSimilarTracks", "library_get_similar_songs",
             ]
         case .queueManagement:

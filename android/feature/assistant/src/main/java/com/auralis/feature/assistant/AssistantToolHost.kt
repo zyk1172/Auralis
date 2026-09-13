@@ -259,6 +259,47 @@ class AssistantToolHost(
             }.toString()
         }
 
+        ro(
+            "recommendation_ground_candidates",
+            "开放语义推荐第一召回层：模型先按用户自由描述生成目标数量约 3-5 倍的 title+artist 候选，再一次与本地真实曲库撞库。只返回高置信度真实歌曲；命中不足再用 Recommendation Index/旧推荐补足。纯年份、格式、收藏、离线等确定性筛选不要调用。",
+            """{"properties":{"candidates":{"type":"array","minItems":1,"maxItems":200,"items":{"type":"object","properties":{"title":{"type":"string","minLength":1},"artist":{"type":"string"},"album":{"type":"string"}},"required":["title"],"additionalProperties":false}},"targetCount":{"type":"integer","minimum":1,"maximum":100},"maxPerArtist":{"type":"integer","minimum":1,"maximum":10}},"required":["candidates"],"type":"object"}""",
+        ) { args ->
+            val serverId = activeServerId() ?: throw IllegalArgumentException("没有已连接的服务器")
+            val candidates = args["candidates"]?.jsonArray?.mapNotNull { node ->
+                val obj = runCatching { node.jsonObject }.getOrNull() ?: return@mapNotNull null
+                val title = obj["title"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                if (title.isBlank()) return@mapNotNull null
+                SemanticRecommendationCandidate(
+                    title = title,
+                    artist = obj["artist"]?.jsonPrimitive?.contentOrNull,
+                    album = obj["album"]?.jsonPrimitive?.contentOrNull,
+                )
+            }.orEmpty()
+            if (candidates.isEmpty()) throw IllegalArgumentException("candidates 至少需要一首有效候选")
+            val targetCount = args.int("targetCount")?.coerceIn(1, 100) ?: 20
+            val maxPerArtist = args.int("maxPerArtist")?.coerceIn(1, 10) ?: 2
+            val allTracks = graph.catalogRepository.observeTracks(serverId).first()
+            val disliked = graph.catalogRepository.dislikedIds(serverId)
+            val grounded = SemanticCollisionMatcher.match(
+                candidates = candidates,
+                tracks = allTracks,
+                disliked = disliked,
+                targetCount = targetCount,
+                maxPerArtist = maxPerArtist,
+            )
+            buildJsonObject {
+                put("ok", true)
+                put("generatedCount", candidates.size)
+                put("matchedCount", grounded.size)
+                put("targetCount", targetCount)
+                put("fallbackNeeded", grounded.size < targetCount)
+                put("tracks", trackSummaries(grounded, targetCount))
+                if (grounded.size < targetCount) {
+                    put("fallbackHint", "撞库命中不足：用 recommendation_category_tracks 或现有本地推荐/筛选工具补足；不要虚构未命中的歌曲。")
+                }
+            }.toString()
+        }
+
         ro("searchTracks", "在本地音乐库中按名称搜索歌曲（返回结构化列表；无结果显示，可再用 server_search 在线搜索）。", """{"properties":{"q":{"type":"string"},"limit":{"type":"integer"}},"required":["q"],"type":"object"}""") { args ->
             val q = args.string("q") ?: ""
             val limit = args.int("limit")?.coerceIn(1, 50) ?: 20
@@ -817,6 +858,7 @@ class AssistantToolHost(
             "queue_remove" -> R.string.assistant_tool_remove_queue_item
             "queue_save_as_playlist" -> R.string.assistant_tool_save_queue_as_playlist
             "library_get_similar_songs" -> R.string.assistant_tool_find_similar
+            "recommendation_ground_candidates" -> R.string.assistant_tool_recommendation_category
             "recommendation_category_tracks" -> R.string.assistant_tool_recommendation_category
             "recommendation_create_playlist" -> R.string.assistant_tool_recommendation_playlist
             "queue_replace" -> R.string.assistant_tool_replace_queue

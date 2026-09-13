@@ -73,13 +73,13 @@ public struct AgentTaskWorkingSet: Sendable {
         "library_get_random_songs", "library_get_most_played", "library_get_recently_added",
         "library_get_similar_songs", "library_get_genres", "library_get_tracks_by_genre",
         "getLeastPlayed", "getDownloadedTracks", "listPlaylists", "library_get_playlist",
-        "recommend_by_mood", "recommend_by_constraints", "smart_queue_generate",
+        "recommendation_ground_candidates", "recommend_by_mood", "recommend_by_constraints", "smart_queue_generate",
     ]
     /// 受“无新结果”保护约束的搜索类工具（其结果为歌曲清单）。
     public static let searchTools: Set<String> = [
         "library_search", "server_search", "searchTracks", "library_select_tracks",
         "library_get_random_songs", "library_get_tracks_by_genre",
-        "recommend_by_mood", "recommend_by_constraints", "smart_queue_generate",
+        "recommendation_ground_candidates", "recommend_by_mood", "recommend_by_constraints", "smart_queue_generate",
         "getFavorites", "library_get_starred", "getRecentHistory", "library_get_recently_played",
     ]
     /// 会向队列写入歌曲的工具（用于工作集统计入队数量）。

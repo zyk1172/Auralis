@@ -129,6 +129,13 @@ public struct AgentToolkit {
         }
         switch call.name {
         // MARK: Catalog reads
+        case "recommendation_ground_candidates":
+            return try await SemanticCollisionRecommendation.execute(
+                call,
+                descriptor: descriptor,
+                catalog: catalog,
+                serverID: serverID
+            )
         case "searchTracks":
             let q = try require(call, "q")
             let list = try await catalog.searchTracks(query: q, serverID: serverID)
