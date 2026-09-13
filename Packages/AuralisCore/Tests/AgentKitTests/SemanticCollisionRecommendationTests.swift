@@ -34,7 +34,7 @@ struct SemanticCollisionRecommendationTests {
             tracks: library,
             targetCount: 1
         )
-        #expect(result.map(\\.id.rawValue) == ["1"])
+        #expect(result.map(\.id.rawValue) == ["1"])
     }
 
     @Test("同名但艺人错误时不误撞")
@@ -80,6 +80,6 @@ struct SemanticCollisionRecommendationTests {
             targetCount: 3,
             maxPerArtist: 1
         )
-        #expect(result.map(\\.id.rawValue) == ["2", "3"])
+        #expect(result.map(\.id.rawValue) == ["2", "3"])
     }
 }
