@@ -90,6 +90,7 @@ fun SettingsScreen(
     onOpenServers: () -> Unit,
     onEditHomeLayout: () -> Unit,
     onOpenAiSettings: () -> Unit,
+    onOpenLocalMusic: () -> Unit,
     recommendationIndexState: RecommendationIndexUiState = RecommendationIndexUiState(),
     onStartRecommendationIndex: () -> Unit = {},
     onCancelRecommendationIndex: () -> Unit = {},
@@ -127,6 +128,10 @@ fun SettingsScreen(
             onStartRecommendationIndex = onStartRecommendationIndex,
             onCancelRecommendationIndex = onCancelRecommendationIndex,
             onRefreshRecommendationIndex = onRefreshRecommendationIndex,
+            onOpenLocalMusic = {
+                rememberEntry(ROOT_ITEM_LOCAL_MUSIC)
+                pageOrdinal = SettingsPage.LocalMusic.ordinal
+            },
             onOpenQuality = {
                 rememberEntry(ROOT_ITEM_QUALITY)
                 pageOrdinal = SettingsPage.Quality.ordinal
@@ -144,22 +149,24 @@ fun SettingsScreen(
             modifier = modifier,
         )
 
+        SettingsPage.LocalMusic -> LocalMusicSettingsPage(onBack = { pageOrdinal = NO_PAGE }, modifier = modifier)
         SettingsPage.Quality -> QualitySettingsPage(graph = graph, onBack = { pageOrdinal = NO_PAGE }, modifier = modifier)
         SettingsPage.Data -> DataAndBackupPage(graph = graph, onBack = { pageOrdinal = NO_PAGE }, modifier = modifier)
         SettingsPage.Theme -> ThemeSettingsPage(graph = graph, onBack = { pageOrdinal = NO_PAGE }, modifier = modifier)
     }
 }
 
-private enum class SettingsPage { Quality, Data, Theme }
+private enum class SettingsPage { LocalMusic, Quality, Data, Theme }
 
 private const val NO_PAGE = -1
 private const val NO_FOCUS_ITEM = -1
 private const val ROOT_ITEM_SERVERS = 2
-private const val ROOT_ITEM_AI = 4
-private const val ROOT_ITEM_QUALITY = 6
-private const val ROOT_ITEM_DATA = 8
-private const val ROOT_ITEM_HOME_LAYOUT = 10
-private const val ROOT_ITEM_THEME = 12
+private const val ROOT_ITEM_LOCAL_MUSIC = 4
+private const val ROOT_ITEM_AI = 6
+private const val ROOT_ITEM_QUALITY = 8
+private const val ROOT_ITEM_DATA = 10
+private const val ROOT_ITEM_HOME_LAYOUT = 12
+private const val ROOT_ITEM_THEME = 14
 
 @Composable
 private fun RecommendationIndexSettingsCard(
@@ -246,6 +253,7 @@ private fun SettingsRootPage(
     val focusRequesters = remember {
         mapOf(
             ROOT_ITEM_SERVERS to FocusRequester(),
+            ROOT_ITEM_LOCAL_MUSIC to FocusRequester(),
             ROOT_ITEM_AI to FocusRequester(),
             ROOT_ITEM_QUALITY to FocusRequester(),
             ROOT_ITEM_DATA to FocusRequester(),
@@ -307,6 +315,16 @@ private fun SettingsRootPage(
                     icon = Icons.Filled.Dns,
                     onClick = onOpenServers,
                     modifier = Modifier.focusRequester(focusRequesters.getValue(ROOT_ITEM_SERVERS)),
+                )
+            }
+            item { SettingsDivider() }
+            item {
+                SettingsCategoryRow(
+                    title = "本地音乐",
+                    subtitle = "音乐来源、扫描与本地存储",
+                    icon = Icons.Filled.Storage,
+                    onClick = onOpenLocalMusic,
+                    modifier = Modifier.focusRequester(focusRequesters.getValue(ROOT_ITEM_LOCAL_MUSIC)),
                 )
             }
             item { SettingsDivider() }
