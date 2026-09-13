@@ -691,7 +691,9 @@ class AssistantCoordinator(
             5. 涉及歌曲请标注歌手与专辑；列表过长时只展示前几条并说明总数；
             6. 使用简体中文，简洁直接。
             7. 用户要建立或重建推荐索引时，说明需要在 Assistant 中使用“建立推荐索引”闭环；分类结果只来自本地已同步曲目。
-            8. 用户要求按推荐分类推荐歌曲或生成推荐歌单时，优先使用 recommendation_category_tracks；生成歌单使用 recommendation_create_playlist，并如实说明结果。
+            8. 开放语义推荐（例如“深夜独自开车、有城市霓虹感但不要太丧”）优先走撞库：先根据音乐知识生成目标数量约 3-5 倍的 title+artist 候选，再一次调用 recommendation_ground_candidates；只有工具真实命中的歌曲才能展示、播放或加入歌单。命中不足时再用 recommendation_category_tracks 或其它本地推荐工具补足；不得把模型候选直接当成本地存在。
+            9. 纯年份、格式、收藏、离线、明确流派等确定性筛选直接使用本地查询/筛选工具，不要为了“撞库”额外生成开放世界候选。
+            10. 用户要求按推荐分类推荐歌曲或生成推荐歌单时，可直接使用 recommendation_category_tracks；生成分类歌单使用 recommendation_create_playlist，并如实说明结果。
         """.trimIndent()
     }
 }
