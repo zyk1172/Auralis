@@ -21,8 +21,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 
-/** Android SAF-backed local music catalog. Mobile and TV share this implementation. */
-class AndroidLocalMusicLibrary(private val context: Context) {
+/** Android SAF-backed local music catalog. Mobile and TV share one process-level runtime. */
+class AndroidLocalMusicLibrary private constructor(private val context: Context) {
     private val prefs = context.getSharedPreferences("auralis_local_music_sources", Context.MODE_PRIVATE)
     private val _sources = MutableStateFlow(loadSources())
     private val _tracks = MutableStateFlow<List<Track>>(emptyList())
@@ -178,6 +178,12 @@ class AndroidLocalMusicLibrary(private val context: Context) {
         private val EXTENSIONS = setOf(
             "mp3", "m4a", "aac", "alac", "flac", "wav", "aiff", "aif", "ogg", "opus",
         )
+        @Volatile private var instance: AndroidLocalMusicLibrary? = null
+
+        fun get(context: Context): AndroidLocalMusicLibrary =
+            instance ?: synchronized(this) {
+                instance ?: AndroidLocalMusicLibrary(context.applicationContext).also { instance = it }
+            }
 
         internal fun fnv64(value: String): String {
             var hash = 0xcbf29ce484222325UL
