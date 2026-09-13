@@ -72,7 +72,3 @@ interface LocalMusicSourceStore {
 fun interface LocalMusicScanner {
     suspend fun scan(source: LocalMusicSource): LocalLibraryScanSnapshot
 }
-
-fun interface PlaybackSourceResolver {
-    suspend fun resolve(source: PlaybackSourceReference): String
-}
