@@ -81,8 +81,14 @@ enum SemanticCollisionMatcher {
         let wantedTitle = normalize(candidate.title)
         guard !wantedTitle.isEmpty else { return nil }
         let wantedBaseTitle = baseTitle(candidate.title)
-        let wantedArtist = candidate.artist.map(normalizeArtist).filter { !$0.isEmpty }
-        let wantedAlbum = candidate.album.map(normalize).filter { !$0.isEmpty }
+        let wantedArtist = candidate.artist.flatMap { raw -> String? in
+            let value = normalizeArtist(raw)
+            return value.isEmpty ? nil : value
+        }
+        let wantedAlbum = candidate.album.flatMap { raw -> String? in
+            let value = normalize(raw)
+            return value.isEmpty ? nil : value
+        }
 
         var scored: [Scored] = []
         for item in index {
@@ -190,8 +196,7 @@ enum SemanticCollisionMatcher {
             for (j, right) in b.enumerated() {
                 let cost = left == right ? 0 : 1
                 current[j + 1] = min(
-                    current[j] + 1,
-                    previous[j + 1] + 1,
+                    min(current[j] + 1, previous[j + 1] + 1),
                     previous[j] + cost
                 )
             }
