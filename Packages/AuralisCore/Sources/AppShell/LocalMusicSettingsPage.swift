@@ -19,11 +19,17 @@ struct LocalMusicSettingsPage: View {
                         value: "\(scan.discoveredFiles) 个文件 · \(scan.failedFiles) 个失败"
                     )
                 }
+#if os(iOS)
+                Text("Auralis 会自动建立可在“文件”App 中访问的本地音乐目录：我的 iPhone → Auralis → LocalMusic。直接把音乐文件复制进去即可，不需要先创建或选择文件夹。")
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+#else
                 Button {
                     isImporting = true
                 } label: {
                     Label("添加音乐文件夹", systemImage: "folder.badge.plus")
                 }
+#endif
                 Button {
                     Task { _ = await library.scanAll() }
                 } label: {
@@ -34,30 +40,32 @@ struct LocalMusicSettingsPage: View {
 
             Section("来源") {
                 if library.sources.isEmpty {
-                    Text("尚未添加本地音乐文件夹。服务器下载的歌曲会自动进入 Auralis 管理的本地音乐库。")
+                    Text("尚未添加本地音乐文件夹。服务器下载的歌曲仍会由 Auralis 单独管理。")
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                 }
                 ForEach(library.sources) { source in
                     HStack {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(source.displayName)
-                            Text("已持久授权")
+                            Text(source.id == LocalMusicLibraryStore.managedSourceID ? "文件 App 可见目录" : "已持久授权")
                                 .font(.caption)
                                 .foregroundStyle(theme.colorTokens.secondaryText.color)
                         }
                         Spacer()
-                        Button(role: .destructive) {
-                            library.removeSource(source)
-                        } label: {
-                            Image(systemName: "trash")
+                        if source.id != LocalMusicLibraryStore.managedSourceID {
+                            Button(role: .destructive) {
+                                library.removeSource(source)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
                         }
-                        .buttonStyle(.borderless)
                     }
                 }
             }
 
             Section("下载") {
-                Text("服务器下载保存到 Auralis/LocalMusic/Downloads。下载完成后建立本地 canonical 身份，同时保留服务器身份作为兼容别名，现有队列、历史和歌单不会因身份切换失效。")
+                Text("服务器下载由 Auralis 下载管理器单独维护，并在完成后获得稳定的本地 canonical 身份；它们不要求用户预先选择文件夹，也不会与“文件”App 中的 LocalMusic 导入目录混为同一个来源。")
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
