@@ -236,6 +236,7 @@ private fun SettingsRootPage(
     onOpenServers: () -> Unit,
     onEditHomeLayout: () -> Unit,
     onOpenAiSettings: () -> Unit,
+    onOpenLocalMusic: () -> Unit,
     recommendationIndexState: RecommendationIndexUiState,
     onStartRecommendationIndex: () -> Unit,
     onCancelRecommendationIndex: () -> Unit,
