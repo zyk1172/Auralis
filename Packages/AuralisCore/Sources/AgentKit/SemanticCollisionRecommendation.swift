@@ -219,13 +219,21 @@ enum SemanticCollisionRecommendation {
         }
         let targetCount = min(max((try? call.int("targetCount")) ?? 20, 1), 100)
         let maxPerArtist = min(max((try? call.int("maxPerArtist")) ?? 2, 1), 10)
-        let tracks = try await catalog.allTracks(serverID: serverID)
-        let disliked: Set<GlobalID>
+
+        // Ground against the user's complete playable catalog: active server + true local files.
+        // `auralis-local` is a catalog namespace, never a remote server route.
+        let remoteTracks = try await catalog.allTracks(serverID: serverID)
+        let localTracks = try await catalog.allTracks(serverID: LocalCatalogOverlay.localServerID)
+        let tracks = TrackQuality.deduplicatedPreferringQuality(remoteTracks + localTracks)
+
+        var disliked = Set<GlobalID>()
         if let serverID {
-            disliked = (try? await catalog.dislikedTrackIDs(serverID: serverID)) ?? []
-        } else {
-            disliked = []
+            disliked.formUnion((try? await catalog.dislikedTrackIDs(serverID: serverID)) ?? [])
         }
+        disliked.formUnion(
+            (try? await catalog.dislikedTrackIDs(serverID: LocalCatalogOverlay.localServerID)) ?? []
+        )
+
         let grounded = SemanticCollisionMatcher.match(
             candidates: candidates,
             tracks: tracks,
@@ -235,8 +243,8 @@ enum SemanticCollisionRecommendation {
         )
         let fallbackNeeded = grounded.count < targetCount
         let summary = fallbackNeeded
-            ? "语义撞库：模型候选 \(candidates.count) 首，本地高置信度命中 \(grounded.count)/\(targetCount) 首；请用 Recommendation Index / 本地推荐继续补足，未命中的模型歌曲不得直接展示。"
-            : "语义撞库：模型候选 \(candidates.count) 首，本地高置信度命中目标 \(grounded.count) 首。"
+            ? "语义撞库：模型候选 \(candidates.count) 首，统一本地目录高置信度命中 \(grounded.count)/\(targetCount) 首；请用 Recommendation Index / 本地推荐继续补足，未命中的模型歌曲不得直接展示。"
+            : "语义撞库：模型候选 \(candidates.count) 首，统一本地目录高置信度命中目标 \(grounded.count) 首。"
         return ToolResult(
             call: call,
             permission: descriptor.permission,
