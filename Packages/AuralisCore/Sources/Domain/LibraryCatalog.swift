@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
-/// 应用内统一的音乐库快照：连接服务器后被服务器数据填充。
+/// 应用内统一的音乐库快照：真实服务器目录作为持久事实，本地文件通过
+/// `LocalCatalogOverlay` 在读取边界叠加。`auralis-local` 不是 ServerAccount，
+/// 因此服务器连接、凭据和 OpenSubsonic 写操作仍只针对真实服务器。
 public struct LibraryCatalog: Sendable {
     public let account: ServerAccount
     public let artists: [Artist]
@@ -28,11 +30,12 @@ public struct LibraryCatalog: Sendable {
         lyrics: [TrackID: LyricsDocument],
         recommendations: [RecommendationResult]
     ) {
+        let local = LocalCatalogOverlay.snapshot()
         self.account = account
-        self.artists = artists
-        self.albums = albums
-        self.tracks = tracks
-        self.genres = genres
+        self.artists = LocalCatalogOverlay.mergedArtists(remote: artists, local: local)
+        self.albums = LocalCatalogOverlay.mergedAlbums(remote: albums, local: local)
+        self.tracks = LocalCatalogOverlay.mergedTracks(remote: tracks, local: local)
+        self.genres = LocalCatalogOverlay.mergedGenres(remote: genres, local: local)
         self.playlists = playlists
         self.history = history
         self.downloads = downloads
@@ -42,14 +45,18 @@ public struct LibraryCatalog: Sendable {
 }
 
 extension LibraryCatalog {
-    /// 空 catalog，App 启动时未连接服务器使用。连接成功后替换为服务器数据。
-    public static let empty = LibraryCatalog(
-        account: ServerAccount(id: "local", displayName: String(localized: "未连接服务器", bundle: .module)),
-        artists: [], albums: [], tracks: [], genres: [], playlists: [],
-        history: [], downloads: [], lyrics: [:], recommendations: []
-    )
+    /// 空 catalog，App 启动时未连接服务器使用。即使未连接服务器，只要本地 overlay
+    /// 已恢复，普通资料库 / 搜索仍可看到真实本地音乐。
+    public static var empty: LibraryCatalog {
+        LibraryCatalog(
+            account: ServerAccount(id: "local", displayName: String(localized: "未连接服务器", bundle: .module)),
+            artists: [], albums: [], tracks: [], genres: [], playlists: [],
+            history: [], downloads: [], lyrics: [:], recommendations: []
+        )
+    }
 
-    /// 占位账户的 ID，表示「尚未连接任何服务器」。
+    /// 占位账户的 ID，表示「尚未连接任何服务器」。它与本地实体 namespace
+    /// `auralis-local` 不同，不能把两者混为同一个服务器。
     public static let placeholderServerID = ServerID(rawValue: "local")
 
     /// 是否已连接到真实服务器（而非占位账户）。
