@@ -18,7 +18,8 @@ Auralis 不提供官方音乐内容或音乐服务器；使用者需要自行管
 - Unified catalog：有活动服务器时，用户可见的 Library/Search/Agent 会组合“当前服务器 +
   本地音乐”；其他已保存服务器仍保持隔离，服务器写操作也不会错误落到本地来源。
 - Downloads：服务器下载完成后会获得稳定的本地 canonical 身份，同时保留原远端 Global ID
-  作为兼容别名，避免现有队列、历史和歌单因下载完成而失效。
+  作为兼容别名；iOS/iPadOS 还会把同一份音频整理到 Files 可见的 `LocalMusic` 标准单曲文件夹，
+  不额外复制一份音频。
 - Music library：SQLite/FTS5、Room、本地缓存、专辑/艺术家/流派/歌曲浏览、收藏、评分、
   scrobble、歌词/封面缓存，以及多服务器隔离。
 - Playlist：浏览、创建、重命名、编辑、排序、去重、合并，并支持把当前队列保存为歌单。
@@ -44,7 +45,7 @@ Auralis 会在启动时自动建立一个 Files 可见的本地音乐目录：
 ```
 
 不需要先在“文件”App 中手动创建或选择根目录。`LocalMusic` 采用**一首歌一个文件夹**的组织方式，
-每个一级子文件夹代表一首歌曲：
+每个普通本地歌曲一级子文件夹代表一首歌曲：
 
 ```text
 LocalMusic/
@@ -55,32 +56,42 @@ LocalMusic/
 │   ├── lyrics.lrc
 │   └── metadata.json
 └── 歌曲 B/
-    ├── song.m4a
-    ├── artwork.png
-    └── lyrics.txt
+    ├── audio.m4a
+    ├── cover.png
+    ├── lyrics.txt
+    └── metadata.json
 ```
 
-每个歌曲文件夹必须恰好包含 1 个受支持音频文件。封面、歌词和 `metadata.json` 是一等 sidecar：
+每个本地歌曲文件夹必须恰好包含 1 个受支持音频文件。封面、歌词和 `metadata.json` 是一等 sidecar：
 Auralis 会直接读取本地封面、LRC/TXT 歌词和元数据覆盖信息，并把它们接入现有封面缓存、歌词时间轴
 和统一资料库。封面或歌词缺失不会阻止纯音乐或无封面歌曲播放。
+
+“设置 → 本地音乐 → 导入歌曲”可以直接选择音频文件，也可以选择已经整理好的一首歌文件夹。
+Auralis 会识别音频内嵌标题/艺人/专辑/流派/封面，以及同目录的封面、LRC/TXT 歌词和
+`metadata.json`，然后复制整理成上面的标准 package；直接选择多个散落音频时只匹配同名 sidecar，
+避免错误复用同一个 `cover.jpg` 或 `lyrics.lrc`。
 
 当前音频支持 MP3、M4A、AAC、ALAC、FLAC、WAV、AIFF、OGG 和 Opus；封面支持
 JPG/JPEG、PNG、WebP、HEIC/HEIF；歌词支持 LRC 和 TXT。应用会在 `LocalMusic/README.txt`
 自动写入目录示例和规则。完整规范见 [`Docs/LocalMusicFolderFormat.md`](Docs/LocalMusicFolderFormat.md)。
 
-服务器下载仍由下载管理器独立维护，并通过身份映射进入统一资料库；它们不会被当成用户手动
-放入 `LocalMusic` 的同一个来源重复扫描。
+从服务器音乐库下载歌曲时，Auralis 会先完成可靠的后台下载，再把**同一份音频移动**进
+`LocalMusic` 的标准单曲文件夹，并在服务器可提供时写入封面、LRC/TXT 歌词和 `metadata.json`。
+这些文件夹在 Files 中可见，但仍由下载管理器拥有，并带内部所有权标记，因此本地扫描不会把它们
+再次作为第二首本地歌曲导入。旧版本内部缓存会在能够重新取得服务器元数据时逐步迁移；离线时仍保留
+原缓存可播放。删除这类文件建议使用 App 内“删除下载”，以同步清理下载索引和整个歌曲文件夹。
 
 ### macOS
 
 macOS 继续使用用户显式选择的 security-scoped 文件夹来源，授权会持久化，并在启动时恢复、
 重新扫描并发布到统一资料库。历史外部目录保持递归音频扫描兼容；同目录的封面、歌词和
-`metadata.json` sidecar 也可以被读取。
+`metadata.json` sidecar 也可以被读取。服务器下载仍由 Auralis 管理，不使用 iOS 的 Files 可见根目录。
 
 ### Android / Android TV
 
 Android 使用持久化 SAF tree URI 管理本地文件夹；Mobile 与 TV 共享本地音乐运行时与统一资料库。
-无活动 OpenSubsonic 服务器时仍可进入本地 Library/Search/Assistant 读路径。
+无活动 OpenSubsonic 服务器时仍可进入本地 Library/Search/Assistant 读路径。本次 iOS/iPadOS
+Files 可见下载 package 与“导入歌曲”改动不改变 Android 的 SAF 存储行为。
 
 ## Platforms
 

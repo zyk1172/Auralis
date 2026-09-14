@@ -8,6 +8,7 @@ struct LocalMusicSettingsPage: View {
     let theme: BuiltInTheme
     @StateObject private var library = LocalMusicLibraryStore.shared
     @State private var isImporting = false
+    @State private var importMessage: String?
 
     var body: some View {
         Form {
@@ -20,7 +21,13 @@ struct LocalMusicSettingsPage: View {
                     )
                 }
 #if os(iOS)
-                Text("Auralis 会自动建立“我的 iPhone → Auralis → LocalMusic”。每首歌放在一个独立子文件夹中：1 个音频文件，并可同时放 cover.jpg、lyrics.lrc / lyrics.txt 和 metadata.json。根目录中的 README.txt 会给出完整示例。")
+                Button {
+                    isImporting = true
+                } label: {
+                    Label("导入歌曲", systemImage: "square.and.arrow.down")
+                }
+
+                Text("可选择歌曲文件或已经整理好的单曲文件夹。Auralis 会识别音频标签、同目录封面、LRC/TXT 歌词与 metadata.json，并复制整理为“我的 iPhone/iPad → Auralis → LocalMusic”中的一歌一文件夹标准结构。")
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
 #else
@@ -36,11 +43,17 @@ struct LocalMusicSettingsPage: View {
                     Label(library.isScanning ? "正在扫描…" : "重新扫描全部", systemImage: "arrow.clockwise")
                 }
                 .disabled(library.isScanning || library.sources.isEmpty)
+
+                if let importMessage {
+                    Text(importMessage)
+                        .font(.caption)
+                        .foregroundStyle(theme.colorTokens.secondaryText.color)
+                }
             }
 
             Section("来源") {
                 if library.sources.isEmpty {
-                    Text("尚未添加本地音乐文件夹。服务器下载的歌曲仍会由 Auralis 单独管理。")
+                    Text("尚未添加本地音乐来源。")
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                 }
                 ForEach(library.sources) { source in
@@ -65,7 +78,11 @@ struct LocalMusicSettingsPage: View {
             }
 
             Section("下载") {
-                Text("服务器下载由 Auralis 下载管理器单独维护，并在完成后获得稳定的本地 canonical 身份；它们不要求用户预先选择文件夹，也不会与“文件”App 中的 LocalMusic 导入目录混为同一个来源。")
+#if os(iOS)
+                Text("从服务器音乐库下载完成后，Auralis 会把音频移动到同一个 Files 可见的 LocalMusic 目录，并自动建立标准单曲文件夹；可获取时同时写入 cover、LRC/TXT 歌词和 metadata.json。下载仍由 Auralis 下载管理器维护，不会被本地扫描重复导入。")
+#else
+                Text("服务器下载继续由 Auralis 下载管理器维护，并保持稳定的本地 canonical 身份。")
+#endif
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
@@ -81,15 +98,40 @@ struct LocalMusicSettingsPage: View {
         .background(theme.colorTokens.background.color)
         .fileImporter(
             isPresented: $isImporting,
-            allowedContentTypes: [.folder],
+            allowedContentTypes: importContentTypes,
             allowsMultipleSelection: true
         ) { result in
-            guard case let .success(urls) = result else { return }
-            Task {
-                for url in urls {
-                    await library.addSource(url: url)
+            switch result {
+            case let .success(urls):
+                Task { @MainActor in
+#if os(iOS)
+                    importMessage = "正在导入…"
+                    let summary = await LocalMusicPackageManager.importItems(urls)
+                    if summary.imported > 0 {
+                        _ = await library.scanAll()
+                    }
+                    if summary.failed == 0 {
+                        importMessage = "已导入 \(summary.imported) 首歌曲"
+                    } else {
+                        importMessage = "已导入 \(summary.imported) 首，\(summary.failed) 个项目未能识别或整理"
+                    }
+#else
+                    for url in urls {
+                        await library.addSource(url: url)
+                    }
+#endif
                 }
+            case .failure(_):
+                importMessage = "未能读取所选项目"
             }
         }
+    }
+
+    private var importContentTypes: [UTType] {
+#if os(iOS)
+        [.audio, .folder]
+#else
+        [.folder]
+#endif
     }
 }

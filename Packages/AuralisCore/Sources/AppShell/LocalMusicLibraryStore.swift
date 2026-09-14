@@ -36,6 +36,11 @@ final class LocalMusicLibraryStore: ObservableObject {
         var language: String?
         var coverFile: String?
         var lyricsFile: String?
+        /// Server downloads live in the same Files-visible folder but remain owned by DownloadStore.
+        /// Skipping these packages prevents one remote song from appearing twice in the catalog.
+        var managedByAuralisDownload: Bool?
+        var sourceServerID: String?
+        var sourceTrackID: String?
     }
 
     private static let managedSourceToken = "auralis-managed-local-music"
@@ -81,6 +86,8 @@ final class LocalMusicLibraryStore: ObservableObject {
     }
 
     metadata.json 中还可用 coverFile / lyricsFile 指定当前歌曲文件夹内的自定义封面或歌词文件名。
+    从服务器资料库下载的歌曲也会整理到这里，并自动生成标准文件夹、metadata.json、封面和可用歌词；
+    这类目录由 Auralis 下载管理器维护，请使用 App 内“删除下载”来清理。
     """
 
     init(directory: URL? = nil, managedDirectory: URL? = nil) {
@@ -279,6 +286,7 @@ final class LocalMusicLibraryStore: ObservableObject {
 
         let packages = children.filter { url in
             (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+                && !Self.isManagedDownloadPackage(url)
         }
         .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
 
@@ -491,6 +499,10 @@ final class LocalMusicLibraryStore: ObservableObject {
         let url = folder.appendingPathComponent("metadata.json")
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(MetadataSidecar.self, from: data)
+    }
+
+    private static func isManagedDownloadPackage(_ folder: URL) -> Bool {
+        readMetadata(in: folder)?.managedByAuralisDownload == true
     }
 
     private static func preferredArtwork(
