@@ -22,6 +22,11 @@ struct AuralisMacApp: App {
         Window("Auralis", id: MacWindowID.main) {
             MacMusicShell(model: .shared, themeStore: themeStore, settingsRouter: settingsRouter)
                 .frame(minWidth: 900, minHeight: 600)
+                .task {
+                    // Restore persisted security-scoped local roots on every launch so Library,
+                    // Search and Agent do not require visiting Settings before local music appears.
+                    await LocalMusicCatalogBootstrap.restore()
+                }
         }
         .defaultSize(width: 1280, height: 820)
         .commands {

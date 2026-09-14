@@ -9,7 +9,7 @@ import Foundation
 @MainActor
 final class LocalMusicLibraryStore: ObservableObject {
     static let shared = LocalMusicLibraryStore()
-    static let localServerID = ServerID(rawValue: "auralis-local")
+    static let localServerID = LocalCatalogOverlay.localServerID
 
     @Published private(set) var sources: [LocalMusicSource] = []
     @Published private(set) var tracks: [Track] = []
@@ -88,6 +88,10 @@ final class LocalMusicLibraryStore: ObservableObject {
         sources.removeAll { $0.id == source.id }
         tracks.removeAll { Self.belongs($0, to: source.id) }
         try? persistSources()
+        let currentTracks = tracks
+        Task { @MainActor in
+            await UnifiedLocalCatalogBridge.publish(tracks: currentTracks)
+        }
     }
 
     @discardableResult
@@ -106,6 +110,7 @@ final class LocalMusicLibraryStore: ObservableObject {
         }
         total.completedAt = .now
         lastScan = total
+        await UnifiedLocalCatalogBridge.publish(tracks: tracks)
         return total
     }
 
@@ -156,6 +161,9 @@ final class LocalMusicLibraryStore: ObservableObject {
             completedAt: .now
         )
         lastScan = snapshot
+        if manageState {
+            await UnifiedLocalCatalogBridge.publish(tracks: tracks)
+        }
         return snapshot
     }
 
@@ -206,12 +214,17 @@ final class LocalMusicLibraryStore: ObservableObject {
         var title: String?
         var artist: String?
         var album: String?
+        var genres: [String] = []
         for item in common {
             let value = try? await item.load(.stringValue)
             switch item.commonKey?.rawValue {
             case "title": title = value
             case "artist": artist = value
             case "albumName": album = value
+            case "type", "genre":
+                if let value {
+                    genres.append(contentsOf: Self.splitGenres(value))
+                }
             default: break
             }
         }
@@ -230,9 +243,16 @@ final class LocalMusicLibraryStore: ObservableObject {
             artistName: artistName,
             albumTitle: albumTitle,
             duration: duration,
+            genres: Array(Set(genres)).sorted(),
             sourceInfo: AudioSourceInfo(codec: file.pathExtension.lowercased()),
             streamURL: file
         )
+    }
+
+    private static func splitGenres(_ raw: String) -> [String] {
+        raw.split(whereSeparator: { $0 == ";" || $0 == "," || $0 == "/" })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 
     private static func fnv64(_ value: String) -> String {
@@ -242,6 +262,20 @@ final class LocalMusicLibraryStore: ObservableObject {
             hash &*= 1_099_511_628_211
         }
         return String(hash, radix: 16)
+    }
+}
+
+/// Called by the application composition roots on every launch. Persisted security-scoped roots are
+/// rescanned and republished without requiring the user to open Settings first.
+public enum LocalMusicCatalogBootstrap {
+    @MainActor
+    public static func restore() async {
+        let library = LocalMusicLibraryStore.shared
+        guard !library.sources.isEmpty else {
+            await UnifiedLocalCatalogBridge.publish(tracks: [])
+            return
+        }
+        _ = await library.scanAll()
     }
 }
 
