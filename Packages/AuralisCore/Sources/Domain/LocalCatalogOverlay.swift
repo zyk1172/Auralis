@@ -80,7 +80,16 @@ public enum LocalCatalogOverlay {
     ) -> [Track] {
         let local = snapshot ?? self.snapshot()
         let remoteOnly = remote.filter { $0.serverID != localServerID }
-        return TrackQuality.deduplicatedPreferringQuality(remoteOnly + local.tracks)
+
+        // The catalog is an identity-preserving source of truth. Two tracks that sound like the
+        // same recording can still represent different servers, a server copy and a true local
+        // file, or distinct encodings that the user must be able to browse and address separately.
+        // Recording-level quality deduplication therefore belongs only in recommendation/smart-
+        // queue consumers (`TrackQuality.deduplicatedPreferringQuality`), never at this boundary.
+        var seen = Set<String>()
+        return (remoteOnly + local.tracks).filter { track in
+            seen.insert(identityKey(serverID: track.serverID, remoteID: track.id.rawValue)).inserted
+        }
     }
 
     /// Swift `Genre` is intentionally source-agnostic, so provenance cannot be removed by serverID.
