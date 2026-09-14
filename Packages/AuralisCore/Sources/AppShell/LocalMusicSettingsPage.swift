@@ -78,11 +78,7 @@ struct LocalMusicSettingsPage: View {
             }
 
             Section("下载") {
-#if os(iOS)
-                Text("从服务器音乐库下载完成后，Auralis 会把音频移动到同一个 Files 可见的 LocalMusic 目录，并自动建立标准单曲文件夹；可获取时同时写入 cover、LRC/TXT 歌词和 metadata.json。下载仍由 Auralis 下载管理器维护，不会被本地扫描重复导入。")
-#else
-                Text("服务器下载继续由 Auralis 下载管理器维护，并保持稳定的本地 canonical 身份。")
-#endif
+                Text(downloadExplanation)
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
@@ -125,6 +121,14 @@ struct LocalMusicSettingsPage: View {
                 importMessage = "未能读取所选项目"
             }
         }
+    }
+
+    private var downloadExplanation: String {
+#if os(iOS)
+        "从服务器音乐库下载完成后，Auralis 会把音频移动到同一个 Files 可见的 LocalMusic 目录，并自动建立标准单曲文件夹；可获取时同时写入 cover、LRC/TXT 歌词和 metadata.json。下载仍由 Auralis 下载管理器维护，不会被本地扫描重复导入。"
+#else
+        "服务器下载继续由 Auralis 下载管理器维护，并保持稳定的本地 canonical 身份。"
+#endif
     }
 
     private var importContentTypes: [UTType] {
