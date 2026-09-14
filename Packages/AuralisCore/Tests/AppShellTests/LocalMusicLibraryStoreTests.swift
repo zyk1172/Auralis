@@ -16,21 +16,23 @@ struct LocalMusicLibraryStoreTests {
         defer { try? fileManager.removeItem(at: root) }
 
         let store = LocalMusicLibraryStore(directory: metadata, managedDirectory: managed)
+        let source = try #require(store.sources.first)
 
         #expect(fileManager.fileExists(atPath: managed.path))
         #expect(fileManager.fileExists(atPath: managed.appendingPathComponent("README.txt").path))
-        #expect(store.sources.first?.id == LocalMusicLibraryStore.managedSourceID)
-        #expect(store.sources.first?.displayName == "Auralis 本地音乐")
+        #expect(source.id == LocalMusicLibraryStore.managedSourceID)
+        #expect(source.displayName == "Auralis 本地音乐")
 
-        if let source = store.sources.first {
-            store.removeSource(source)
-        }
+        store.removeSource(source)
         #expect(store.sources.first?.id == LocalMusicLibraryStore.managedSourceID)
 
         try fileManager.removeItem(at: managed)
         #expect(!fileManager.fileExists(atPath: managed.path))
 
-        let snapshot = await store.scanAll()
+        // These are isolated scanner tests. `scanAll()` intentionally publishes into the
+        // process-global unified catalog, so use a source-scoped scan here to avoid leaking
+        // test-local tracks into unrelated catalog tests that execute later in this process.
+        let snapshot = await store.scan(source: source, manageState: false)
         #expect(fileManager.fileExists(atPath: managed.path))
         #expect(fileManager.fileExists(atPath: managed.appendingPathComponent("README.txt").path))
         #expect(snapshot.discoveredFiles == 0)
@@ -73,7 +75,8 @@ struct LocalMusicLibraryStoreTests {
         try Data([0x00]).write(to: invalid.appendingPathComponent("b.flac"))
 
         let store = LocalMusicLibraryStore(directory: metadataRoot, managedDirectory: managed)
-        let snapshot = await store.scanAll()
+        let source = try #require(store.sources.first)
+        let snapshot = await store.scan(source: source, manageState: false)
 
         #expect(snapshot.discoveredFiles == 2)
         #expect(snapshot.importedTracks == 1)
