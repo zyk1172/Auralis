@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.auralis.core.data.connector
 
+import com.auralis.core.data.local.AndroidLocalMusicLibrary
 import com.auralis.core.domain.Album
 import com.auralis.core.domain.Artist
 import com.auralis.core.domain.CatalogRepository
@@ -23,16 +24,8 @@ class LibraryRemoteOperationException(cause: Throwable) :
 /**
  * 资料库动作协调器（P0 第五项）。
  *
- * 对齐 Apple `ProductionServerConnector.setFavorite/setRating` 语义：
- * **远端先行，成功后落本地**——
- * 1. 按实体的 `serverId` 从 [ServerClientRegistry] 取当前真正可用的客户端
- *    （内网/外网路由由注册表决定，不在这里重新猜测地址）；
- * 2. `star / unstar / setRating` 成功后才写 Room；
- * 3. 远端失败 → 抛 [LibraryRemoteOperationException]，本地**不留**“收藏成功”的假状态，
- *    UI 负责把按钮回滚或提示失败。
- *
- * 收藏“以服务器为准”的冷启动回流由 connector 的 starred() 全量替换负责，
- * 这里只处理单次用户动作。
+ * 远端对象保持“远端先行，成功后落本地”的 OpenSubsonic 语义；真正的本地 Track
+ * (`auralis-local`) 则只写本地 catalog/state，绝不尝试构造服务器客户端。
  */
 class LibraryActionCoordinator(
     private val registry: ServerClientRegistry,
@@ -54,10 +47,18 @@ class LibraryActionCoordinator(
         }
 
     /**
-     * 收藏 Track：远端成功后写 Room；收藏与不喜欢互斥（对齐 Apple：
-     * 点击收藏时若该曲处于「不喜欢」，先清除不喜欢再收藏）。
+     * 收藏 Track：
+     * - 本地 Track：直接写统一 catalog 的本地状态；
+     * - 远端 Track：服务器成功后才写 Room；
+     * - 收藏与“不喜欢”互斥。
      */
     suspend fun setTrackFavorite(track: Track, favorite: Boolean): Boolean {
+        if (track.serverId == AndroidLocalMusicLibrary.LOCAL_SERVER_ID) {
+            catalog.setFavorite(track.globalId, FavoriteKind.Track, favorite)
+            if (favorite) catalog.setDisliked(track.globalId, false)
+            return true
+        }
+
         val client = requireClient(track.serverId)
         val result = remoteThenLocal(
             remote = {
@@ -75,13 +76,10 @@ class LibraryActionCoordinator(
     // ------------------------------------------------------------ 不喜欢（本地状态）
 
     /**
-     * 设置/取消「不喜欢」（对齐 Apple `toggleDisliked` 产品规则）：
-     * - 设置不喜欢时若当前已收藏，先取消收藏（收藏与不喜欢互斥）；
-     *   远端取消收藏失败**不回滚本地不喜欢**——dislike 是本地私人状态，
-     *   用户意图必须落盘；收藏残留由下次 starred() 全量回流纠正（与 Apple 一致：
-     *   `_ = await connector.setFavorite(...)` 忽略远端结果）。
-     * - 取消不喜欢不恢复旧收藏；
-     * - 不改变当前播放、不改变队列、不跳歌、不删除任何内容。
+     * 设置/取消「不喜欢」：
+     * - 设置不喜欢时若当前已收藏，先取消收藏；
+     * - 对本地 Track 全程只落本地；远端 Track 仍按原有服务器语义处理收藏互斥；
+     * - 取消不喜欢不恢复旧收藏；不改变当前播放/队列。
      */
     suspend fun setDisliked(track: Track, disliked: Boolean) {
         if (disliked && catalog.isFavorite(track.globalId)) {
@@ -111,12 +109,11 @@ class LibraryActionCoordinator(
     }
 
     /**
-     * 评分 1..5：远端 setRating 成功后写 Room。
-     * rating == null：OpenSubsonic 没有“清除评分”端点，只清本地（与 Apple 行为一致：
-     * 服务器不支持的操作不回传）。
+     * 评分 1..5：本地 Track 直接落本地；远端 Track 仍先调用服务器 setRating。
+     * rating == null 时两类来源都只清本地状态。
      */
     suspend fun setRating(track: Track, rating: Int?) {
-        if (rating != null && rating > 0) {
+        if (track.serverId != AndroidLocalMusicLibrary.LOCAL_SERVER_ID && rating != null && rating > 0) {
             val client = requireClient(track.serverId)
             try {
                 client.setRating(track.id.value, rating.coerceIn(1, 5))
