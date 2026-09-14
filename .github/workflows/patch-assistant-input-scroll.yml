@@ -3,9 +3,9 @@ name: Patch assistant input horizontal scroll
 on:
   push:
     branches:
-      - fix/assistant-input-horizontal-scroll
+      - "fix/assistant-input-horizontal-scroll"
     paths:
-      - .github/workflows/patch-assistant-input-scroll.yml
+      - ".github/workflows/patch-assistant-input-scroll.yml"
 
 permissions:
   contents: write
@@ -25,74 +25,77 @@ jobs:
           python3 <<'PY'
           from pathlib import Path
 
-          root = Path('Packages/AuralisCore/Sources/AppShell/AuralisRootView.swift')
+          root = Path("Packages/AuralisCore/Sources/AppShell/AuralisRootView.swift")
           source = root.read_text()
-          old = '''                TextField(String(localized: "描述你想听的音乐，或让我帮你操作", bundle: .module), text: $model.assistantDraft)
-                    .textFieldStyle(.plain)
-                    .focused(focus)
-                    .onSubmit { model.sendAssistantMessage(); focus.wrappedValue = false }
-'''
-          new = '''                AssistantHorizontalTextField(
-                    text: $model.assistantDraft,
-                    prompt: String(localized: "描述你想听的音乐，或让我帮你操作", bundle: .module),
-                    focus: focus
-                ) {
-                    model.sendAssistantMessage()
-                    focus.wrappedValue = false
-                }
-'''
-          if source.count(old) != 1:
-              raise SystemExit(f'expected exactly one iOS assistant TextField, found {source.count(old)}')
+          old = (
+              '                TextField(String(localized: "描述你想听的音乐，或让我帮你操作", bundle: .module), text: $model.assistantDraft)\n'
+              '                    .textFieldStyle(.plain)\n'
+              '                    .focused(focus)\n'
+              '                    .onSubmit { model.sendAssistantMessage(); focus.wrappedValue = false }\n'
+          )
+          new = (
+              '                AssistantHorizontalTextField(\n'
+              '                    text: $model.assistantDraft,\n'
+              '                    prompt: String(localized: "描述你想听的音乐，或让我帮你操作", bundle: .module),\n'
+              '                    focus: focus\n'
+              '                ) {\n'
+              '                    model.sendAssistantMessage()\n'
+              '                    focus.wrappedValue = false\n'
+              '                }\n'
+          )
+          count = source.count(old)
+          if count != 1:
+              raise SystemExit(f"expected exactly one iOS assistant TextField, found {count}")
           root.write_text(source.replace(old, new, 1))
 
-          helper = Path('Packages/AuralisCore/Sources/AppShell/AssistantHorizontalTextField.swift')
-          helper.write_text('''// SPDX-License-Identifier: GPL-3.0-only
-import SwiftUI
+          helper = Path("Packages/AuralisCore/Sources/AppShell/AssistantHorizontalTextField.swift")
+          helper.write_text("""// SPDX-License-Identifier: GPL-3.0-only
+          import SwiftUI
 
-/// Single-line assistant composer that keeps the existing compact layout while allowing
-/// direct horizontal swipes when the draft is wider than the visible input area.
-struct AssistantHorizontalTextField: View {
-    private static let trailingEdgeID = "assistant-input-trailing-edge"
+          /// Single-line assistant composer that keeps the existing compact layout while allowing
+          /// direct horizontal swipes when the draft is wider than the visible input area.
+          struct AssistantHorizontalTextField: View {
+              private static let trailingEdgeID = "assistant-input-trailing-edge"
 
-    @Binding var text: String
-    let prompt: String
-    let focus: FocusState<Bool>.Binding
-    let onSubmit: () -> Void
+              @Binding var text: String
+              let prompt: String
+              let focus: FocusState<Bool>.Binding
+              let onSubmit: () -> Void
 
-    var body: some View {
-        GeometryReader { geometry in
-            ScrollViewReader { proxy in
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 0) {
-                        TextField(prompt, text: $text)
-                            .textFieldStyle(.plain)
-                            .focused(focus)
-                            .onSubmit(onSubmit)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .frame(minWidth: geometry.size.width, alignment: .leading)
+              var body: some View {
+                  GeometryReader { geometry in
+                      ScrollViewReader { proxy in
+                          ScrollView(.horizontal, showsIndicators: false) {
+                              HStack(spacing: 0) {
+                                  TextField(prompt, text: $text)
+                                      .textFieldStyle(.plain)
+                                      .focused(focus)
+                                      .onSubmit(onSubmit)
+                                      .fixedSize(horizontal: true, vertical: false)
+                                      .frame(minWidth: geometry.size.width, alignment: .leading)
 
-                        Color.clear
-                            .frame(width: 1, height: 1)
-                            .id(Self.trailingEdgeID)
-                    }
-                }
-                .onChange(of: text) { _, _ in
-                    guard focus.wrappedValue else { return }
-                    proxy.scrollTo(Self.trailingEdgeID, anchor: .trailing)
-                }
-                .onChange(of: focus.wrappedValue) { _, isFocused in
-                    guard isFocused else { return }
-                    proxy.scrollTo(Self.trailingEdgeID, anchor: .trailing)
-                }
-            }
-        }
-        .frame(height: 24)
-        .accessibilityIdentifier("assistant.input.horizontal-scroll")
-    }
-}
-''')
+                                  Color.clear
+                                      .frame(width: 1, height: 1)
+                                      .id(Self.trailingEdgeID)
+                              }
+                          }
+                          .onChange(of: text) { _, _ in
+                              guard focus.wrappedValue else { return }
+                              proxy.scrollTo(Self.trailingEdgeID, anchor: .trailing)
+                          }
+                          .onChange(of: focus.wrappedValue) { _, isFocused in
+                              guard isFocused else { return }
+                              proxy.scrollTo(Self.trailingEdgeID, anchor: .trailing)
+                          }
+                      }
+                  }
+                  .frame(height: 24)
+                  .accessibilityIdentifier("assistant.input.horizontal-scroll")
+              }
+          }
+          """)
 
-          Path('.github/workflows/patch-assistant-input-scroll.yml').unlink()
+          Path(".github/workflows/patch-assistant-input-scroll.yml").unlink()
           PY
 
       - name: Commit fix
