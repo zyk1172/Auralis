@@ -50,18 +50,18 @@ final class LocalMusicLibraryStore: ObservableObject {
             sources = decoded.filter { $0.id != Self.managedSourceID }
         }
 
-#if os(iOS)
-        // iOS exposes the app Documents container in Files when file sharing/open-in-place are enabled.
-        // Keep this source first-class and automatic so users never need to create or pick a folder first.
-        sources.insert(
-            LocalMusicSource(
-                id: Self.managedSourceID,
-                displayName: "Auralis 本地音乐",
-                locationToken: Self.managedSourceToken
-            ),
-            at: 0
-        )
-#endif
+        // iOS always supplies this URL from Documents. Tests may inject one on macOS so the
+        // managed-source contract can be verified without touching a user's real Documents folder.
+        if managedRootURL != nil {
+            sources.insert(
+                LocalMusicSource(
+                    id: Self.managedSourceID,
+                    displayName: "Auralis 本地音乐",
+                    locationToken: Self.managedSourceToken
+                ),
+                at: 0
+            )
+        }
         restoreSecurityScopedRoots()
     }
 
@@ -72,14 +72,12 @@ final class LocalMusicLibraryStore: ObservableObject {
     }
 
     func addSource(url: URL) async {
-#if os(iOS)
         if let managedRootURL,
            url.standardizedFileURL == managedRootURL.standardizedFileURL,
            let managedSource = sources.first(where: { $0.id == Self.managedSourceID }) {
             _ = await scan(source: managedSource)
             return
         }
-#endif
         do {
 #if os(macOS)
             let bookmarkOptions: URL.BookmarkCreationOptions = [.withSecurityScope]
