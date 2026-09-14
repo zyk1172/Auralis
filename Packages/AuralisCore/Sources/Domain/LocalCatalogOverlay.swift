@@ -83,16 +83,18 @@ public enum LocalCatalogOverlay {
         return TrackQuality.deduplicatedPreferringQuality(remoteOnly + local.tracks)
     }
 
+    /// Swift `Genre` is intentionally source-agnostic, so provenance cannot be removed by serverID.
+    /// Callers that rebuild an already-overlaid catalog must first use `removingLocalGenreContribution`
+    /// with the previous snapshot, then add the replacement local snapshot here.
     public static func mergedGenres(
         remote: [Genre],
         local snapshot: LocalCatalogOverlaySnapshot? = nil
     ) -> [Genre] {
         let local = snapshot ?? self.snapshot()
-        let remoteOnly = remote.filter { $0.serverID != localServerID }
         var order: [String] = []
         var merged: [String: Genre] = [:]
-        for genre in remoteOnly + local.genres {
-            let key = genre.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        for genre in remote + local.genres {
+            let key = normalizedGenreKey(genre.name)
             guard !key.isEmpty else { continue }
             if var existing = merged[key] {
                 existing.songCount += genre.songCount
@@ -103,5 +105,27 @@ public enum LocalCatalogOverlay {
             }
         }
         return order.compactMap { merged[$0] }
+    }
+
+    /// Removes exactly the previous local overlay's contribution from a mixed genre snapshot.
+    /// This prevents repeated scans from accumulating counts while preserving server-only genres.
+    public static func removingLocalGenreContribution(
+        from mixed: [Genre],
+        previousLocal: LocalCatalogOverlaySnapshot
+    ) -> [Genre] {
+        let localCounts = Dictionary(grouping: previousLocal.genres, by: { normalizedGenreKey($0.name) })
+            .mapValues { $0.reduce(0) { $0 + $1.songCount } }
+        return mixed.compactMap { genre in
+            let key = normalizedGenreKey(genre.name)
+            let remainder = max(0, genre.songCount - (localCounts[key] ?? 0))
+            guard remainder > 0 else { return nil }
+            var copy = genre
+            copy.songCount = remainder
+            return copy
+        }
+    }
+
+    private static func normalizedGenreKey(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }
