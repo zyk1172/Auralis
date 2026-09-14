@@ -24,7 +24,6 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          # Apple Agent: user-facing catalog reads include active server + auralis-local.
           p = Path('Packages/AuralisCore/Sources/AgentKit/AgentToolkit.swift')
           s = p.read_text()
           replacements = {
@@ -38,24 +37,12 @@ jobs:
               if old not in s:
                   raise SystemExit(f'AgentToolkit replacement missing: {old}')
               s = s.replace(old, new)
-          old = '''    /// GlobalID 必须属于当前活跃服务器：切换服务器后旧会话中的 ID 一律视为无效，
-    /// 防止用上一台服务器的 ID 操作当前服务器（这是播放/收藏/歌单 400 与串库的根因之一）。
-    private static func serverIDMatches(_ gid: GlobalID, _ serverID: ServerID?) -> Bool {
-        guard let serverID else { return true }
-        return gid.serverID == serverID
-    }'''
-          new = '''    /// GlobalID 必须属于当前活跃服务器或真实本地音乐 namespace。
-    /// 其它已保存服务器仍 fail closed，避免切换服务器后的旧会话 ID 串库。
-    private static func serverIDMatches(_ gid: GlobalID, _ serverID: ServerID?) -> Bool {
-        if gid.serverID == LocalCatalogOverlay.localServerID { return true }
-        guard let serverID else { return true }
-        return gid.serverID == serverID
-    }'''
+          old = '    /// GlobalID 必须属于当前活跃服务器：切换服务器后旧会话中的 ID 一律视为无效，\n    /// 防止用上一台服务器的 ID 操作当前服务器（这是播放/收藏/歌单 400 与串库的根因之一）。\n    private static func serverIDMatches(_ gid: GlobalID, _ serverID: ServerID?) -> Bool {\n        guard let serverID else { return true }\n        return gid.serverID == serverID\n    }'
+          new = '    /// GlobalID 必须属于当前活跃服务器或真实本地音乐 namespace。\n    /// 其它已保存服务器仍 fail closed，避免切换服务器后的旧会话 ID 串库。\n    private static func serverIDMatches(_ gid: GlobalID, _ serverID: ServerID?) -> Bool {\n        if gid.serverID == LocalCatalogOverlay.localServerID { return true }\n        guard let serverID else { return true }\n        return gid.serverID == serverID\n    }'
           if old not in s:
               raise SystemExit('AgentToolkit serverIDMatches block missing')
           p.write_text(s.replace(old, new))
 
-          # macOS Search uses the same source-aware SQLite FTS boundary.
           p = Path('Packages/AuralisCore/Sources/AppShell/Mac/Search/MacSearchView.swift')
           s = p.read_text()
           old = 'store.searchAll(query: q, serverID: serverID)'
@@ -64,31 +51,23 @@ jobs:
               raise SystemExit('MacSearchView search call missing')
           p.write_text(s.replace(old, new))
 
-          # Android public catalog: nil active server means local-only, not all cached servers.
           p = Path('android/core/data/src/main/java/com/auralis/core/data/repository/UnifiedCatalogRepository.kt')
           s = p.read_text()
           if 'import kotlinx.coroutines.flow.first\n' not in s:
               s = s.replace('import kotlinx.coroutines.flow.flowOf\n', 'import kotlinx.coroutines.flow.flowOf\nimport kotlinx.coroutines.flow.first\n')
           s = s.replace('if (serverId == localServerId)', 'if (serverId == null || serverId == localServerId)')
           s = s.replace('return if (serverId == localServerId)', 'return if (serverId == null || serverId == localServerId)')
-          s = s.replace(
-              '''        merge(
-            if (serverId == null || serverId == localServerId) flowOf(Unit) else delegate.homeChangeSignals(serverId),
-            local.revision.map { Unit },
-        ).distinctUntilChanged()''',
-              '''        merge(
-            if (serverId == null || serverId == localServerId) flowOf(Unit) else delegate.homeChangeSignals(serverId),
-            local.revision.map { Unit },
-        )'''
-          )
-          s = s.replace(
-              '''    private suspend fun <T> Flow<List<T>>.firstSnapshot(): List<T> =
-        kotlinx.coroutines.flow.first(this)''',
-              '''    private suspend fun <T> Flow<List<T>>.firstSnapshot(): List<T> = first()'''
-          )
-          p.write_text(s)
+          old = '        merge(\n            if (serverId == null || serverId == localServerId) flowOf(Unit) else delegate.homeChangeSignals(serverId),\n            local.revision.map { Unit },\n        ).distinctUntilChanged()'
+          new = '        merge(\n            if (serverId == null || serverId == localServerId) flowOf(Unit) else delegate.homeChangeSignals(serverId),\n            local.revision.map { Unit },\n        )'
+          if old not in s:
+              raise SystemExit('UnifiedCatalogRepository home signal block missing')
+          s = s.replace(old, new)
+          old = '    private suspend fun <T> Flow<List<T>>.firstSnapshot(): List<T> =\n        kotlinx.coroutines.flow.first(this)'
+          new = '    private suspend fun <T> Flow<List<T>>.firstSnapshot(): List<T> = first()'
+          if old not in s:
+              raise SystemExit('UnifiedCatalogRepository firstSnapshot block missing')
+          p.write_text(s.replace(old, new))
 
-          # Android Library: no active server is a valid local-only library, not a server prompt.
           p = Path('android/feature/library/src/main/java/com/auralis/feature/library/LibraryScreen.kt')
           s = p.read_text()
           import_line = 'import com.auralis.core.data.graph.AuralisGraph\n'
@@ -99,7 +78,6 @@ jobs:
           if old not in s:
               raise SystemExit('LibraryScreen active server declaration missing')
           s = s.replace(old, new, 1)
-          # Only rewrite the top-level scope dispatch block.
           marker_start = s.index('                when (scope) {')
           marker_end = s.index('                }\n            }\n        }\n    }\n}', marker_start)
           block = s[marker_start:marker_end]
@@ -107,7 +85,6 @@ jobs:
           s = s[:marker_start] + block + s[marker_end:]
           p.write_text(s)
           PY
-
       - name: Remove temporary workflow and commit
         shell: bash
         run: |
