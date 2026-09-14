@@ -16,11 +16,11 @@ struct LocalMusicSettingsPage: View {
                 if let scan = library.lastScan {
                     LabeledContent(
                         "最近扫描",
-                        value: "\(scan.discoveredFiles) 个文件 · \(scan.failedFiles) 个失败"
+                        value: "\(scan.discoveredFiles) 个项目 · \(scan.failedFiles) 个失败"
                     )
                 }
 #if os(iOS)
-                Text("Auralis 会自动建立可在“文件”App 中访问的本地音乐目录：我的 iPhone → Auralis → LocalMusic。直接把音乐文件复制进去即可，不需要先创建或选择文件夹。")
+                Text("Auralis 会自动建立“我的 iPhone → Auralis → LocalMusic”。每首歌放在一个独立子文件夹中：1 个音频文件，并可同时放 cover.jpg、lyrics.lrc / lyrics.txt 和 metadata.json。根目录中的 README.txt 会给出完整示例。")
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
 #else
@@ -47,7 +47,7 @@ struct LocalMusicSettingsPage: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(source.displayName)
-                            Text(source.id == LocalMusicLibraryStore.managedSourceID ? "文件 App 可见目录" : "已持久授权")
+                            Text(source.id == LocalMusicLibraryStore.managedSourceID ? "文件 App 可见目录 · 一歌一文件夹" : "已持久授权")
                                 .font(.caption)
                                 .foregroundStyle(theme.colorTokens.secondaryText.color)
                         }

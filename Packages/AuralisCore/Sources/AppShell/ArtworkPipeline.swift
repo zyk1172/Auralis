@@ -57,6 +57,18 @@ actor ArtworkPipeline {
                 return ArtworkPipelinePayload(decoded: decoded, encodedData: data)
             }
 
+            if serverID == LocalCatalogOverlay.localServerID,
+               let fileURL = LocalArtworkKey.fileURL(from: remoteKey),
+               !Task.isCancelled,
+               let data = try? Data(contentsOf: fileURL),
+               let decoded = await decoder.decode(data, maxPixelSize: targetPixelSize) {
+                let payload = ArtworkPipelinePayload(decoded: decoded, encodedData: data)
+                Task(priority: .utility) { [diskCache] in
+                    await diskCache.store(data, for: cacheKey)
+                }
+                return payload
+            }
+
             guard await limiter.acquire() else {
                 // 排队期间被取消（封面已滚出屏幕）——直接让路。
                 return nil

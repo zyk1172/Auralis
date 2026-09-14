@@ -39,7 +39,7 @@ public struct LibraryCatalog: Sendable {
         self.playlists = playlists
         self.history = history
         self.downloads = downloads
-        self.lyrics = lyrics
+        self.lyrics = LocalCatalogOverlay.mergedLyrics(remote: lyrics, local: local)
         self.recommendations = recommendations
     }
 }

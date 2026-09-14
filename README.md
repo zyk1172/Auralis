@@ -43,9 +43,30 @@ Auralis 会在启动时自动建立一个 Files 可见的本地音乐目录：
 文件 → 我的 iPhone / 我的 iPad → Auralis → LocalMusic
 ```
 
-不需要先在“文件”App 中手动创建文件夹，也不需要先通过文件夹选择器授权。把支持的音乐文件
-复制到 `LocalMusic` 后，重新扫描或重新启动 Auralis 即可。当前支持的扩展名包括 MP3、M4A、
-AAC、ALAC、FLAC、WAV、AIFF、OGG 和 Opus。
+不需要先在“文件”App 中手动创建或选择根目录。`LocalMusic` 采用**一首歌一个文件夹**的组织方式，
+每个一级子文件夹代表一首歌曲：
+
+```text
+LocalMusic/
+├── README.txt
+├── 歌曲 A/
+│   ├── audio.flac
+│   ├── cover.jpg
+│   ├── lyrics.lrc
+│   └── metadata.json
+└── 歌曲 B/
+    ├── song.m4a
+    ├── artwork.png
+    └── lyrics.txt
+```
+
+每个歌曲文件夹必须恰好包含 1 个受支持音频文件。封面、歌词和 `metadata.json` 是一等 sidecar：
+Auralis 会直接读取本地封面、LRC/TXT 歌词和元数据覆盖信息，并把它们接入现有封面缓存、歌词时间轴
+和统一资料库。封面或歌词缺失不会阻止纯音乐或无封面歌曲播放。
+
+当前音频支持 MP3、M4A、AAC、ALAC、FLAC、WAV、AIFF、OGG 和 Opus；封面支持
+JPG/JPEG、PNG、WebP、HEIC/HEIF；歌词支持 LRC 和 TXT。应用会在 `LocalMusic/README.txt`
+自动写入目录示例和规则。完整规范见 [`Docs/LocalMusicFolderFormat.md`](Docs/LocalMusicFolderFormat.md)。
 
 服务器下载仍由下载管理器独立维护，并通过身份映射进入统一资料库；它们不会被当成用户手动
 放入 `LocalMusic` 的同一个来源重复扫描。
@@ -53,7 +74,8 @@ AAC、ALAC、FLAC、WAV、AIFF、OGG 和 Opus。
 ### macOS
 
 macOS 继续使用用户显式选择的 security-scoped 文件夹来源，授权会持久化，并在启动时恢复、
-重新扫描并发布到统一资料库。
+重新扫描并发布到统一资料库。历史外部目录保持递归音频扫描兼容；同目录的封面、歌词和
+`metadata.json` sidecar 也可以被读取。
 
 ### Android / Android TV
 
@@ -181,6 +203,7 @@ Auralis 版本。详见 [`TRADEMARKS.md`](TRADEMARKS.md)。
 
 - [架构](ARCHITECTURE.md)
 - [AI 架构](Docs/AIArchitecture.md)
+- [本地音乐文件夹格式](Docs/LocalMusicFolderFormat.md)
 - [本地音乐统一资料库](Docs/LocalMusicUnifiedCatalog.md)
 - [本地下载身份](Docs/LocalMusicDownloadIdentity.md)
 - [语义碰撞推荐](Docs/SemanticCollisionRecommendation.md)
