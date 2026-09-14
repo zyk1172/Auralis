@@ -1071,10 +1071,14 @@ struct DockAssistantInputBar: View {
                 Image(systemName: "sparkles")
                     .foregroundStyle(theme.colorTokens.accent.color)
                     .frame(width: 22, height: 22)
-                TextField(String(localized: "描述你想听的音乐，或让我帮你操作", bundle: .module), text: $model.assistantDraft)
-                    .textFieldStyle(.plain)
-                    .focused(focus)
-                    .onSubmit { model.sendAssistantMessage(); focus.wrappedValue = false }
+                AssistantHorizontalTextField(
+                    text: $model.assistantDraft,
+                    prompt: String(localized: "描述你想听的音乐，或让我帮你操作", bundle: .module),
+                    focus: focus
+                ) {
+                    model.sendAssistantMessage()
+                    focus.wrappedValue = false
+                }
                 Button {
                     if agent.isRunning {
                         agent.cancel()
