@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: GPL-3.0-only
+name: PR54 SettingsScreen signature hotfix
+
+on:
+  pull_request:
+    types: [synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'feat/local-music-playback'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/local-music-playback
+          fetch-depth: 0
+      - name: Remove unused public local-music callback
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('android/feature/settings/src/main/java/com/auralis/feature/settings/SettingsScreens.kt')
+          text = path.read_text()
+          old = '''fun SettingsScreen(\n    graph: AuralisGraph,\n    onBack: () -> Unit,\n    onOpenServers: () -> Unit,\n    onEditHomeLayout: () -> Unit,\n    onOpenAiSettings: () -> Unit,\n    onOpenLocalMusic: () -> Unit,\n    recommendationIndexState: RecommendationIndexUiState = RecommendationIndexUiState(),'''
+          new = '''fun SettingsScreen(\n    graph: AuralisGraph,\n    onBack: () -> Unit,\n    onOpenServers: () -> Unit,\n    onEditHomeLayout: () -> Unit,\n    onOpenAiSettings: () -> Unit,\n    recommendationIndexState: RecommendationIndexUiState = RecommendationIndexUiState(),'''
+          if old not in text:
+              raise SystemExit('public SettingsScreen signature not found')
+          text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+      - name: Commit fix and remove bootstrap workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/pr54-settings-public-signature-hotfix.yml
+          git add android/feature/settings/src/main/java/com/auralis/feature/settings/SettingsScreens.kt
+          git commit -m "fix(android): keep local music navigation internal to settings"
+          git push origin HEAD:feat/local-music-playback
