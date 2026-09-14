@@ -10,6 +10,7 @@ import Foundation
 final class LocalMusicLibraryStore: ObservableObject {
     static let shared = LocalMusicLibraryStore()
     static let localServerID = LocalCatalogOverlay.localServerID
+    static let managedSourceID = LocalLibraryID(rawValue: "managed-local-music")
 
     @Published private(set) var sources: [LocalMusicSource] = []
     @Published private(set) var tracks: [Track] = []
@@ -17,23 +18,50 @@ final class LocalMusicLibraryStore: ObservableObject {
     @Published private(set) var isScanning = false
     @Published private(set) var lastError: String?
 
+    private static let managedSourceToken = "auralis-managed-local-music"
     private let sourcesURL: URL
+    private let managedRootURL: URL?
     private var accessedRoots: [LocalLibraryID: URL] = [:]
     private static let supportedExtensions: Set<String> = [
         "mp3", "m4a", "aac", "alac", "flac", "wav", "aiff", "aif", "ogg", "opus"
     ]
 
-    init(directory: URL? = nil) {
+    init(directory: URL? = nil, managedDirectory: URL? = nil) {
         let manager = FileManager.default
         let support = manager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? manager.temporaryDirectory
-        let root = directory ?? support.appendingPathComponent("Auralis/LocalMusic", isDirectory: true)
-        try? manager.createDirectory(at: root, withIntermediateDirectories: true)
-        sourcesURL = root.appendingPathComponent("sources.json")
+        let metadataRoot = directory ?? support.appendingPathComponent("Auralis/LocalMusic", isDirectory: true)
+        try? manager.createDirectory(at: metadataRoot, withIntermediateDirectories: true)
+        sourcesURL = metadataRoot.appendingPathComponent("sources.json")
+
+#if os(iOS)
+        let documents = manager.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? manager.temporaryDirectory
+        let managedRoot = managedDirectory
+            ?? documents.appendingPathComponent("LocalMusic", isDirectory: true)
+        try? manager.createDirectory(at: managedRoot, withIntermediateDirectories: true)
+        managedRootURL = managedRoot
+#else
+        managedRootURL = managedDirectory
+#endif
+
         if let data = try? Data(contentsOf: sourcesURL),
            let decoded = try? JSONDecoder().decode([LocalMusicSource].self, from: data) {
-            sources = decoded
+            sources = decoded.filter { $0.id != Self.managedSourceID }
         }
+
+#if os(iOS)
+        // iOS exposes the app Documents container in Files when file sharing/open-in-place are enabled.
+        // Keep this source first-class and automatic so users never need to create or pick a folder first.
+        sources.insert(
+            LocalMusicSource(
+                id: Self.managedSourceID,
+                displayName: "Auralis 本地音乐",
+                locationToken: Self.managedSourceToken
+            ),
+            at: 0
+        )
+#endif
         restoreSecurityScopedRoots()
     }
 
@@ -44,6 +72,14 @@ final class LocalMusicLibraryStore: ObservableObject {
     }
 
     func addSource(url: URL) async {
+#if os(iOS)
+        if let managedRootURL,
+           url.standardizedFileURL == managedRootURL.standardizedFileURL,
+           let managedSource = sources.first(where: { $0.id == Self.managedSourceID }) {
+            _ = await scan(source: managedSource)
+            return
+        }
+#endif
         do {
 #if os(macOS)
             let bookmarkOptions: URL.BookmarkCreationOptions = [.withSecurityScope]
@@ -82,6 +118,7 @@ final class LocalMusicLibraryStore: ObservableObject {
     }
 
     func removeSource(_ source: LocalMusicSource) {
+        guard source.id != Self.managedSourceID else { return }
         if let root = accessedRoots.removeValue(forKey: source.id) {
             root.stopAccessingSecurityScopedResource()
         }
@@ -168,12 +205,16 @@ final class LocalMusicLibraryStore: ObservableObject {
     }
 
     private func restoreSecurityScopedRoots() {
-        for source in sources {
+        for source in sources where source.id != Self.managedSourceID {
             _ = resolveRoot(source)
         }
     }
 
     private func resolveRoot(_ source: LocalMusicSource) -> URL? {
+        if source.id == Self.managedSourceID, let managedRootURL {
+            try? FileManager.default.createDirectory(at: managedRootURL, withIntermediateDirectories: true)
+            return managedRootURL
+        }
         if let existing = accessedRoots[source.id] {
             return existing
         }
@@ -198,7 +239,8 @@ final class LocalMusicLibraryStore: ObservableObject {
     }
 
     private func persistSources() throws {
-        try JSONEncoder().encode(sources).write(to: sourcesURL, options: .atomic)
+        let persisted = sources.filter { $0.id != Self.managedSourceID }
+        try JSONEncoder().encode(persisted).write(to: sourcesURL, options: .atomic)
     }
 
     private static func belongs(_ track: Track, to sourceID: LocalLibraryID) -> Bool {
