@@ -45,8 +45,15 @@ final class LocalMusicLibraryStore: ObservableObject {
 
     func addSource(url: URL) async {
         do {
+#if os(macOS)
+            let bookmarkOptions: URL.BookmarkCreationOptions = [.withSecurityScope]
+#else
+            // iOS document-picker URLs already carry security-scoped access;
+            // the explicit bookmark option is unavailable on iOS.
+            let bookmarkOptions: URL.BookmarkCreationOptions = []
+#endif
             let data = try url.bookmarkData(
-                options: [.withSecurityScope],
+                options: bookmarkOptions,
                 includingResourceValuesForKeys: nil,
                 relativeTo: nil
             )
@@ -164,9 +171,16 @@ final class LocalMusicLibraryStore: ObservableObject {
         }
         guard let data = Data(base64Encoded: source.locationToken) else { return nil }
         var stale = false
+#if os(macOS)
+        let bookmarkOptions: URL.BookmarkResolutionOptions = [.withSecurityScope, .withoutUI]
+#else
+        // iOS does not expose the security-scope resolution flag. The resolved
+        // document URL is still activated below before it is scanned.
+        let bookmarkOptions: URL.BookmarkResolutionOptions = [.withoutUI]
+#endif
         guard let url = try? URL(
             resolvingBookmarkData: data,
-            options: [.withSecurityScope, .withoutUI],
+            options: bookmarkOptions,
             relativeTo: nil,
             bookmarkDataIsStale: &stale
         ), !stale else { return nil }
