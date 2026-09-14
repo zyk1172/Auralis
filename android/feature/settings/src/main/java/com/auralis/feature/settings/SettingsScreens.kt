@@ -90,7 +90,6 @@ fun SettingsScreen(
     onOpenServers: () -> Unit,
     onEditHomeLayout: () -> Unit,
     onOpenAiSettings: () -> Unit,
-    onOpenLocalMusic: () -> Unit,
     recommendationIndexState: RecommendationIndexUiState = RecommendationIndexUiState(),
     onStartRecommendationIndex: () -> Unit = {},
     onCancelRecommendationIndex: () -> Unit = {},
