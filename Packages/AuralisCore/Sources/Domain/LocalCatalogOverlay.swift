@@ -56,9 +56,9 @@ public enum LocalCatalogOverlay {
     ) -> [Artist] {
         let local = snapshot ?? self.snapshot()
         let remoteOnly = remote.filter { $0.serverID != localServerID }
-        var seen = Set<GlobalID>()
+        var seen = Set<String>()
         return (remoteOnly + local.artists).filter { artist in
-            seen.insert(GlobalID(serverID: artist.serverID, remoteID: artist.id.rawValue)).inserted
+            seen.insert(identityKey(serverID: artist.serverID, remoteID: artist.id.rawValue)).inserted
         }
     }
 
@@ -68,9 +68,9 @@ public enum LocalCatalogOverlay {
     ) -> [Album] {
         let local = snapshot ?? self.snapshot()
         let remoteOnly = remote.filter { $0.serverID != localServerID }
-        var seen = Set<GlobalID>()
+        var seen = Set<String>()
         return (remoteOnly + local.albums).filter { album in
-            seen.insert(GlobalID(serverID: album.serverID, remoteID: album.id.rawValue)).inserted
+            seen.insert(identityKey(serverID: album.serverID, remoteID: album.id.rawValue)).inserted
         }
     }
 
@@ -123,6 +123,12 @@ public enum LocalCatalogOverlay {
             copy.songCount = remainder
             return copy
         }
+    }
+
+    /// Domain deliberately does not depend on LocalCatalog's `GlobalID` type. Build a stable,
+    /// collision-resistant-enough composite key locally so the overlay remains dependency-safe.
+    private static func identityKey(serverID: ServerID, remoteID: String) -> String {
+        "\(serverID.rawValue)\u{1F}\(remoteID)"
     }
 
     private static func normalizedGenreKey(_ value: String) -> String {
