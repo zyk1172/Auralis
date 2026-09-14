@@ -312,6 +312,10 @@ final class DownloadStore: ObservableObject {
     /// 获取下载地址本身也是可取消的“排队”阶段。令牌防止用户点取消后，迟到的 URL
     /// 又创建一个后台任务。
     private var requestTokens: [GlobalID: UUID] = [:]
+    /// 下载完成前保留完整 Track 元数据，用于把音频、封面、歌词整理成 Files-visible package。
+    private var requestedTracks: [GlobalID: Track] = [:]
+    /// 旧版本缓存迁移到 Files-visible package 时防止重复并发。
+    private var packageMigrationsInFlight: Set<GlobalID> = []
     /// 当前活动服务器 ID。下载地址用活动连接器获取；若等待期间服务器切换，
     /// 不得把新服务器的音频写入旧服务器的缓存槽（P1-2）。
     var serverIDProvider: @MainActor () -> ServerID? = { nil }
@@ -360,6 +364,26 @@ final class DownloadStore: ObservableObject {
             downloadedTrackIDs = loaded
             downloadedContentRevision &+= 1
         }
+
+        // One-time/lazy migration for downloads created by older builds. A failed network metadata
+        // lookup leaves the original cache untouched and will be retried on a later restore.
+        for (globalID, entry) in cachedEntries where !packageMigrationsInFlight.contains(globalID) {
+            let alreadyPackaged = await cacheStore.isStoredInManagedPackage(entry.cacheID)
+            guard !alreadyPackaged else { continue }
+            packageMigrationsInFlight.insert(globalID)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.packageDownloadedTrack(
+                    taskID: DownloadTaskID(
+                        serverID: entry.cacheID.serverID,
+                        trackID: entry.cacheID.trackID
+                    ),
+                    preferredTrack: nil,
+                    reportFailure: false
+                )
+                self.packageMigrationsInFlight.remove(globalID)
+            }
+        }
     }
 
     func isDownloaded(_ track: Track) -> Bool { downloadedTrackIDs.contains(globalID(for: track)) }
@@ -375,6 +399,7 @@ final class DownloadStore: ObservableObject {
         guard !downloadedTrackIDs.contains(globalID), !downloadingTrackIDs.contains(globalID) else { return }
         let token = UUID()
         requestTokens[globalID] = token
+        requestedTracks[globalID] = track
         lastOperationError = nil
         let queued = DownloadTaskInfo(trackID: track.id, status: .queued)
         records[globalID] = queued
@@ -395,6 +420,7 @@ final class DownloadStore: ObservableObject {
                 records[globalID] = DownloadTaskInfo(trackID: track.id, status: .failed, failure: failure)
                 downloadingTrackIDs.remove(globalID)
                 progress[globalID] = nil
+                requestedTracks[globalID] = nil
                 lastOperationError = failure.message
                 return
             }
@@ -408,6 +434,7 @@ final class DownloadStore: ObservableObject {
                 downloadingTrackIDs.remove(globalID)
                 progress[globalID] = nil
                 requestTokens[globalID] = nil
+                requestedTracks[globalID] = nil
                 lastOperationError = failure.message
                 return
             }
@@ -425,6 +452,7 @@ final class DownloadStore: ObservableObject {
     func cancel(_ track: Track) {
         let globalID = globalID(for: track)
         requestTokens[globalID] = nil
+        requestedTracks[globalID] = nil
         manager.cancel(DownloadTaskID(serverID: track.serverID, trackID: track.id))
         downloadingTrackIDs.remove(globalID)
         progress[globalID] = nil
@@ -441,6 +469,7 @@ final class DownloadStore: ObservableObject {
             }
             cachedEntries[globalID] = nil
             records[globalID] = nil
+            requestedTracks[globalID] = nil
             lastOperationError = nil
         } catch {
             lastOperationError = String(localized: "无法删除本地文件，请稍后重试", bundle: .module)
@@ -457,6 +486,7 @@ final class DownloadStore: ObservableObject {
             }
             cachedEntries = [:]
             records = records.filter { $0.value.status == .failed }
+            requestedTracks = [:]
             lastOperationError = nil
         } catch {
             await restoreCachedIDs()
@@ -466,6 +496,7 @@ final class DownloadStore: ObservableObject {
 
     func cancelAll() {
         requestTokens.removeAll()
+        requestedTracks.removeAll()
         manager.cancelAll()
         downloadingTrackIDs = []
         progress = [:]
@@ -497,6 +528,7 @@ final class DownloadStore: ObservableObject {
         records = [:]
         cachedEntries = [:]
         requestTokens.removeAll()
+        requestedTracks.removeAll()
         if hadDownloadedContent {
             downloadedContentRevision &+= 1
         }
@@ -519,15 +551,93 @@ final class DownloadStore: ObservableObject {
             if downloadedTrackIDs.insert(globalID).inserted {
                 downloadedContentRevision &+= 1
             }
-            Task { @MainActor [weak self] in await self?.restoreCachedIDs() }
+            let preferredTrack = requestedTracks.removeValue(forKey: globalID)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.packageDownloadedTrack(
+                    taskID: taskID,
+                    preferredTrack: preferredTrack,
+                    reportFailure: true
+                )
+                await self.restoreCachedIDs()
+            }
         case .failed:
             downloadingTrackIDs.remove(globalID)
             progress[globalID] = nil
+            requestedTracks[globalID] = nil
             lastOperationError = info.failure?.message
         case .notDownloaded:
             downloadingTrackIDs.remove(globalID)
             progress[globalID] = nil
             records[globalID] = nil
+            requestedTracks[globalID] = nil
+        }
+    }
+
+    private func packageDownloadedTrack(
+        taskID: DownloadTaskID,
+        preferredTrack: Track?,
+        reportFailure: Bool
+    ) async {
+        let cacheID = TrackCacheStore.TrackCacheID(serverID: taskID.serverID, trackID: taskID.trackID)
+        if await cacheStore.isStoredInManagedPackage(cacheID) { return }
+        guard let cachedURL = await cacheStore.cachedFileURL(for: cacheID) else { return }
+
+        let track: Track
+        if let preferredTrack {
+            track = preferredTrack
+        } else {
+            do {
+                guard let fetched = try await connector.serverTrack(
+                    serverID: taskID.serverID,
+                    trackID: taskID.trackID
+                ) else { return }
+                track = fetched
+            } catch {
+                return
+            }
+        }
+
+        var artworkData: Data?
+        if let artworkKey = track.artworkKey {
+            artworkData = await connector.artworkData(
+                serverID: track.serverID,
+                key: artworkKey,
+                targetPixelSize: 1600
+            )
+        }
+
+        var lyrics: LyricsDocument?
+        do {
+            lyrics = try await connector.fetchLyrics(for: track)
+        } catch {
+            // A missing/unavailable lyric must not turn a completed audio download into a failure.
+            lyrics = nil
+        }
+
+        do {
+            let destination = try LocalMusicPackageManager.prepareDownloadedPackage(
+                track: track,
+                audioExtension: cachedURL.pathExtension,
+                artworkData: artworkData,
+                lyrics: lyrics
+            )
+            do {
+                try await cacheStore.relocateCachedFile(
+                    for: cacheID,
+                    toManagedPackageAudioURL: destination
+                )
+            } catch {
+                LocalMusicPackageManager.discardPreparedDownloadPackage(audioDestination: destination)
+                throw error
+            }
+        } catch {
+            if reportFailure {
+                lastOperationError = String(
+                    localized: "歌曲已下载，但无法整理到 LocalMusic 标准文件夹；仍可从下载缓存播放",
+                    bundle: .module
+                )
+            }
         }
     }
 

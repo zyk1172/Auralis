@@ -10,9 +10,12 @@ import MusicLibrary
 /// `auralis-local` is an entity namespace only. No ServerAccount or credential is created.
 @MainActor
 enum UnifiedLocalCatalogBridge {
-    static func publish(tracks: [Track]) async {
+    static func publish(
+        tracks: [Track],
+        lyrics: [TrackID: LyricsDocument] = [:]
+    ) async {
         let previous = LocalCatalogOverlay.snapshot()
-        let snapshot = makeSnapshot(tracks: tracks)
+        let snapshot = makeSnapshot(tracks: tracks, lyrics: lyrics)
         let model = AuralisAppModel.shared
 
         // Genre has no source identity in the Swift domain model. Remove the previous local
@@ -26,6 +29,14 @@ enum UnifiedLocalCatalogBridge {
         let remoteAlbums = current.albums.filter { $0.serverID != LocalCatalogOverlay.localServerID }
         let remoteTracks = current.tracks.filter { $0.serverID != LocalCatalogOverlay.localServerID }
 
+        // Lyrics use TrackID as the key and do not carry a source namespace themselves. Remove the
+        // previous local-track contribution explicitly before the replacement snapshot is merged.
+        let previousLocalTrackIDs = Set(previous.tracks.map(\.id))
+        var remoteLyrics = current.lyrics
+        for trackID in previousLocalTrackIDs {
+            remoteLyrics[trackID] = nil
+        }
+
         LocalCatalogOverlay.replace(with: snapshot)
         model.libraryStore.catalog = LibraryCatalog(
             account: current.account,
@@ -36,7 +47,7 @@ enum UnifiedLocalCatalogBridge {
             playlists: current.playlists,
             history: current.history,
             downloads: current.downloads,
-            lyrics: current.lyrics,
+            lyrics: remoteLyrics,
             recommendations: current.recommendations
         )
 
@@ -63,8 +74,13 @@ enum UnifiedLocalCatalogBridge {
         }
     }
 
-    static func makeSnapshot(tracks: [Track]) -> LocalCatalogOverlaySnapshot {
+    static func makeSnapshot(
+        tracks: [Track],
+        lyrics: [TrackID: LyricsDocument] = [:]
+    ) -> LocalCatalogOverlaySnapshot {
         let localTracks = tracks.filter { $0.serverID == LocalCatalogOverlay.localServerID }
+        let localTrackIDs = Set(localTracks.map(\.id))
+        let localLyrics = lyrics.filter { localTrackIDs.contains($0.key) }
 
         let artistGroups = Dictionary(grouping: localTracks, by: \.artistID)
         let artists = artistGroups.map { artistID, group in
@@ -72,7 +88,8 @@ enum UnifiedLocalCatalogBridge {
                 id: artistID,
                 serverID: LocalCatalogOverlay.localServerID,
                 name: group.first?.artistName ?? String(localized: "未知艺术家", bundle: .module),
-                albumCount: Set(group.map(\.albumID)).count
+                albumCount: Set(group.map(\.albumID)).count,
+                artworkKey: group.compactMap(\.artworkKey).first
             )
         }
         .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -88,6 +105,7 @@ enum UnifiedLocalCatalogBridge {
                 artistName: first.artistName,
                 year: group.compactMap(\.year).first,
                 genre: group.flatMap(\.genres).first,
+                artworkKey: group.compactMap(\.artworkKey).first,
                 songCount: group.count
             )
         }
@@ -116,7 +134,8 @@ enum UnifiedLocalCatalogBridge {
             artists: artists,
             albums: albums,
             tracks: localTracks,
-            genres: genres
+            genres: genres,
+            lyrics: localLyrics
         )
     }
 }

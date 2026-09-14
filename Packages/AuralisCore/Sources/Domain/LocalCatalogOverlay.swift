@@ -11,17 +11,20 @@ public struct LocalCatalogOverlaySnapshot: Sendable {
     public var albums: [Album]
     public var tracks: [Track]
     public var genres: [Genre]
+    public var lyrics: [TrackID: LyricsDocument]
 
     public init(
         artists: [Artist] = [],
         albums: [Album] = [],
         tracks: [Track] = [],
-        genres: [Genre] = []
+        genres: [Genre] = [],
+        lyrics: [TrackID: LyricsDocument] = [:]
     ) {
         self.artists = artists
         self.albums = albums
         self.tracks = tracks
         self.genres = genres
+        self.lyrics = lyrics
     }
 
     public static let empty = LocalCatalogOverlaySnapshot()
@@ -90,6 +93,18 @@ public enum LocalCatalogOverlay {
         return (remoteOnly + local.tracks).filter { track in
             seen.insert(identityKey(serverID: track.serverID, remoteID: track.id.rawValue)).inserted
         }
+    }
+
+    public static func mergedLyrics(
+        remote: [TrackID: LyricsDocument],
+        local snapshot: LocalCatalogOverlaySnapshot? = nil
+    ) -> [TrackID: LyricsDocument] {
+        let local = snapshot ?? self.snapshot()
+        var merged = remote
+        for (trackID, document) in local.lyrics {
+            merged[trackID] = document
+        }
+        return merged
     }
 
     /// Swift `Genre` is intentionally source-agnostic, so provenance cannot be removed by serverID.

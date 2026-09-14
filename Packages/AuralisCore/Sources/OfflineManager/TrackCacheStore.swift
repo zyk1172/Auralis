@@ -39,10 +39,11 @@ public actor TrackCacheStore {
     public static let downloadsLibraryID = LocalLibraryID(rawValue: "downloads")
     public static let localNamespace = ServerID(rawValue: "auralis-local")
 
+    private static let managedPackagePrefix = "managed-package:"
     private let directory: URL
     private let indexURL: URL
     private let promotionsURL: URL
-    /// Remote GlobalID description -> local filename.
+    /// Remote GlobalID description -> legacy relative cache filename, or managed-package:absolute path.
     private var index: [String: String] = [:]
     /// Remote GlobalID description -> canonical local TrackID.
     private var promotions: [String: String] = [:]
@@ -101,8 +102,8 @@ public actor TrackCacheStore {
     }
 
     public func cachedFileURL(for id: TrackCacheID) -> URL? {
-        guard let name = index[id.description] else { return nil }
-        let url = directory.appendingPathComponent(name)
+        guard let location = index[id.description] else { return nil }
+        let url = fileURL(forStoredLocation: location)
         guard FileManager.default.fileExists(atPath: url.path) else {
             index[id.description] = nil
             promotions[id.description] = nil
@@ -117,6 +118,10 @@ public actor TrackCacheStore {
         cachedFileURL(for: id) != nil
     }
 
+    public func isStoredInManagedPackage(_ id: TrackCacheID) -> Bool {
+        index[id.description]?.hasPrefix(Self.managedPackagePrefix) == true
+    }
+
     public func cachedTrackIDs() -> Set<TrackCacheID> {
         Set(cachedEntries().map(\.cacheID))
     }
@@ -125,9 +130,9 @@ public actor TrackCacheStore {
         backfillPromotionsIfNeeded()
         var result: [CachedTrackEntry] = []
         var staleKeys: [String] = []
-        for (key, name) in index {
+        for (key, location) in index {
             guard let cacheID = Self.cacheID(from: key) else { continue }
-            let url = directory.appendingPathComponent(name)
+            let url = fileURL(forStoredLocation: location)
             guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
                   let fileSize = values.fileSize else {
                 staleKeys.append(key)
@@ -155,7 +160,7 @@ public actor TrackCacheStore {
         try ensureDirectory()
         let name = Self.uniqueFileName(id: id, codec: codec)
         let url = directory.appendingPathComponent(name)
-        let previousName = index[id.description]
+        let previousLocation = index[id.description]
         let previousPromotion = promotions[id.description]
         try data.write(to: url, options: [.atomic, .completeFileProtectionUnlessOpen])
         index[id.description] = name
@@ -164,12 +169,12 @@ public actor TrackCacheStore {
             try persistIndex()
             try persistPromotions()
         } catch {
-            index[id.description] = previousName
+            index[id.description] = previousLocation
             promotions[id.description] = previousPromotion
             try? FileManager.default.removeItem(at: url)
             throw error
         }
-        removeReplacedFile(previousName, keeping: name)
+        removeReplacedLocation(previousLocation, keeping: name)
         return url
     }
 
@@ -179,7 +184,7 @@ public actor TrackCacheStore {
         try ensureDirectory()
         let name = Self.uniqueFileName(id: id, codec: codec)
         let destination = directory.appendingPathComponent(name)
-        let previousName = index[id.description]
+        let previousLocation = index[id.description]
         let previousPromotion = promotions[id.description]
         try FileManager.default.moveItem(at: sourceURL, to: destination)
         index[id.description] = name
@@ -188,22 +193,64 @@ public actor TrackCacheStore {
             try persistIndex()
             try persistPromotions()
         } catch {
-            index[id.description] = previousName
+            index[id.description] = previousLocation
             promotions[id.description] = previousPromotion
             try? FileManager.default.removeItem(at: destination)
             throw error
         }
-        removeReplacedFile(previousName, keeping: name)
+        removeReplacedLocation(previousLocation, keeping: name)
+        return destination
+    }
+
+    /// Moves an already cached download into its Files-visible one-song package without creating a
+    /// second audio copy. The index keeps an explicit managed-package absolute path so playback,
+    /// download status and deletion continue to use the same TrackCacheStore APIs.
+    @discardableResult
+    public func relocateCachedFile(
+        for id: TrackCacheID,
+        toManagedPackageAudioURL destination: URL
+    ) throws -> URL {
+        guard let previousLocation = index[id.description] else { throw TrackCacheError.missingFile }
+        let source = fileURL(forStoredLocation: previousLocation)
+        guard FileManager.default.fileExists(atPath: source.path) else { throw TrackCacheError.missingFile }
+
+        let manager = FileManager.default
+        try manager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let newLocation = Self.managedPackagePrefix + destination.path
+        if source.standardizedFileURL == destination.standardizedFileURL {
+            index[id.description] = newLocation
+            try persistIndex()
+            return destination
+        }
+
+        if manager.fileExists(atPath: destination.path) {
+            try manager.removeItem(at: destination)
+        }
+        try manager.moveItem(at: source, to: destination)
+        index[id.description] = newLocation
+        do {
+            try persistIndex()
+        } catch {
+            index[id.description] = previousLocation
+            try? manager.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? manager.moveItem(at: destination, to: source)
+            throw error
+        }
+
+        if previousLocation.hasPrefix(Self.managedPackagePrefix) {
+            let oldFolder = source.deletingLastPathComponent()
+            let newFolder = destination.deletingLastPathComponent()
+            if oldFolder.standardizedFileURL != newFolder.standardizedFileURL {
+                try? manager.removeItem(at: oldFolder)
+            }
+        }
         return destination
     }
 
     public func remove(for id: TrackCacheID) throws {
-        guard let name = index[id.description] else { return }
-        let url = directory.appendingPathComponent(name)
-        if FileManager.default.fileExists(atPath: url.path) {
-            try FileManager.default.removeItem(at: url)
-        }
-        let previousName = index[id.description]
+        guard let location = index[id.description] else { return }
+        try removeStoredLocation(location)
+        let previousLocation = index[id.description]
         let previousPromotion = promotions[id.description]
         index[id.description] = nil
         promotions[id.description] = nil
@@ -211,7 +258,7 @@ public actor TrackCacheStore {
             try persistIndex()
             try persistPromotions()
         } catch {
-            index[id.description] = previousName
+            index[id.description] = previousLocation
             promotions[id.description] = previousPromotion
             throw error
         }
@@ -222,9 +269,7 @@ public actor TrackCacheStore {
         let keys = index.keys.filter { $0.hasPrefix(prefix) }
         guard !keys.isEmpty else { return }
         for key in keys {
-            if let name = index[key] {
-                try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
-            }
+            if let location = index[key] { try? removeStoredLocation(location) }
             index[key] = nil
             promotions[key] = nil
         }
@@ -235,11 +280,8 @@ public actor TrackCacheStore {
     public func removeAll() throws {
         let previousIndex = index
         let previousPromotions = promotions
-        for name in Set(index.values) {
-            let url = directory.appendingPathComponent(name)
-            if FileManager.default.fileExists(atPath: url.path) {
-                try FileManager.default.removeItem(at: url)
-            }
+        for location in Set(index.values) {
+            try? removeStoredLocation(location)
         }
         index = [:]
         promotions = [:]
@@ -256,8 +298,8 @@ public actor TrackCacheStore {
     public func promotedEntries() -> [PromotedTrackEntry] {
         backfillPromotionsIfNeeded()
         return promotions.compactMap { key, localID in
-            guard let cacheID = Self.cacheID(from: key), let name = index[key] else { return nil }
-            let url = directory.appendingPathComponent(name)
+            guard let cacheID = Self.cacheID(from: key), let location = index[key] else { return nil }
+            let url = fileURL(forStoredLocation: location)
             guard FileManager.default.fileExists(atPath: url.path) else { return nil }
             return PromotedTrackEntry(
                 cacheID: cacheID,
@@ -310,9 +352,27 @@ public actor TrackCacheStore {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
-    private func removeReplacedFile(_ previousName: String?, keeping currentName: String) {
-        guard let previousName, previousName != currentName else { return }
-        try? FileManager.default.removeItem(at: directory.appendingPathComponent(previousName))
+    private func fileURL(forStoredLocation location: String) -> URL {
+        if location.hasPrefix(Self.managedPackagePrefix) {
+            return URL(fileURLWithPath: String(location.dropFirst(Self.managedPackagePrefix.count)))
+        }
+        return directory.appendingPathComponent(location)
+    }
+
+    private func removeStoredLocation(_ location: String) throws {
+        let manager = FileManager.default
+        let url = fileURL(forStoredLocation: location)
+        guard manager.fileExists(atPath: url.path) else { return }
+        if location.hasPrefix(Self.managedPackagePrefix) {
+            try manager.removeItem(at: url.deletingLastPathComponent())
+        } else {
+            try manager.removeItem(at: url)
+        }
+    }
+
+    private func removeReplacedLocation(_ previousLocation: String?, keeping currentLocation: String) {
+        guard let previousLocation, previousLocation != currentLocation else { return }
+        try? removeStoredLocation(previousLocation)
     }
 
     private static func cacheID(from description: String) -> TrackCacheID? {
@@ -360,4 +420,5 @@ public actor TrackCacheStore {
 
 public enum TrackCacheError: Error, Equatable, Sendable {
     case emptyFile
+    case missingFile
 }

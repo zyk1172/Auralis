@@ -43,3 +43,41 @@ import Testing
     let canonical = await store.canonicalLocalTrackID(for: remote)
     #expect(canonical == nil)
 }
+
+@Test func cachedDownloadCanRelocateIntoManagedSongPackage() async throws {
+    let fileManager = FileManager.default
+    let root = fileManager.temporaryDirectory
+        .appendingPathComponent("local-music-package-relocation-\(UUID().uuidString)", isDirectory: true)
+    let cacheRoot = root.appendingPathComponent("cache", isDirectory: true)
+    let package = root.appendingPathComponent("LocalMusic/Test Song", isDirectory: true)
+    let destination = package.appendingPathComponent("audio.flac")
+    defer { try? fileManager.removeItem(at: root) }
+
+    let remote = TrackCacheStore.TrackCacheID(
+        serverID: ServerID(rawValue: "srv"),
+        trackID: TrackID(rawValue: "download-1")
+    )
+    let store = TrackCacheStore(directory: cacheRoot)
+    let oldURL = try await store.store(data: Data([1, 2, 3, 4]), for: remote, codec: "flac")
+    try fileManager.createDirectory(at: package, withIntermediateDirectories: true)
+    try "{\"managedByAuralisDownload\":true}".write(
+        to: package.appendingPathComponent("metadata.json"),
+        atomically: true,
+        encoding: .utf8
+    )
+
+    _ = try await store.relocateCachedFile(for: remote, toManagedPackageAudioURL: destination)
+
+    #expect(!fileManager.fileExists(atPath: oldURL.path))
+    #expect(fileManager.fileExists(atPath: destination.path))
+    #expect(await store.isStoredInManagedPackage(remote))
+    #expect(await store.cachedFileURL(for: remote)?.standardizedFileURL == destination.standardizedFileURL)
+
+    let restored = TrackCacheStore(directory: cacheRoot)
+    #expect(await restored.cachedFileURL(for: remote)?.standardizedFileURL == destination.standardizedFileURL)
+    #expect(await restored.canonicalLocalTrackID(for: remote) != nil)
+
+    try await restored.remove(for: remote)
+    #expect(!fileManager.fileExists(atPath: package.path))
+    #expect(await restored.canonicalLocalTrackID(for: remote) == nil)
+}
