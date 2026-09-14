@@ -63,6 +63,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.auralis.core.data.graph.AuralisGraph
+import com.auralis.core.data.local.AndroidLocalMusicLibrary
 import com.auralis.core.designsystem.AuralisChrome
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
@@ -112,6 +113,7 @@ fun LibraryScreen(
     val colors = LocalAuralisTheme.current.colors
     var scope by remember { mutableStateOf(LibraryScope.Albums) }
     val serverId = rememberActiveServerId(graph)
+    val libraryServerId = serverId ?: AndroidLocalMusicLibrary.LOCAL_SERVER_ID
 
     Column(
         modifier = modifier
@@ -163,14 +165,14 @@ fun LibraryScreen(
                 when (scope) {
                     LibraryScope.Albums -> AlbumScope(
                         graph = graph,
-                        serverId = serverId,
+                        serverId = libraryServerId,
                         onPlayTracks = onPlayTracks,
                         onBrowse = onBrowse,
                         bottomPadding = bottomChromeClearance,
                     )
                     LibraryScope.Tracks -> TracksOrFavoritesScope(
                         graph = graph,
-                        serverId = serverId,
+                        serverId = libraryServerId,
                         isFavorites = false,
                         onPlayTracks = onPlayTracks,
                         onPlayNext = onPlayNext,
@@ -179,20 +181,20 @@ fun LibraryScreen(
                     )
                     LibraryScope.Artists -> ArtistScope(
                         graph = graph,
-                        serverId = serverId,
+                        serverId = libraryServerId,
                         onPlayTracks = onPlayTracks,
                         onBrowse = onBrowse,
                         bottomPadding = bottomChromeClearance,
                     )
                     LibraryScope.Playlists -> PlaylistScope(
                         graph = graph,
-                        serverId = serverId,
+                        serverId = libraryServerId,
                         onBrowse = onBrowse,
                         bottomPadding = bottomChromeClearance,
                     )
                     LibraryScope.Favorites -> TracksOrFavoritesScope(
                         graph = graph,
-                        serverId = serverId,
+                        serverId = libraryServerId,
                         isFavorites = true,
                         onPlayTracks = onPlayTracks,
                         onPlayNext = onPlayNext,
@@ -201,13 +203,13 @@ fun LibraryScreen(
                     )
                     LibraryScope.Genres -> GenreScope(
                         graph = graph,
-                        serverId = serverId,
+                        serverId = libraryServerId,
                         onBrowse = onBrowse,
                         bottomPadding = bottomChromeClearance,
                     )
                     LibraryScope.Categories -> CategoryScope(
                         graph = graph,
-                        serverId = serverId,
+                        serverId = libraryServerId,
                         onBrowse = onBrowse,
                         recommendationIndexState = recommendationIndexState,
                         onStartRecommendationIndex = onStartRecommendationIndex,

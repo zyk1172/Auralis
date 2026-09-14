@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 
@@ -40,7 +41,7 @@ class UnifiedCatalogRepository(
 
     override fun observeArtists(serverId: ServerId?): Flow<List<Artist>> {
         val localFlow = local.tracks.map(::localArtists).distinctUntilChanged()
-        if (serverId == localServerId) return localFlow
+        if (serverId == null || serverId == localServerId) return localFlow
         return combine(delegate.observeArtists(serverId), localFlow) { remote, localItems ->
             remote + localItems
         }
@@ -48,14 +49,14 @@ class UnifiedCatalogRepository(
 
     override fun observeAlbums(serverId: ServerId?): Flow<List<Album>> {
         val localFlow = local.tracks.map(::localAlbums).distinctUntilChanged()
-        if (serverId == localServerId) return localFlow
+        if (serverId == null || serverId == localServerId) return localFlow
         return combine(delegate.observeAlbums(serverId), localFlow) { remote, localItems ->
             remote + localItems
         }
     }
 
     override fun observeTracks(serverId: ServerId?): Flow<List<Track>> {
-        if (serverId == localServerId) return local.tracks
+        if (serverId == null || serverId == localServerId) return local.tracks
         return combine(delegate.observeTracks(serverId), local.tracks) { remote, localTracks ->
             TrackQuality.deduplicatedPreferringQuality(remote + localTracks)
         }
@@ -63,14 +64,14 @@ class UnifiedCatalogRepository(
 
     override fun observeGenres(serverId: ServerId?): Flow<List<Genre>> {
         val localFlow = local.tracks.map(::localGenres).distinctUntilChanged()
-        if (serverId == localServerId) return localFlow
+        if (serverId == null || serverId == localServerId) return localFlow
         return combine(delegate.observeGenres(serverId), localFlow) { remote, localItems ->
             mergeGenresForRead(remote, localItems)
         }
     }
 
     override fun observePlaylists(serverId: ServerId?): Flow<List<Playlist>> =
-        if (serverId == localServerId) flowOf(emptyList()) else delegate.observePlaylists(serverId)
+        if (serverId == null || serverId == localServerId) flowOf(emptyList()) else delegate.observePlaylists(serverId)
 
     override suspend fun track(globalId: GlobalId): Track? =
         if (globalId.serverId == localServerId) local.track(globalId) else delegate.track(globalId)
@@ -112,7 +113,7 @@ class UnifiedCatalogRepository(
 
     override suspend fun search(serverId: ServerId?, query: String, limit: Int): SearchResults {
         val localResult = localSearch(query, limit)
-        if (serverId == localServerId) return localResult
+        if (serverId == null || serverId == localServerId) return localResult
         val remote = delegate.search(serverId, query, limit)
         return SearchResults(
             songs = TrackQuality.deduplicatedPreferringQuality(remote.songs + localResult.songs).take(limit),
@@ -130,7 +131,7 @@ class UnifiedCatalogRepository(
             trackCount = localTracks.size,
             playlistCount = 0,
         )
-        if (serverId == localServerId) return localStats
+        if (serverId == null || serverId == localServerId) return localStats
         val remote = delegate.stats(serverId)
         return LibraryStats(
             artistCount = remote.artistCount + localStats.artistCount,
@@ -142,7 +143,7 @@ class UnifiedCatalogRepository(
 
     override fun observeFavoriteTracks(serverId: ServerId?): Flow<List<Track>> {
         val localFavorites = local.tracks.map { tracks -> tracks.filter { it.isFavorite } }.distinctUntilChanged()
-        if (serverId == localServerId) return localFavorites
+        if (serverId == null || serverId == localServerId) return localFavorites
         return combine(delegate.observeFavoriteTracks(serverId), localFavorites) { remote, localItems ->
             TrackQuality.deduplicatedPreferringQuality(remote + localItems)
         }
@@ -157,7 +158,7 @@ class UnifiedCatalogRepository(
             .filter { it.second > 0 }
             .sortedByDescending { it.second }
             .map { it.first }
-        if (serverId == localServerId) return localItems.take(limit)
+        if (serverId == null || serverId == localServerId) return localItems.take(limit)
         return TrackQuality.deduplicatedPreferringQuality(delegate.mostPlayedTracks(serverId, limit) + localItems).take(limit)
     }
 
@@ -194,12 +195,12 @@ class UnifiedCatalogRepository(
         if (globalId.serverId == localServerId) local.isDisliked(globalId) else delegate.isDisliked(globalId)
 
     override suspend fun dislikedIds(serverId: ServerId): Set<GlobalId> =
-        if (serverId == localServerId) local.dislikedIds() else delegate.dislikedIds(serverId) + local.dislikedIds()
+        if (serverId == null || serverId == localServerId) local.dislikedIds() else delegate.dislikedIds(serverId) + local.dislikedIds()
 
     override fun observeDislikedIds(serverId: ServerId?): Flow<List<GlobalId>> {
         val localFlow = combine(local.tracks, local.revision) { _, _ -> local.dislikedIds().toList() }
             .distinctUntilChanged()
-        if (serverId == localServerId) return localFlow
+        if (serverId == null || serverId == localServerId) return localFlow
         return combine(delegate.observeDislikedIds(serverId), localFlow) { remote, localItems ->
             (remote + localItems).distinct()
         }
@@ -215,13 +216,13 @@ class UnifiedCatalogRepository(
 
     override suspend fun neverPlayed(serverId: ServerId?, limit: Int): List<Track> {
         val localItems = local.tracks.value.filter { local.playCount(it.globalId) == 0 }
-        if (serverId == localServerId) return localItems.take(limit)
+        if (serverId == null || serverId == localServerId) return localItems.take(limit)
         return TrackQuality.deduplicatedPreferringQuality(delegate.neverPlayed(serverId, limit) + localItems).take(limit)
     }
 
     override suspend fun longUnplayed(serverId: ServerId?, limit: Int): List<Track> {
         val localItems = local.tracks.value.sortedBy { local.lastPlayedMillis(it.globalId) ?: Long.MIN_VALUE }
-        if (serverId == localServerId) return localItems.take(limit)
+        if (serverId == null || serverId == localServerId) return localItems.take(limit)
         return TrackQuality.deduplicatedPreferringQuality(delegate.longUnplayed(serverId, limit) + localItems).take(limit)
     }
 
@@ -230,13 +231,13 @@ class UnifiedCatalogRepository(
             .mapNotNull { track -> local.lastPlayedMillis(track.globalId)?.let { track to it } }
             .sortedByDescending { it.second }
             .map { it.first }
-        if (serverId == localServerId) return localItems.take(limit)
+        if (serverId == null || serverId == localServerId) return localItems.take(limit)
         return TrackQuality.deduplicatedPreferringQuality(delegate.recentlyPlayed(serverId, limit) + localItems).take(limit)
     }
 
     override suspend fun randomTracks(serverId: ServerId?, limit: Int): List<Track> {
         val localItems = local.tracks.value.shuffled().take(limit)
-        if (serverId == localServerId) return localItems
+        if (serverId == null || serverId == localServerId) return localItems
         return TrackQuality.deduplicatedPreferringQuality(delegate.randomTracks(serverId, limit) + localItems)
             .shuffled()
             .take(limit)
@@ -244,7 +245,7 @@ class UnifiedCatalogRepository(
 
     override suspend fun favoriteRandom(serverId: ServerId?, limit: Int): List<Track> {
         val localItems = local.tracks.value.filter { it.isFavorite }.shuffled().take(limit)
-        if (serverId == localServerId) return localItems
+        if (serverId == null || serverId == localServerId) return localItems
         return TrackQuality.deduplicatedPreferringQuality(delegate.favoriteRandom(serverId, limit) + localItems)
             .shuffled()
             .take(limit)
@@ -252,27 +253,27 @@ class UnifiedCatalogRepository(
 
     override suspend fun favoriteCount(serverId: ServerId?): Int {
         val localCount = local.tracks.value.count { it.isFavorite }
-        return if (serverId == localServerId) localCount else delegate.favoriteCount(serverId) + localCount
+        return if (serverId == null || serverId == localServerId) localCount else delegate.favoriteCount(serverId) + localCount
     }
 
     override suspend fun playedTrackCount(serverId: ServerId?): Int {
         val localCount = local.tracks.value.count { local.playCount(it.globalId) > 0 }
-        return if (serverId == localServerId) localCount else delegate.playedTrackCount(serverId) + localCount
+        return if (serverId == null || serverId == localServerId) localCount else delegate.playedTrackCount(serverId) + localCount
     }
 
     override suspend fun genreTracks(serverId: ServerId?, genreName: String): List<Track> {
         val localItems = local.tracks.value.filter { track ->
             track.genres.any { it.equals(genreName, ignoreCase = true) }
         }
-        if (serverId == localServerId) return localItems
+        if (serverId == null || serverId == localServerId) return localItems
         return TrackQuality.deduplicatedPreferringQuality(delegate.genreTracks(serverId, genreName) + localItems)
     }
 
     fun homeChangeSignals(serverId: ServerId?): Flow<Unit> =
         merge(
-            if (serverId == localServerId) flowOf(Unit) else delegate.homeChangeSignals(serverId),
+            if (serverId == null || serverId == localServerId) flowOf(Unit) else delegate.homeChangeSignals(serverId),
             local.revision.map { Unit },
-        ).distinctUntilChanged()
+        )
 
     suspend fun mergeGenres(serverId: ServerId, values: List<Genre>) {
         if (serverId != localServerId) delegate.mergeGenres(serverId, values)
@@ -345,6 +346,5 @@ class UnifiedCatalogRepository(
         return result.values.toList()
     }
 
-    private suspend fun <T> Flow<List<T>>.firstSnapshot(): List<T> =
-        kotlinx.coroutines.flow.first(this)
+    private suspend fun <T> Flow<List<T>>.firstSnapshot(): List<T> = first()
 }
