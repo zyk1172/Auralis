@@ -43,6 +43,15 @@ struct SettingsView: View {
                     )
                 }
                 NavigationLink {
+                    LocalMusicSettingsPage(theme: theme)
+                } label: {
+                    SettingsCategoryRow(
+                        title: "本地音乐",
+                        subtitle: "音乐来源、扫描与本地存储",
+                        icon: "music.note.house"
+                    )
+                }
+                NavigationLink {
                     AgentSettingsPage(model: model, theme: theme)
                 } label: {
                     SettingsCategoryRow(

@@ -11,11 +11,13 @@ import com.auralis.core.data.connector.ResolvedServerEndpoint
 import com.auralis.core.data.connector.ServerClientRegistry
 import com.auralis.core.data.db.AuralisDatabase
 import com.auralis.core.data.db.AuralisDatabaseProvider
+import com.auralis.core.data.local.AndroidLocalMusicLibrary
 import com.auralis.core.data.prefs.AuralisPreferences
 import com.auralis.core.data.repository.CachedCatalogRepository
 import com.auralis.core.data.repository.RecommendationIndexStore
 import com.auralis.core.data.repository.RoomCatalogRepository
 import com.auralis.core.data.repository.RoomLyricsRepository
+import com.auralis.core.data.repository.UnifiedCatalogRepository
 import com.auralis.core.domain.GlobalId
 import com.auralis.core.domain.PlaybackSourceResolver
 import com.auralis.core.domain.ServerAccount
@@ -36,6 +38,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 
@@ -49,8 +52,8 @@ import okhttp3.OkHttpClient
  *   维护第二份易漂移的 accountCache：resolveStream / download / cover 一律
  *   `registry.client(serverId)` 取当前真正可用的端点；
  * - 播放器 / 下载器均为进程级单例；
- * - Room 是 catalog 唯一事实源，UI 通过进程级 replay 元数据层避免每次重进 Library
- *   都重新解码整库。Artwork 仍由图片缓存独立管理。
+ * - Room 是远端 catalog 唯一事实源；本地文件由 AndroidLocalMusicLibrary 持有，
+ *   只在公开读取边界通过 UnifiedCatalogRepository 合并，不创建伪 ServerAccount。
  */
 class AuralisGraph(context: Context) {
 
@@ -82,10 +85,17 @@ class AuralisGraph(context: Context) {
     )
 
     /**
-     * Public catalog API. The first Room emission is decoded once and replayed on subsequent UI
-     * entries; real Room invalidations still flow through immediately.
+     * Remote catalog cache stays server-scoped and is also the sink used by all OpenSubsonic
+     * mutation coordinators. Local files are never sent through those mutation paths.
      */
-    val catalogRepository = CachedCatalogRepository(roomCatalogRepository, appScope)
+    private val cachedCatalogRepository = CachedCatalogRepository(roomCatalogRepository, appScope)
+    private val localMusicLibrary = AndroidLocalMusicLibrary.get(appContext)
+
+    /**
+     * Public read API: current server + real local files. Existing Library/Search/Assistant callers
+     * keep using graph.catalogRepository and automatically see the unified catalog.
+     */
+    val catalogRepository = UnifiedCatalogRepository(cachedCatalogRepository, localMusicLibrary)
 
     /** 与 Catalog 使用同一个 Room 实例；Categories / Agent classifier 只能从这里访问索引。 */
     val recommendationIndex = RecommendationIndexStore(database)
@@ -188,22 +198,22 @@ class AuralisGraph(context: Context) {
 
     // ------------------------------------------------------ 依赖装配
 
-    /** 收藏/评分协调器（远端先行，成功后落本地）。 */
+    /** 收藏/评分协调器只绑定真实服务器 catalog；本地标注由 unified facade 本地落盘。 */
     val libraryActions by lazy {
-        com.auralis.core.data.connector.LibraryActionCoordinator(registry, catalogRepository)
+        com.auralis.core.data.connector.LibraryActionCoordinator(registry, cachedCatalogRepository)
     }
 
-    /** 歌单动作协调器（远端先行；rename/add/remove 后用服务器最新详情整表替换本地）。 */
+    /** 服务器歌单动作保持严格远端语义；本地/混合歌单以后由 Auralis-native playlist 层承载。 */
     val playlistActions by lazy {
-        com.auralis.core.data.connector.PlaylistCoordinator(registry, catalogRepository)
+        com.auralis.core.data.connector.PlaylistCoordinator(registry, cachedCatalogRepository)
     }
 
-    /** 播放历史/scrobble 协调器：由 App 注入到播放引擎的 historySink。 */
+    /** 播放历史/scrobble 协调器保持服务器协议边界，避免把 auralis-local 发到 OpenSubsonic。 */
     val historyCoordinator: com.auralis.core.data.connector.PlaybackHistoryCoordinator =
-        com.auralis.core.data.connector.PlaybackHistoryCoordinator(registry, catalogRepository)
+        com.auralis.core.data.connector.PlaybackHistoryCoordinator(registry, cachedCatalogRepository)
 
     val playbackResolver: PlaybackSourceResolver = DefaultPlaybackSourceResolver(
-        downloads = catalogRepository,
+        downloads = cachedCatalogRepository,
         streamUrlProvider = streamUrlProvider,
     )
 
@@ -215,11 +225,11 @@ class AuralisGraph(context: Context) {
         )
     }
 
-    /** 下载器：进程级，由 DownloadService 持有。 */
+    /** 下载器：只接收真实服务器 Track；完成后的 canonical-local 身份由 DownloadPromotionStore 管理。 */
     val downloadManager: DownloadManager by lazy {
         DownloadManager(
             context = appContext,
-            downloads = catalogRepository,
+            downloads = cachedCatalogRepository,
             urlFactory = { track -> resolveDownloadUrl(track) },
         ).also {
             DownloadServiceHolder.manager = it
@@ -227,7 +237,7 @@ class AuralisGraph(context: Context) {
         }
     }
 
-    /** App 启动装配（幂等、同步、不阻塞：数据库按需打开，注册表由 bootstrap 填充）。 */
+    /** App 启动装配（幂等、同步、不阻塞：本地目录扫描放到 appScope 后台执行）。 */
     fun install() {
         PlaybackDependencies.install(playbackResolver, historyCoordinator)
         ArtworkUrl.provider = ArtworkUrlProvider { serverId, artworkKey, size ->
@@ -235,6 +245,9 @@ class AuralisGraph(context: Context) {
             runBlocking { runCatching { client.coverArtUrl(artworkKey, size) }.getOrNull() }
         }
         downloadManager
+        appScope.launch {
+            runCatching { localMusicLibrary.scanAll() }
+        }
     }
 
     /**

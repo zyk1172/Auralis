@@ -138,15 +138,15 @@ public struct AgentToolkit {
             )
         case "searchTracks":
             let q = try require(call, "q")
-            let list = try await catalog.searchTracks(query: q, serverID: serverID)
+            let list = try await catalog.unifiedSearchTracks(query: q, activeServerID: serverID)
             return .ok(call, descriptor, "找到 \(list.count) 首", .trackCards(list.map(TrackCard.from)))
         case "searchAlbums":
             let q = try require(call, "q")
-            let list = try await catalog.searchAlbums(query: q, serverID: serverID)
+            let list = try await catalog.unifiedSearchAlbums(query: q, activeServerID: serverID)
             return .ok(call, descriptor, "找到 \(list.count) 张专辑", .albumCards(list.map { AlbumCard(globalID: $0.globalID, title: $0.title, artistName: $0.artistName) }))
         case "searchArtists":
             let q = try require(call, "q")
-            let list = try await catalog.searchArtists(query: q, serverID: serverID)
+            let list = try await catalog.unifiedSearchArtists(query: q, activeServerID: serverID)
             let cards = list.prefix(30).map {
                 ArtistCard(globalID: $0.globalID, name: $0.name, albumCount: $0.albumCount)
             }
@@ -166,7 +166,7 @@ public struct AgentToolkit {
             guard let artist = try await catalog.getArtist(gid) else { return .fail(call, descriptor, "艺术家不存在") }
             return .ok(call, descriptor, "已获取艺术家", .artistCards([ArtistCard(globalID: gid, name: artist.name, albumCount: artist.albumCount)]))
         case "getFavorites":
-            let list = try await catalog.getFavorites(serverID: serverID)
+            let list = try await catalog.unifiedFavorites(activeServerID: serverID)
             return .ok(call, descriptor, "收藏 \(list.count) 首", .trackCards(list.map(TrackCard.from)))
         case "getRecentHistory":
             let limit = (try? intParam(call, "limit")) ?? 50
@@ -514,7 +514,7 @@ public struct AgentToolkit {
             // display text.
             let index = try await catalog.makeCatalogIndex(serverID: serverID)
             let favoriteText = allowsFavoritesAndRatings
-                ? "、\(try await catalog.getFavorites(serverID: serverID).count) 首收藏"
+                ? "、\(try await catalog.unifiedFavorites(activeServerID: serverID).count) 首收藏"
                 : ""
             return .ok(call, descriptor, "\(index.songCount) 首歌曲、\(index.artistCount) 位艺术家、\(index.albumCount) 张专辑\(favoriteText)",
                        .text("\(index.songCount) 首歌曲 · \(index.artistCount) 位艺术家 · \(index.albumCount) 张专辑\(favoriteText)"))
@@ -661,14 +661,14 @@ public struct AgentToolkit {
             // playableOnly 已弃用（deprecated）：不因瞬时未缓存 streamURL 排除可播放歌曲。
             _ = (try? boolParam(call, "playableOnly")) ?? false
             let sort = (try? require(call, "sort"))?.lowercased() ?? "popularityProxy"
-            var tracks = try await catalog.allTracks(serverID: serverID)
+            var tracks = try await catalog.unifiedTracks(activeServerID: serverID)
             // Favorite filtering is a local query predicate, not an external
             // disclosure permission. `allTracks` materializes the track
             // payload and therefore does not include the separate favorites
             // table; always load the local IDs so an explicit favoritesOnly
             // request works even when the Provider is not allowed to receive
             // favorites/ratings.
-            let favoriteIDs = Set((try? await catalog.getFavorites(serverID: serverID))?.map(\.globalID) ?? [])
+            let favoriteIDs = Set((try? await catalog.unifiedFavorites(activeServerID: serverID))?.map(\.globalID) ?? [])
             let gidOf: (Track) -> GlobalID = { GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue) }
             if favoritesOnly {
                 tracks = tracks.filter { $0.isFavorite || favoriteIDs.contains(gidOf($0)) }
@@ -948,7 +948,7 @@ public struct AgentToolkit {
             let list = try await catalog.getRecentHistory(serverID: serverID, limit: min(max(limit, 1), 100))
             return .ok(call, descriptor, "最近播放 \(list.count) 首", .trackCards(list.map(TrackCard.from)))
         case "library_get_starred":
-            let list = try await catalog.getFavorites(serverID: serverID)
+            let list = try await catalog.unifiedFavorites(activeServerID: serverID)
             return .ok(call, descriptor, "收藏 \(list.count) 首", .trackCards(list.map(TrackCard.from)))
         case "library_get_random_songs":
             let limit = (try? intParam(call, "limit")) ?? 10
@@ -966,7 +966,7 @@ public struct AgentToolkit {
             // 流派来自服务器返回的曲目标签（Navidrome 的 getGenres/曲目 genre 字段），
             // 本地按曲目聚合统计；显示名用中文翻译（GenreLocalization）。
             let limit = min(max((try? intParam(call, "limit")) ?? 30, 1), 100)
-            let tracks = try await catalog.allTracks(serverID: serverID)
+            let tracks = try await catalog.unifiedTracks(activeServerID: serverID)
             var counts: [String: Int] = [:]
             for track in tracks {
                 for genre in track.genres {
@@ -986,7 +986,7 @@ public struct AgentToolkit {
         case "library_get_tracks_by_genre":
             let genre = try require(call, "genre").trimmingCharacters(in: .whitespacesAndNewlines)
             let limit = min(max((try? intParam(call, "limit")) ?? 20, 1), 50)
-            let tracks = try await catalog.allTracks(serverID: serverID)
+            let tracks = try await catalog.unifiedTracks(activeServerID: serverID)
             let hits = tracks.filter { track in
                 track.genres.contains { $0.localizedCaseInsensitiveCompare(genre) == .orderedSame }
             }
@@ -1061,7 +1061,7 @@ public struct AgentToolkit {
             return .ok(call, descriptor, text, .text(text))
         case "library_find_metadata_issues":
             let limit = min(max((try? intParam(call, "limit")) ?? 10, 1), 50)
-            let tracks = try await catalog.allTracks(serverID: serverID)
+            let tracks = try await catalog.unifiedTracks(activeServerID: serverID)
             var issues: [String] = []
             for track in tracks {
                 if track.artistName.trimmingCharacters(in: .whitespaces).isEmpty { issues.append("缺少艺术家：《\(track.title)》") }
@@ -1088,7 +1088,7 @@ public struct AgentToolkit {
             return .ok(call, descriptor, text, .text(text))
         case "library_find_unplayable":
             let limit = min(max((try? intParam(call, "limit")) ?? 10, 1), 50)
-            let tracks = try await catalog.allTracks(serverID: serverID)
+            let tracks = try await catalog.unifiedTracks(activeServerID: serverID)
             let downloaded = Set(try await catalog.getDownloadedTracks(serverID: serverID).map(\.globalID))
             // streamURL == nil 只表示“本地尚未缓存播放地址”，不代表不可播放：
             // App 播放时会向服务器刷新 / 在线流播。这里明确区分，不用“危险歌曲”误导用户。
@@ -1103,7 +1103,7 @@ public struct AgentToolkit {
         case "smart_queue_generate":
             // 只返回队列预览，不替换当前队列；由 queue_replace 直接应用（permissive runtime 无需二次确认）。
             let limit = min(max((try? intParam(call, "limit")) ?? 20, 1), 100)
-            let all = try await catalog.allTracks(serverID: serverID)
+            let all = try await catalog.unifiedTracks(activeServerID: serverID)
             let recent = allowsHistory
                 ? Set(try await catalog.getRecentHistory(serverID: serverID, limit: 50).map(\.globalID))
                 : []
@@ -1347,9 +1347,10 @@ public struct AgentToolkit {
 
     // MARK: - Param helpers
 
-    /// GlobalID 必须属于当前活跃服务器：切换服务器后旧会话中的 ID 一律视为无效，
-    /// 防止用上一台服务器的 ID 操作当前服务器（这是播放/收藏/歌单 400 与串库的根因之一）。
+    /// GlobalID 必须属于当前活跃服务器或真实本地音乐 namespace。
+    /// 其它已保存服务器仍 fail closed，避免切换服务器后的旧会话 ID 串库。
     private static func serverIDMatches(_ gid: GlobalID, _ serverID: ServerID?) -> Bool {
+        if gid.serverID == LocalCatalogOverlay.localServerID { return true }
         guard let serverID else { return true }
         return gid.serverID == serverID
     }

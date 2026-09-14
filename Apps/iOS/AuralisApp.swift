@@ -17,6 +17,11 @@ struct AuralisApp: App {
     var body: some Scene {
         WindowGroup {
             LaunchExperienceView()
+                .task {
+                    // Restore persisted security-scoped local roots on every launch so Library,
+                    // Search and Agent do not require visiting Settings before local music appears.
+                    await LocalMusicCatalogBootstrap.restore()
+                }
                 .onChange(of: scenePhase) { _, phase in
                     // 回到前台时静默做一次增量同步；进入后台/回前台时确保音频会话保持激活。
                     switch phase {

@@ -176,7 +176,7 @@ struct MacSearchView: View {
         guard !Task.isCancelled else { return }
         let store = model.catalogCoordinator.store
         let serverID = model.catalog.activeServerID
-        let catalogResults = try? await store.searchAll(query: q, serverID: serverID)
+        let catalogResults = try? await store.unifiedSearchAll(query: q, activeServerID: serverID)
         guard !Task.isCancelled else { return }
         tracks = catalogResults?.tracks ?? []
         albums = catalogResults?.albums ?? []
