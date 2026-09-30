@@ -7,8 +7,8 @@ import SecurityKit
 /// `ModelCapabilities`；这个值只用于没有能力元数据时的兼容默认值，不能作为硬上限。
 public let auralisDefaultMaxOutputTokens = 16_000
 
-/// OpenAI-compatible request timeout. 180 秒给本地中转和工具型模型留出足够的
-/// 首 token / 长流式响应时间，同时仍能在网络确实不可用时及时返回。
+/// OpenAI-compatible request timeout. 360 秒是单次 Provider 请求的硬上限；
+/// Agent 层在达到上限后会把超时作为结果回灌并尝试换路径，而不是无限等待。
 public let auralisDefaultRequestTimeout: TimeInterval = 360
 
 /// OpenAI 兼容接口默认上下文窗口。不再假设所有模型都是 256K：
