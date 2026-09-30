@@ -109,7 +109,9 @@ private fun AppRoot(graph: AuralisGraph) {
         val savedTheme = runCatching { graph.preferences.selectedThemeId() }.getOrNull()
         AuralisThemeController.current = BuiltInThemes.byId(savedTheme)
         shellReady = restoredServers.isNotEmpty()
-        route = if (shellReady) Route.Shell else Route.ManageServers(showBack = false)
+        if (route == Route.Boot) {
+            route = if (shellReady) Route.Shell else Route.ManageServers(showBack = false)
+        }
     }
 
     Box(Modifier.fillMaxSize()) {
