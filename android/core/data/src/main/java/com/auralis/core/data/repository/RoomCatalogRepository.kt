@@ -242,14 +242,13 @@ class RoomCatalogRepository(
     override suspend fun artistTracks(artistGlobalId: GlobalId) =
         onCatalogDispatcher { trackDao.byArtist(artistGlobalId.serialized).map { decode<Track>(it.payload) } }
 
-    override suspend fun playlistTracks(playlistGlobalId: GlobalId): List<Track> {
-        val trackGids = playlistDao.tracks(playlistGlobalId.serialized).map { it.trackGid }
-        if (trackGids.isEmpty()) return emptyList()
-        return onCatalogDispatcher {
+    override suspend fun playlistTracks(playlistGlobalId: GlobalId): List<Track> =
+        onCatalogDispatcher {
+            val trackGids = playlistDao.tracks(playlistGlobalId.serialized).map { it.trackGid }
+            if (trackGids.isEmpty()) return@onCatalogDispatcher emptyList()
             val byId = trackEntitiesByIds(trackGids)
             trackGids.mapNotNull { byId[it]?.let { e -> decode<Track>(e.payload) } }
         }
-    }
 
     // -------------------------------------------------------------- derived
 
@@ -836,7 +835,9 @@ class RoomCatalogRepository(
 
     /** 歌单曲目关联是否仅用于已入库曲目（帮助判断 playlist 是否需要按需拉详情）。 */
     suspend fun playlistTrackGids(playlistGlobalId: GlobalId): List<String> =
-        playlistDao.tracks(playlistGlobalId.serialized).map { it.trackGid }
+        onCatalogDispatcher {
+            playlistDao.tracks(playlistGlobalId.serialized).map { it.trackGid }
+        }
 
     // ---------------------------------------------------------------- helpers
 
