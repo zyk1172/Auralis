@@ -65,15 +65,6 @@ class HomeState(
     private var layout: HomeLayoutPreference = HomeLayoutPreference()
     private var activeServer: ServerId? = null
 
-    /**
-     * 随机类货架的上次采样结果。
-     *
-     * `homeChangeSignals` 对「曲目/歌单/收藏/播放/下载」任一 COUNT 变化都会发射，如果每次
-     * 都重新 RANDOM，任何一次收藏/播放都会让随机货架整批换掉（卡片 key 变化 → 封面重新请求）。
-     * 只有用户显式「换一批」或切换服务器时才重采样。
-     */
-    private val randomSamples = HashMap<HomeModuleId, List<Track>>()
-
     /** 进入 Home 后启动：观察 active 服务器 + 布局 + 目录信号自动刷新。 */
     fun start() {
         scope.launch {
@@ -117,7 +108,6 @@ class HomeState(
                     HomeModuleId.FavoriteRandom -> repo.favoriteRandom(sid, HomeModuleId.RESHUFFLE_SAMPLE)
                     else -> return@launch
                 }
-                randomSamples[moduleId] = sampled
                 contentModules = contentModules.map { module ->
                     if (module.id == moduleId) module.withTracks(sampled) else module
                 }
@@ -128,7 +118,6 @@ class HomeState(
     }
 
     private suspend fun refresh(serverId: ServerId?) {
-        if (activeServer != serverId) randomSamples.clear()
         activeServer = serverId
         serverName = null
         if (serverId == null) {
@@ -190,18 +179,13 @@ class HomeState(
             if (!entry.visible) continue
             val id = runCatching { HomeModuleId.valueOf(entry.id) }.getOrNull() ?: continue
             val snapshot = when (id) {
-                // 随机类货架复用上次采样：`homeChangeSignals` 对「曲目/歌单/收藏/播放/下载」
-                // 任一计数变化都会发射，如果每次都重新 RANDOM，用户每收藏一首歌都会看到随机
-                // 货架整批换掉（卡片 key 变化 → 封面重新请求）。只有显式「换一批」才重采样。
-                HomeModuleId.RandomSongs -> tracksModule(
-                    id,
-                    randomSamples.getOrPut(id) { repo.randomTracks(serverId, HomeModuleId.RESHUFFLE_SAMPLE) },
-                )
+                // 自动刷新必须重新从仓库取样，避免缓存空样本、已删除曲目或已取消收藏的旧数据。
+                // “稳定随机货架”需要基于明确的数据版本做失效；在没有版本键之前不持久缓存快照。
+                HomeModuleId.RandomSongs ->
+                    tracksModule(id, repo.randomTracks(serverId, HomeModuleId.RESHUFFLE_SAMPLE))
 
-                HomeModuleId.FavoriteRandom -> tracksModule(
-                    id,
-                    randomSamples.getOrPut(id) { repo.favoriteRandom(serverId, HomeModuleId.RESHUFFLE_SAMPLE) },
-                )
+                HomeModuleId.FavoriteRandom ->
+                    tracksModule(id, repo.favoriteRandom(serverId, HomeModuleId.RESHUFFLE_SAMPLE))
 
                 HomeModuleId.RecentlyPlayed -> tracksModule(id, repo.recentlyPlayed(serverId, MODULE_SHELF_LIMIT))
                 HomeModuleId.RecentlyAdded -> tracksModule(id, repo.recentlyAddedWithin(serverId, 30, MODULE_SHELF_LIMIT))
