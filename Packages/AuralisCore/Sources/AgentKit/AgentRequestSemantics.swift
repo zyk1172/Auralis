@@ -343,6 +343,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             if genericSearch,
                isMusicContext,
                !recommendationRequest,
+               !diagnosticContext,
                let search = Self.directLibrarySearch(in: current, limit: requestedLimit) {
                 return search
             }
@@ -794,6 +795,16 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         )
         query = query.trimmingCharacters(in: trimCharacters)
         guard !query.isEmpty else { return nil }
+
+        // “搜索几首歌 / 查询同一首歌”描述的是开放式规划过程，不是一个
+        // 可确定的实体键。Direct Read 只短路有明确目标的查库请求，避免吞掉
+        // 需要模型连续搜索、维护诊断或其它多步工作流的请求。
+        let vagueTargets: Set<String> = [
+            "歌", "歌曲", "音乐", "专辑", "艺术家", "艺人", "歌手", "歌单", "播放列表",
+            "一首歌", "一首歌曲", "几首歌", "几首歌曲", "一些歌", "一些歌曲",
+            "同一首歌", "同一首歌曲", "某首歌", "某首歌曲", "几张专辑", "一些专辑",
+        ]
+        guard !vagueTargets.contains(query) else { return nil }
 
         let kind: String
         if containsAny(value, ["专辑", "album"]) {
