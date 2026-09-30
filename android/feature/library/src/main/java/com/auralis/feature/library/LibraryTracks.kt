@@ -39,7 +39,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -76,29 +75,26 @@ import kotlinx.coroutines.launch
  */
 
 /**
- * 收藏曲目 id 集合（null = 首帧未就绪）。收藏表变化自动更新。
+ * 收藏曲目 id 集合（null = 首帧未就绪）。
  *
- * 两个要点：
- * - 用 `derivedStateOf` 而不是 `remember(tracks) { mutableStateOf(...) }`：后者在每次收藏
- *   数据变化时都会产生**新的 State 实例**交给所有调用方，等价于强制整列表失效；
- * - 上游 `observeFavoriteTracks` 现在由 `UnifiedCatalogRepository` 以「每服务器一条热流」
- *   提供（合并/去重只做一次）并切到后台调度器，因此即使每个列表行各自订阅，也只是一次
- *   `Set` 查找，而不是一次全量去重。
+ * 这个函数应当在列表/详情的父级调用一次，再把 isFavorite 传给各行。这样每次收藏变化只做
+ * 一次全量 List -> Set 转换，而不是每个可见行各自订阅、各自构造一份 HashSet。
  */
 @Composable
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-internal fun rememberFavoriteIds(graph: AuralisGraph, serverId: ServerId): androidx.compose.runtime.State<Set<GlobalId>?> {
+internal fun rememberFavoriteIds(graph: AuralisGraph, serverId: ServerId): Set<GlobalId>? {
     val flow = remember(serverId) { graph.catalogRepository.observeFavoriteTracks(serverId) }
     val tracks by flow.collectAsState(initial = null)
-    return remember { derivedStateOf { tracks?.mapTo(HashSet()) { it.globalId } } }
+    return remember(tracks) { tracks?.mapTo(HashSet()) { it.globalId } }
 }
 
-/** 行组件：徽标态由 downloads 表与 favorites 表实时观察驱动。 */
+/** 行组件：下载/收藏状态由父级列表统一观察后下传。 */
 @Composable
 internal fun LibraryTrackRow(
     graph: AuralisGraph,
-    serverId: ServerId,
     track: Track,
+    isFavorite: Boolean,
+    download: DownloadRecord?,
     onClick: () -> Unit,
     onPlayNext: () -> Unit,
     onAppendToQueue: () -> Unit,
@@ -110,9 +106,6 @@ internal fun LibraryTrackRow(
 ) {
     val colors = LocalAuralisTheme.current.colors
     val context = LocalContext.current
-    val download by remember(track.globalId) { graph.catalogRepository.observe(track.globalId) }.collectAsState(initial = null)
-    val favorites = rememberFavoriteIds(graph, serverId)
-    val isFavorite = favorites.value?.contains(track.globalId) == true
     var addingToPlaylist by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
