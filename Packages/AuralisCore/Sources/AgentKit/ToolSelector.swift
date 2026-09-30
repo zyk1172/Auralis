@@ -146,7 +146,15 @@ public enum ToolSelector {
         allowedOperations: Set<ToolAuthorizationOperation>?,
         userText: String = ""
     ) -> [ToolDescriptor] {
-        let visible = all.filter { $0.isVisible(toSkillID: activeSkillID) }
+        let visible = all.filter { descriptor in
+            guard descriptor.isVisible(toSkillID: activeSkillID) else { return false }
+            // 开放世界“撞库”只属于推荐语义。它不是普通 catalog 搜索器，
+            // 不能因为同属 read-only/catalog 就泄漏到明确曲库搜索。
+            if descriptor.name == "recommendation_ground_candidates" {
+                return semantics.domain == .recommendation
+            }
+            return true
+        }
         var selected: [ToolDescriptor] = []
         var selectedNames = Set<String>()
 
