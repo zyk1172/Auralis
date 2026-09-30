@@ -79,6 +79,7 @@ class DownloadManager(
 
     private val activeTasks = ConcurrentHashMap<String, DownloadTask>()
     private val tombstones = ConcurrentHashMap.newKeySet<String>()
+    private val cancelingKeys = ConcurrentHashMap.newKeySet<String>()
     private val queue = Channel<DownloadTask>(capacity = Channel.UNLIMITED)
     private val runningKeys = ConcurrentHashMap.newKeySet<String>()
     private val _activeCount = MutableStateFlow(0)
@@ -105,25 +106,35 @@ class DownloadManager(
 
     fun cancel(gid: GlobalId) {
         val key = gid.serialized
+        cancelingKeys.add(key)
         tombstones.add(key)
         cancelTask(key)
         scope.launch {
-            downloads.record(DownloadRecord(gid, DownloadStatus.NotDownloaded, 0f, null))
-            downloads.remove(gid)
-            cacheFor(gid)?.delete()
-            promotionStore.remove(gid)
-            stagingFor(key).delete()
+            try {
+                downloads.record(DownloadRecord(gid, DownloadStatus.NotDownloaded, 0f, null))
+                downloads.remove(gid)
+                cacheFor(gid).delete()
+                promotionStore.remove(gid)
+                stagingFor(key).delete()
+            } finally {
+                cancelingKeys.remove(key)
+            }
         }
     }
 
     fun cancelDownloadOnly(gid: GlobalId) {
         val key = gid.serialized
+        cancelingKeys.add(key)
         tombstones.add(key)
         cancelTask(key)
         scope.launch {
-            downloads.record(DownloadRecord(gid, DownloadStatus.NotDownloaded, 0f, null))
-            downloads.remove(gid)
-            stagingFor(key).delete()
+            try {
+                downloads.record(DownloadRecord(gid, DownloadStatus.NotDownloaded, 0f, null))
+                downloads.remove(gid)
+                stagingFor(key).delete()
+            } finally {
+                cancelingKeys.remove(key)
+            }
         }
     }
 
@@ -181,6 +192,8 @@ class DownloadManager(
      * 因此排队数量不会转化成同等数量的挂起协程；同一 key 的重复提交也会被 putIfAbsent 拦截。
      */
     private suspend fun submit(key: String, track: Track) {
+        // 取消清理完成前不接受同 key 的立即重入，否则旧 cleanup 可能删除新任务刚写入的 Room 状态。
+        if (cancelingKeys.contains(key)) return
         tombstones.remove(key)
         val task = DownloadTask(key, track)
         if (activeTasks.putIfAbsent(key, task) != null) return
