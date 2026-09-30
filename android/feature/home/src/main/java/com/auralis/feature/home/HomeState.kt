@@ -68,6 +68,13 @@ class HomeState(
     private var layout: HomeLayoutPreference = HomeLayoutPreference()
     private var activeServer: ServerId? = null
 
+    /**
+     * Random shelves are intentionally stable across unrelated Home refreshes.
+     * Empty results are never cached; non-empty samples are re-resolved by globalId before reuse,
+     * so deleted tracks / changed metadata cannot remain stale forever.
+     */
+    private val randomSamples = HashMap<HomeModuleId, List<Track>>()
+
     /** 进入 Home 后启动：观察 active 服务器 + 布局 + 目录信号自动刷新。 */
     fun start() {
         scope.launch {
@@ -112,6 +119,7 @@ class HomeState(
                     HomeModuleId.FavoriteRandom -> repo.favoriteRandom(sid, HomeModuleId.RESHUFFLE_SAMPLE)
                     else -> return@launch
                 }
+                if (sampled.isEmpty()) randomSamples.remove(moduleId) else randomSamples[moduleId] = sampled
                 contentModules = contentModules.map { module ->
                     if (module.id == moduleId) module.withTracks(sampled) else module
                 }
@@ -124,6 +132,7 @@ class HomeState(
     }
 
     private suspend fun refresh(serverId: ServerId?) {
+        if (activeServer != serverId) randomSamples.clear()
         activeServer = serverId
         serverName = null
         if (serverId == null) {
@@ -187,13 +196,19 @@ class HomeState(
             if (!entry.visible) continue
             val id = runCatching { HomeModuleId.valueOf(entry.id) }.getOrNull() ?: continue
             val snapshot = when (id) {
-                // 自动刷新必须重新从仓库取样，避免缓存空样本、已删除曲目或已取消收藏的旧数据。
-                // “稳定随机货架”需要基于明确的数据版本做失效；在没有版本键之前不持久缓存快照。
-                HomeModuleId.RandomSongs ->
-                    tracksModule(id, repo.randomTracks(serverId, HomeModuleId.RESHUFFLE_SAMPLE))
+                HomeModuleId.RandomSongs -> tracksModule(
+                    id,
+                    stableRandomSample(id, requireFavorite = false) {
+                        repo.randomTracks(serverId, HomeModuleId.RESHUFFLE_SAMPLE)
+                    },
+                )
 
-                HomeModuleId.FavoriteRandom ->
-                    tracksModule(id, repo.favoriteRandom(serverId, HomeModuleId.RESHUFFLE_SAMPLE))
+                HomeModuleId.FavoriteRandom -> tracksModule(
+                    id,
+                    stableRandomSample(id, requireFavorite = true) {
+                        repo.favoriteRandom(serverId, HomeModuleId.RESHUFFLE_SAMPLE)
+                    },
+                )
 
                 HomeModuleId.RecentlyPlayed -> tracksModule(id, repo.recentlyPlayed(serverId, MODULE_SHELF_LIMIT))
                 HomeModuleId.RecentlyAdded -> tracksModule(id, repo.recentlyAddedWithin(serverId, 30, MODULE_SHELF_LIMIT))
@@ -206,6 +221,35 @@ class HomeState(
             if (snapshot.hasData) built.add(snapshot)
         }
         return built
+    }
+
+    /**
+     * Reuse a random shelf without pinning stale data.
+     *
+     * - Empty samples are not cached, so a shelf that was empty during initial sync can appear later.
+     * - Cached ids are resolved again so metadata updates are reflected and deleted tracks invalidate.
+     * - FavoriteRandom additionally verifies every cached item is still favorite.
+     * - New tracks/favorites alone do not reshuffle an already-valid shelf; the user can use “换一批”.
+     */
+    private suspend fun stableRandomSample(
+        moduleId: HomeModuleId,
+        requireFavorite: Boolean,
+        loadFresh: suspend () -> List<Track>,
+    ): List<Track> {
+        val cached = randomSamples[moduleId]
+        if (!cached.isNullOrEmpty()) {
+            val current = cached.mapNotNull { repo.track(it.globalId) }
+            val stillValid = current.size == cached.size &&
+                (!requireFavorite || current.all { repo.isFavorite(it.globalId) })
+            if (stillValid) {
+                randomSamples[moduleId] = current
+                return current
+            }
+        }
+
+        val fresh = loadFresh()
+        if (fresh.isEmpty()) randomSamples.remove(moduleId) else randomSamples[moduleId] = fresh
+        return fresh
     }
 
     private fun tracksModule(id: HomeModuleId, tracks: List<Track>) =
