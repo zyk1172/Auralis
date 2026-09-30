@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -192,8 +193,9 @@ class DownloadManager(
      * 因此排队数量不会转化成同等数量的挂起协程；同一 key 的重复提交也会被 putIfAbsent 拦截。
      */
     private suspend fun submit(key: String, track: Track) {
-        // 取消清理完成前不接受同 key 的立即重入，否则旧 cleanup 可能删除新任务刚写入的 Room 状态。
-        if (cancelingKeys.contains(key)) return
+        // 取消清理完成前等待同 key 的旧 cleanup 结束，否则旧 cleanup 可能删除新任务刚写入的
+        // Room 状态。enqueue 本身是 suspend，因此这里等待比静默丢弃用户的“立即重试”更正确。
+        while (cancelingKeys.contains(key)) delay(CANCEL_REENQUEUE_POLL_MS)
         tombstones.remove(key)
         val task = DownloadTask(key, track)
         if (activeTasks.putIfAbsent(key, task) != null) return
@@ -398,6 +400,7 @@ class DownloadManager(
 
         /** `failures` 的保留上限，避免长期运行后无界增长。 */
         private const val MAX_REMEMBERED_FAILURES = 200
+        private const val CANCEL_REENQUEUE_POLL_MS = 10L
 
         private fun prepareLocalMusicDownloadDirectory(context: Context): File {
             val root = File(context.filesDir, "localmusic").apply { mkdirs() }
