@@ -123,6 +123,7 @@ class DownloadManager(
                 // canceling key 必须保留到旧 active task 真正退出，否则立即 retry 会被 putIfAbsent
                 // 当成“重复任务”静默丢弃。
                 while (activeTasks.containsKey(key)) delay(CANCEL_REENQUEUE_POLL_MS)
+                tombstones.remove(key)
                 cancelingKeys.remove(key)
             }
         }
@@ -140,6 +141,7 @@ class DownloadManager(
                 stagingFor(key).delete()
             } finally {
                 while (activeTasks.containsKey(key)) delay(CANCEL_REENQUEUE_POLL_MS)
+                tombstones.remove(key)
                 cancelingKeys.remove(key)
             }
         }
