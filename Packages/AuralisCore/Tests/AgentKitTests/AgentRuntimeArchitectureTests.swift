@@ -32,6 +32,56 @@ struct AgentRuntimeArchitectureTests {
         #expect(AgentIntentClassifier.classify("搜索 Python 的官方文档") == .conversation)
     }
 
+    @Test("明确歌曲搜索直接编译为本地数据库读取")
+    func explicitSongSearchUsesDirectLibrarySearch() {
+        let semantics = AgentRequestSemantics.analyze("搜索歌曲《胡广生》")
+        #expect(semantics.domain == .musicLibrary)
+        #expect(semantics.operation == .read)
+        #expect(semantics.directReadCapability?.toolName == "library_search")
+        if case let .string(query)? = semantics.directReadCapability?.arguments["query"] {
+            #expect(query == "胡广生")
+        } else {
+            Issue.record("expected direct library_search query")
+        }
+        if case let .string(kind)? = semantics.directReadCapability?.arguments["kind"] {
+            #expect(kind == "song")
+        } else {
+            Issue.record("expected song search kind")
+        }
+    }
+
+    @Test("没有音乐上下文的裸搜索不强制改成本地曲库")
+    func ambiguousSearchDoesNotUseDirectLibrarySearch() {
+        let semantics = AgentRequestSemantics.analyze("搜索胡广生")
+        #expect(semantics.directReadCapability == nil)
+    }
+
+    @Test("撞库工具只在推荐语义中可见")
+    func semanticCollisionIsRecommendationOnly() {
+        let searchTools = ToolSelector.select(
+            for: "搜索歌曲《胡广生》",
+            intent: .librarySearch,
+            policy: .policy(for: .librarySearch),
+            all: AgentToolRegistry.all
+        )
+        #expect(searchTools.contains { $0.name == "library_search" })
+        #expect(!searchTools.contains { $0.name == "recommendation_ground_candidates" })
+
+        let recommendationTools = ToolSelector.select(
+            for: "推荐几首适合深夜听的歌",
+            intent: .musicDiscovery,
+            policy: .policy(for: .musicDiscovery),
+            all: AgentToolRegistry.all
+        )
+        #expect(recommendationTools.contains { $0.name == "recommendation_ground_candidates" })
+    }
+
+    @Test("Agent 单步等待上限为 360 秒")
+    func agentOperationTimeoutCeilingsAre360Seconds() {
+        #expect(ToolLoop.toolExecutionTimeout == 360)
+        #expect(ToolLoop.roundTimeout == 360)
+    }
+
     @Test func conversationPolicyAuthorizesEveryRegisteredTool() {
         // Intent 不再是能力边界：conversation 也能调用全部已注册工具。
         let policy = AgentTaskPolicy.policy(for: .conversation)

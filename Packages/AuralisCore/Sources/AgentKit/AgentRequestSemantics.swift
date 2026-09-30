@@ -336,7 +336,17 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         ])
         let requestedLimit = Self.requestedLimit(in: current)
         let directReadCapability: DirectReadCapability? = {
-            guard query, !isCompoundReadRequest else { return nil }
+            guard (query || genericSearch), !isCompoundReadRequest else { return nil }
+            // 明确的音乐库搜索是数据库读取，不需要先让模型生成开放世界候选。
+            // 只有能从原话稳定提取查询词时才走 Fast Path；模糊的“搜索胡广生”
+            // 仍留给普通规划，以免把非音乐搜索误判成本地曲库查询。
+            if genericSearch,
+               isMusicContext,
+               !recommendationRequest,
+               !diagnosticContext,
+               let search = Self.directLibrarySearch(in: current, limit: requestedLimit) {
+                return search
+            }
             if has(["歌单", "播放列表", "playlist"]) && !explicitPlaylistAction {
                 return Self.directRead("playlist_list", limit: requestedLimit)
             }
@@ -730,6 +740,93 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
     private static func directRead(_ toolName: String, limit: Int? = nil) -> DirectReadCapability {
         let arguments = limit.map { ["limit": AIJSONValue.number(Double($0))] } ?? [:]
         return DirectReadCapability(toolName: toolName, arguments: arguments)
+    }
+
+    /// 把“搜索歌曲《胡广生》/查找专辑 X/在音乐库里搜索 X”等高置信请求
+    /// 编译成唯一的本地 library_search。这里故意不处理裸“搜索 X”：
+    /// 没有音乐上下文时，X 也可能是网页、人物或普通知识查询。
+    private static func directLibrarySearch(in text: String, limit: Int?) -> DirectReadCapability? {
+        let value = normalized(text)
+        let markers = ["搜索", "查找", "查询", "找歌", "search"]
+        let located = markers.compactMap { marker -> (String, Range<String.Index>)? in
+            guard let range = value.range(of: marker) else { return nil }
+            return (marker, range)
+        }.min { $0.1.lowerBound < $1.1.lowerBound }
+        guard let (marker, markerRange) = located else { return nil }
+
+        var query = String(value[markerRange.upperBound...])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefixFillers = [
+            "在音乐库里面", "在音乐库里", "在音乐库中", "音乐库里面", "音乐库里", "音乐库中",
+            "一首歌曲", "一首歌", "这首歌曲", "这首歌", "歌曲", "单曲",
+            "一张专辑", "这张专辑", "专辑",
+            "艺术家", "艺人", "歌手", "歌单", "播放列表",
+            "song", "track", "album", "artist", "playlist",
+            "一下", "一下子", "它叫", "叫做", "叫",
+        ]
+        var removedPrefix = true
+        while removedPrefix {
+            removedPrefix = false
+            query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            for filler in prefixFillers where query.hasPrefix(filler) {
+                query.removeFirst(filler.count)
+                removedPrefix = true
+                break
+            }
+        }
+
+        let suffixFillers = [
+            "这首歌曲", "这首歌", "这张专辑", "这个艺术家", "这个艺人", "这个歌手", "这个歌单",
+            "的歌曲", "的专辑",
+        ]
+        var removedSuffix = true
+        while removedSuffix {
+            removedSuffix = false
+            query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            for filler in suffixFillers where query.hasSuffix(filler) {
+                query.removeLast(filler.count)
+                removedSuffix = true
+                break
+            }
+        }
+
+        let trimCharacters = CharacterSet.whitespacesAndNewlines.union(
+            CharacterSet(charactersIn: "：:，,。.!！?？《》〈〉“”\"'‘’（）()")
+        )
+        query = query.trimmingCharacters(in: trimCharacters)
+        guard !query.isEmpty else { return nil }
+
+        // “搜索几首歌 / 查询同一首歌”描述的是开放式规划过程，不是一个
+        // 可确定的实体键。Direct Read 只短路有明确目标的查库请求，避免吞掉
+        // 需要模型连续搜索、维护诊断或其它多步工作流的请求。
+        let vagueTargets: Set<String> = [
+            "歌", "歌曲", "音乐", "专辑", "艺术家", "艺人", "歌手", "歌单", "播放列表",
+            "一首歌", "一首歌曲", "几首歌", "几首歌曲", "一些歌", "一些歌曲",
+            "同一首歌", "同一首歌曲", "某首歌", "某首歌曲", "几张专辑", "一些专辑",
+        ]
+        guard !vagueTargets.contains(query) else { return nil }
+
+        let kind: String
+        if containsAny(value, ["专辑", "album"]) {
+            kind = "album"
+        } else if containsAny(value, ["艺术家", "艺人", "歌手", "artist"]) {
+            kind = "artist"
+        } else if containsAny(value, ["歌单", "播放列表", "playlist"]) {
+            kind = "playlist"
+        } else if marker == "找歌" || containsAny(value, ["歌曲", "首歌", "单曲", "song", "track"]) {
+            kind = "song"
+        } else {
+            kind = "all"
+        }
+
+        var arguments: [String: AIJSONValue] = [
+            "query": .string(query),
+            "kind": .string(kind),
+        ]
+        if let limit {
+            arguments["limit"] = .number(Double(limit))
+        }
+        return DirectReadCapability(toolName: "library_search", arguments: arguments)
     }
 
     /// Extract an explicit list size without making the direct-read route

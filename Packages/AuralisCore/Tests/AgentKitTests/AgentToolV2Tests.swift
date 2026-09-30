@@ -606,6 +606,25 @@ func v2LibrarySearch() async throws {
     }
 }
 
+@Test("v2 library_search empty result is explicit success")
+func v2LibrarySearchEmptyResultIsExplicit() async throws {
+    let store = try makeV2Store()
+    let result = await AgentToolkit.executeV2(
+        ToolCall(name: "library_search", arguments: ["query": "曲库里不存在的歌曲", "kind": "song"]),
+        bridge: MockAgentBridge(activeServerID: "test-server"),
+        catalog: store,
+        serverID: "test-server",
+        systemService: nil
+    )
+    #expect(result.success)
+    #expect(result.summary == "未找到匹配结果")
+    if case let .text(message) = result.payload {
+        #expect(message.contains("未找到"))
+    } else {
+        Issue.record("expected explicit empty-search text payload")
+    }
+}
+
 // MARK: - 系统服务工具
 
 @Test("v2 app_get_context uses system service")

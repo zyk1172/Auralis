@@ -26,6 +26,9 @@ struct SearchView: View {
     @State private var query = ""
     /// 防抖后的查询词：输入停顿约 150ms 后才真正过滤，避免大资料库逐键全量扫描。
     @State private var debouncedQuery = ""
+    /// 搜索页可能运行在助手自己的 sheet NavigationStack 中。详情必须由当前
+    /// NavigationStack 持有，不能写到被 sheet 遮住的根导航状态。
+    @State private var browseDestination: BrowseDestination?
 
     private func matches(_ text: String, needle: String) -> Bool {
         text.localizedLowercase.contains(needle)
@@ -65,6 +68,14 @@ struct SearchView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(theme.colorTokens.background.color)
+        .navigationDestination(item: $browseDestination) { destination in
+            BrowseDetailSheet(
+                destination: destination,
+                model: model,
+                theme: theme,
+                showsCloseButton: false
+            )
+        }
         .task(id: query) {
             // 新查询开始时立即取消/隐藏旧的在线结果；网络响应还会在 Model 层
             // 通过 generation + server 校验，双重防止 A 的迟到响应污染 B。
@@ -229,7 +240,7 @@ struct SearchView: View {
                     ForEach(results.albums) { album in
                         Button {
                             model.recordSearch(query)
-                            model.browseDestination = .album(album)
+                            browseDestination = .album(album)
                         } label: {
                             HStack(spacing: AuralisSpacing.medium) {
                                 ArtworkView(title: album.title, artworkKey: album.artworkKey, colors: theme.colorTokens, size: 40, cornerRadius: 8)
@@ -250,7 +261,7 @@ struct SearchView: View {
                     ForEach(results.artists) { artist in
                         Button {
                             model.recordSearch(query)
-                            model.browseDestination = .artist(artist)
+                            browseDestination = .artist(artist)
                         } label: {
                             HStack(spacing: AuralisSpacing.medium) {
                                 Image(systemName: "person.crop.square")
@@ -272,7 +283,7 @@ struct SearchView: View {
                     ForEach(results.playlists) { playlist in
                         Button {
                             model.recordSearch(query)
-                            model.browseDestination = .playlist(playlist)
+                            browseDestination = .playlist(playlist)
                         } label: {
                             HStack(spacing: AuralisSpacing.medium) {
                                 Image(systemName: "music.note.list")
