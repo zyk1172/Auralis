@@ -38,8 +38,7 @@
             android:name=".TvMainActivity"
             android:exported="true"
             android:banner="@drawable/tv_banner"
-            android:screenOrientation="landscape"
-            android:configChanges="keyboard|keyboardHidden|navigation|uiMode|density|screenLayout|smallestScreenSize|screenSize|orientation|fontScale">
+            android:screenOrientation="landscape">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
