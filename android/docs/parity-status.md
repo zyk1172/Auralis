@@ -181,7 +181,7 @@
 
 | 能力 | Android 实现 | 状态 |
 |---|---|---|
-| 三并发下载闸门 + 节流 | DownloadManager Semaphore(3) | Done |
+| 三并发下载闸门 + 节流 | DownloadManager 固定 3 worker + Channel | Done |
 | 冷启动水合 | hydrate() | Done |
 | 前台下载服务 | DownloadService（dataSync） | Done |
 | 歌词结构化/纯文本 + 本地写回 | RoomLyricsRepository + LyricsServiceImpl | Done |
