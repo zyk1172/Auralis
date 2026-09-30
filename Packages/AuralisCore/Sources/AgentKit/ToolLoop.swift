@@ -14,12 +14,12 @@ import LocalCatalog
 /// 单工具超时/失败回灌结构化结果让模型换策略继续，不终止整项任务；
 /// 不设正常任务累计工具调用上限；noProgress / repeatedToolPattern 只做诊断统计。
 public struct ToolLoop {
-    /// 单个工具调用的最长执行时间。超过后取消该调用并结束整项 Agent 任务，
-    /// 防止某个网络/系统服务工具卡住而让任务无限悬挂。
-    public static let toolExecutionTimeout: TimeInterval = 3 * 60
-    /// 模型每一轮的总响应时限。长回答、复杂规划和批量 JSON 分类都可能持续数分钟；
-    /// 整项任务没有总轮数上限，但每个独立模型请求最多等待 180 秒。
-    public static let roundTimeout: TimeInterval = 3 * 60
+    /// 单个工具调用的全局等待上限。具体工具可以声明更短的执行档位；
+    /// 超时会形成结构化失败结果回灌给 Agent，由它改走其它路径，而不是结束整项任务。
+    public static let toolExecutionTimeout: TimeInterval = 6 * 60
+    /// 模型每一轮的总响应上限。达到 360 秒后先触发一次换路径恢复，
+    /// 不把单轮超时直接等同于整段对话失败。
+    public static let roundTimeout: TimeInterval = 6 * 60
 
     public struct Context: Sendable {
         public let serverID: ServerID?
@@ -355,6 +355,10 @@ public struct ToolLoop {
         // executor can actually run.
         let customSnapshot = await context.customToolRegistry.modelSnapshot()
         let availableToolDescriptors = Self.descriptorsWithCustomTools(customSnapshot.descriptors)
+            .filter { descriptor in
+                descriptor.name != "recommendation_ground_candidates"
+                    || requestSemantics.domain == .recommendation
+            }
         let workflowRoute = WorkflowEngine.route(
             intent: resolvedIntent,
             text: userText,
@@ -709,6 +713,9 @@ public struct ToolLoop {
         // A one-time, Runtime-owned read-only expansion is a recovery from a
         // thin first schema window, not a substitute for model planning.
         var didAutomaticToolExpansion = false
+        // 单轮 Provider 达到等待上限时允许一次协议不变的恢复轮：把超时作为
+        // 明确观察结果回灌，让模型选择更短/不同的工具路径，避免直接结束对话。
+        var didRecoverProviderTimeout = false
         // Search evidence is tracked per capability for diagnostics. The
         // streak does not remove a tool or stop ordinary model planning.
         var searchEvidenceByTool: [String: Set<String>] = [:]
@@ -721,6 +728,10 @@ public struct ToolLoop {
             let customSnapshot = await context.customToolRegistry.modelSnapshot()
             if loadedCustomToolRevision != customSnapshot.revision {
                 availableToolDescriptors = Self.descriptorsWithCustomTools(customSnapshot.descriptors)
+                    .filter { descriptor in
+                        descriptor.name != "recommendation_ground_candidates"
+                            || plan.semantics.domain == .recommendation
+                    }
                 loadedCustomToolRevision = customSnapshot.revision
                 selectedTools.removeAll { $0.customToolID != nil }
                 for descriptor in customSnapshot.descriptors where Self.shouldExposeDescriptorForPlan(
@@ -804,11 +815,22 @@ public struct ToolLoop {
                 await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
                 return
             } catch {
-                // A provider failure is a provider failure. Generic chat never
-                // changes protocol or silently becomes a local music search.
+                if error is AgentRunnerError, !didRecoverProviderTimeout {
+                    didRecoverProviderTimeout = true
+                    let recovery = "AI 回答等待已达到 360 秒上限；上一条路径已停止，正在让 Agent 改用更短或不同的可用路径继续。"
+                    await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: recovery)]))
+                    conversation.append(AIMessage(
+                        role: .user,
+                        content: "系统恢复：上一轮模型请求达到 360 秒等待上限。不要重复同一路径；优先使用已有本地/只读工具或更短的规划完成原请求，并明确报告每一步结果。"
+                    ))
+                    continue
+                }
+                // 非超时 Provider 故障不擅自改协议；已经做过一次超时恢复后仍失败，
+                // 才把明确结果交给用户，避免无限重试。
                 await emit(AgentChatMessage(role: .assistant, messages: [.error("AI Provider 请求失败：\(errorText(error))")]))
                 return
             }
+            didRecoverProviderTimeout = false
 
             if !outcome.webCitations.isEmpty {
                 let sources = webSources(from: outcome.webCitations)
@@ -1111,9 +1133,14 @@ public struct ToolLoop {
                     } else {
                         text = "（工具执行结果）\(call.name)：失败 - \(reason)"
                     }
-                    let presentationText = timeoutFailure != nil
-                        ? "工具 \(call.name) 执行超时，结果可能未知；为避免重复副作用不会自动重试。"
-                        : "（工具执行结果）\(call.name)：失败 - \(reason)"
+                    let presentationText: String
+                    if timeoutFailure != nil, descriptor.permission == .readOnly {
+                        presentationText = "工具 \(call.name) 已达到等待上限；本次查询已明确记为超时，Agent 将改用其它可用查询路径继续。"
+                    } else if timeoutFailure != nil {
+                        presentationText = "工具 \(call.name) 已达到等待上限，副作用结果可能未知；为避免重复写入不会自动重试相同操作，Agent 将先查询核验。"
+                    } else {
+                        presentationText = "（工具执行结果）\(call.name)：失败 - \(reason)"
+                    }
                     resultMessages.append(toolResultMessage(callID: call.id, content: text, native: nativeMode))
                     await emit(AgentChatMessage(role: .assistant, messages: [.text(presentationText)]))
                     continue
@@ -1454,6 +1481,8 @@ public struct ToolLoop {
         // checkpoint. This is protocol-preserving recovery, not a tool-call or
         // model-capability limit.
         var didRecoverSkillProviderFailure = false
+        // 非 Skill 的模型轮同样允许一次超时换路径恢复；成功一轮后重新计数。
+        var didRecoverProviderTimeout = false
         // A fixed skill may repair a malformed classification response a
         // couple of times, but it must never turn a non-compliant provider
         // into an unbounded correction loop.
@@ -1715,16 +1744,32 @@ public struct ToolLoop {
                         conversation.append(AIMessage(role: .user, content: "系统恢复：\(recovery.message)"))
                         continue
                     }
-                    // Provider 协议在请求前已经确定。网络瞬时错误由
+                    if error is AgentRunnerError, !didRecoverProviderTimeout {
+                        didRecoverProviderTimeout = true
+                        let recovery = "AI 回答等待已达到 360 秒上限；已停止这一轮并要求 Agent 改走不同的可用路径。"
+                        taskState.errors.append(recovery)
+                        taskState.pendingActions = [recovery]
+                        taskState.status = .waitingForTool
+                        taskState.updatedAt = .now
+                        await state(taskState)
+                        await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: recovery)]))
+                        conversation.append(AIMessage(
+                            role: .user,
+                            content: "系统恢复：上一轮模型请求达到 360 秒等待上限。不要重复同一路径；根据已有事实改用不同工具、不同参数或更短规划继续，并明确报告结果。"
+                        ))
+                        continue
+                    }
+                    // Provider 协议在请求前已经确定。非超时网络瞬时错误由
                     // streamWithFallback/completeWithRetry 按同一协议重试；失败后
-                    // 不能在同一任务里改写成 ACTION 或本地音乐规则。
+                    // 不能在同一任务里改写成另一种协议。
                     let prefix = nativeMode ? "原生工具协议请求失败" : "AI 服务暂时不可用"
-                    await emit(AgentChatMessage(role: .assistant, messages: [.error("\(prefix)：\(Self.errorText(error))；未切换到另一种工具协议，也未将请求改写为本地音乐搜索。")]))
+                    await emit(AgentChatMessage(role: .assistant, messages: [.error("\(prefix)：\(Self.errorText(error))；已完成可用恢复尝试，未切换工具协议。")]))
                     return
                 }
             }
 
             didRecoverSkillProviderFailure = false
+            didRecoverProviderTimeout = false
 
             if !didUseForcedSkillCall {
                 await progress(AgentProgress(
@@ -2359,6 +2404,10 @@ public struct ToolLoop {
                     taskState.errors.append(failureText)
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "工具超时/中断", reused: false))
                     toolMessages.append(Self.toolResultMessage(callID: call.id, content: failureText, native: nativeMode))
+                    let visibleResult = descriptor.permission == .readOnly
+                        ? "工具 \(call.name) 本次未完成：\(failureText) Agent 将依据该结果改用其它查询路径。"
+                        : "工具 \(call.name) 本次未完成：\(failureText)"
+                    await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: visibleResult)]))
                     continue
                 }
                 if result.hasIndeterminateSideEffect, result.permission != .readOnly {
@@ -3202,9 +3251,9 @@ public struct ToolLoop {
 
     /// 判定错误是否值得再试一次。与 `AIProviderError.isTransient` 同源，额外覆盖网络层错误。
     ///
-    /// 刻意**不**重试 `AgentRunnerError.timeout`：单轮超时已经耗掉完整的 180 秒，
-    /// 再来一轮只会让界面持续无响应；超时后直接结束本轮，避免无感等待。
-    /// 其余瞬时故障（5xx / 429 / 连接重置 / 空响应 / 截断 JSON）都是快速失败，重试成本很低。
+    /// 单次 helper 内仍不原样重放 `AgentRunnerError.timeout`：360 秒到点后由上层
+    /// ToolLoop 把“超时”作为观察结果回灌并要求换路径，而不是在 helper 中复制同一请求。
+    /// 其余瞬时故障（5xx / 429 / 连接重置 / 空响应 / 截断 JSON）可快速原协议重试。
     static func isTransientFailure(_ error: Error) -> Bool {
         AgentFailureClassifier.classify(error).isRetryable
     }
@@ -3223,7 +3272,7 @@ public struct ToolLoop {
     ///
     /// 与 `completeWithRetry` 对齐的容错：
     /// - 瞬时故障（5xx / 429 / 网络抖动 / 空响应 / 截断 JSON）且尚未产出任何 delta → 补一次重试；
-    /// - 单轮超时 / 用户取消 → 不再重试，直接上抛（超时降级到本地能力，取消按「已取消」处理）。
+    /// - 单轮超时 / 用户取消 → 不在 helper 内原样重试，交给上层执行换路径恢复或取消。
     private static func streamWithRetry(
         provider: any AIProvider,
         request: AICompletionRequest,
@@ -3682,6 +3731,9 @@ public struct ToolLoop {
         activeSkillID: String?
     ) -> Bool {
         guard descriptor.isVisible(toSkillID: activeSkillID) else { return false }
+        if descriptor.name == "recommendation_ground_candidates" {
+            return semantics.domain == .recommendation
+        }
         guard descriptor.permission != .readOnly else { return true }
         // Fixed Skills own their mutation calls; the model surface remains
         // read-only throughout the workflow, including a registry refresh.
