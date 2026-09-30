@@ -598,7 +598,12 @@ public struct AgentToolkit {
                     }))
                 }
             }
-            return .fail(call, descriptor, "未找到匹配结果")
+            return .ok(
+                call,
+                descriptor,
+                "未找到匹配结果",
+                .text("音乐库中未找到与「\(query)」匹配的内容。")
+            )
         case "library_resolve_entity":
             let query = try require(call, "query")
             let kind = (try? require(call, "kind"))?.lowercased() ?? "all"
