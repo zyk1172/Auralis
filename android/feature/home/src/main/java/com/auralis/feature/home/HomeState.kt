@@ -14,6 +14,7 @@ import com.auralis.core.domain.HomeQuickEntry
 import com.auralis.core.domain.LibraryStats
 import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
@@ -111,6 +112,8 @@ class HomeState(
                 contentModules = contentModules.map { module ->
                     if (module.id == moduleId) module.withTracks(sampled) else module
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (t: Throwable) {
                 lastError = context.getString(R.string.home_load_failed, t.message)
             }
@@ -141,6 +144,8 @@ class HomeState(
             quickModules = nextQuick
             contentModules = nextContent
             lastError = null
+        } catch (e: CancellationException) {
+            throw e
         } catch (t: Throwable) {
             lastError = context.getString(R.string.home_load_failed, t.message)
         } finally {
