@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -183,13 +184,14 @@ class DownloadManager(
         tombstones.remove(key)
         val task = DownloadTask(key, track)
         if (activeTasks.putIfAbsent(key, task) != null) return
-        _activeCount.value = activeTasks.size
+        _activeCount.update { it + 1 }
         try {
             downloads.record(DownloadRecord(track.globalId, DownloadStatus.Queued, 0f, null))
             queue.send(task)
         } catch (t: Throwable) {
-            activeTasks.remove(key, task)
-            _activeCount.value = activeTasks.size
+            if (activeTasks.remove(key, task)) {
+                _activeCount.update { (it - 1).coerceAtLeast(0) }
+            }
             throw t
         }
     }
@@ -206,7 +208,7 @@ class DownloadManager(
         if (running != null) {
             running.cancel()
         } else if (activeTasks.remove(key, task)) {
-            _activeCount.value = activeTasks.size
+            _activeCount.update { (it - 1).coerceAtLeast(0) }
         }
     }
 
@@ -217,14 +219,16 @@ class DownloadManager(
             return
         }
         if (tombstones.contains(key)) {
-            activeTasks.remove(key, task)
-            _activeCount.value = activeTasks.size
+            if (activeTasks.remove(key, task)) {
+                _activeCount.update { (it - 1).coerceAtLeast(0) }
+            }
             tombstones.remove(key)
             return
         }
 
-        runningKeys.add(key)
-        _runningCount.value = runningKeys.size
+        if (runningKeys.add(key)) {
+            _runningCount.update { it + 1 }
+        }
         try {
             coroutineScope {
                 // 先创建但不启动，写入 runningJob 后再做一次有效性检查，避免 cancel() 恰好落在
@@ -242,10 +246,12 @@ class DownloadManager(
             }
         } finally {
             task.runningJob = null
-            runningKeys.remove(key)
-            _runningCount.value = runningKeys.size
-            activeTasks.remove(key, task)
-            _activeCount.value = activeTasks.size
+            if (runningKeys.remove(key)) {
+                _runningCount.update { (it - 1).coerceAtLeast(0) }
+            }
+            if (activeTasks.remove(key, task)) {
+                _activeCount.update { (it - 1).coerceAtLeast(0) }
+            }
             if (!activeTasks.containsKey(key)) tombstones.remove(key)
         }
     }
@@ -339,20 +345,23 @@ class DownloadManager(
      * 现在按插入顺序保留最近 [MAX_REMEMBERED_FAILURES] 条。
      */
     private fun rememberFailure(key: String, failure: DownloadFailure) {
-        val next = LinkedHashMap(_failures.value)
-        next.remove(key)
-        next[key] = failure
-        while (next.size > MAX_REMEMBERED_FAILURES) {
-            val oldest = next.keys.firstOrNull() ?: break
-            next.remove(oldest)
+        _failures.update { current ->
+            val next = LinkedHashMap(current)
+            next.remove(key)
+            next[key] = failure
+            while (next.size > MAX_REMEMBERED_FAILURES) {
+                val oldest = next.keys.firstOrNull() ?: break
+                next.remove(oldest)
+            }
+            next
         }
-        _failures.value = next
     }
 
     private fun clearFailure(key: String) {
-        val current = _failures.value
-        if (!current.containsKey(key)) return
-        _failures.value = LinkedHashMap(current).apply { remove(key) }
+        _failures.update { current ->
+            if (!current.containsKey(key)) current
+            else LinkedHashMap(current).apply { remove(key) }
+        }
     }
 
     private fun mapHttpFailure(code: Int): DownloadFailure = when (code) {
