@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import SwiftUI
 
-/// Single-line assistant composer that keeps the existing compact layout while allowing
-/// direct horizontal swipes when the draft is wider than the visible input area.
+/// Single-line assistant composer that keeps the compact layout and relies on
+/// TextField's native caret scrolling for drafts wider than the visible input area.
 struct AssistantHorizontalTextField: View {
     @Binding var text: String
     let prompt: String
