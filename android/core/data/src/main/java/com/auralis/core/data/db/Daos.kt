@@ -38,6 +38,14 @@ interface ArtistDao {
     @Query("SELECT * FROM artists WHERE global_id = :globalId")
     suspend fun get(globalId: String): ArtistEntity?
 
+    /** 资料库统计：只要计数，不要把整表读进内存。 */
+    @Query("SELECT COUNT(*) FROM artists WHERE (:serverId IS NULL OR server_id = :serverId)")
+    suspend fun count(serverId: String?): Int
+
+    /** 批量点查（首页聚合避免 N+1）；调用方负责分批，见 TRACK_ID_CHUNK。 */
+    @Query("SELECT * FROM artists WHERE global_id IN (:globalIds)")
+    suspend fun getMany(globalIds: List<String>): List<ArtistEntity>
+
     @Upsert
     suspend fun upsertAll(entities: List<ArtistEntity>)
 
@@ -52,6 +60,14 @@ interface AlbumDao {
 
     @Query("SELECT * FROM albums WHERE global_id = :globalId")
     suspend fun get(globalId: String): AlbumEntity?
+
+    /** 资料库统计：只要计数，不要把整表读进内存。 */
+    @Query("SELECT COUNT(*) FROM albums WHERE (:serverId IS NULL OR server_id = :serverId)")
+    suspend fun count(serverId: String?): Int
+
+    /** 批量点查（首页聚合避免 N+1）；调用方负责分批，见 TRACK_ID_CHUNK。 */
+    @Query("SELECT * FROM albums WHERE global_id IN (:globalIds)")
+    suspend fun getMany(globalIds: List<String>): List<AlbumEntity>
 
     @Query("SELECT * FROM albums WHERE artist_gid = :artistGid ORDER BY year DESC, name")
     suspend fun byArtist(artistGid: String): List<AlbumEntity>

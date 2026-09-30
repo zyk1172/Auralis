@@ -39,7 +39,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 
 /**
@@ -95,7 +94,7 @@ class AuralisGraph(context: Context) {
      * Public read API: current server + real local files. Existing Library/Search/Assistant callers
      * keep using graph.catalogRepository and automatically see the unified catalog.
      */
-    val catalogRepository = UnifiedCatalogRepository(cachedCatalogRepository, localMusicLibrary)
+    val catalogRepository = UnifiedCatalogRepository(cachedCatalogRepository, localMusicLibrary, appScope)
 
     /** 与 Catalog 使用同一个 Room 实例；Categories / Agent classifier 只能从这里访问索引。 */
     val recommendationIndex = RecommendationIndexStore(database)
@@ -139,16 +138,24 @@ class AuralisGraph(context: Context) {
         }
     }
 
-    /** 按账户构造端点并登记（kind 依据上次持久化选择；未记录 → 内网）。 */
-    suspend fun registerAccount(account: ServerAccount): ResolvedServerEndpoint {
+    /**
+     * 按账户构造端点并登记（kind 依据上次持久化选择；未记录 → 内网）。
+     *
+     * `makeInternalEndpoint` / `makeExternalEndpoint` 内部会对 `baseUrl` / `externalBaseUrl` /
+     * `credentialReference` 做 `requireNotNull`：历史数据或导入数据缺字段时会抛
+     * `IllegalArgumentException`。冷启动恢复路径不能因为**单个**坏账号就让整个 bootstrap 失败，
+     * 所以这里捕获并返回 null，由调用方跳过该账号。
+     */
+    suspend fun registerAccount(account: ServerAccount): ResolvedServerEndpoint? {
         val savedKind = preferences.endpointKind(account.id.value)
         val endpoint = when (savedKind) {
-            EndpointKind.External.name -> {
-                val ext = runCatching { registry.makeExternalEndpoint(account) }.getOrNull()
-                if (ext != null) ext else registry.makeInternalEndpoint(account)
-            }
+            EndpointKind.External.name ->
+                // 外网地址缺失 → 按历史语义降级回内网；两者都失败说明账号不完整。
+                runCatching { registry.makeExternalEndpoint(account) }.getOrNull()
+                    ?: runCatching { registry.makeInternalEndpoint(account) }.getOrNull()
+                    ?: return null
 
-            else -> registry.makeInternalEndpoint(account)
+            else -> runCatching { registry.makeInternalEndpoint(account) }.getOrNull() ?: return null
         }
         registry.registerResolved(endpoint)
         return endpoint
@@ -240,9 +247,13 @@ class AuralisGraph(context: Context) {
     /** App 启动装配（幂等、同步、不阻塞：本地目录扫描放到 appScope 后台执行）。 */
     fun install() {
         PlaybackDependencies.install(playbackResolver, historyCoordinator)
-        ArtworkUrl.provider = ArtworkUrlProvider { serverId, artworkKey, size ->
-            val client = registry.client(serverId) ?: return@ArtworkUrlProvider null
-            runBlocking { runCatching { client.coverArtUrl(artworkKey, size) }.getOrNull() }
+        // 封面 URL 解析可能触及凭据读取（Keystore 解密），因此必须保持挂起语义：
+        // 历史实现用 runBlocking 包了 suspend 调用，任何在 Main 上解析封面的调用点都会直接卡住主线程。
+        ArtworkUrl.provider = object : ArtworkUrlProvider {
+            override suspend fun url(serverId: ServerId, artworkKey: String, size: Int): String? {
+                val client = registry.client(serverId) ?: return null
+                return runCatching { client.coverArtUrl(artworkKey, size) }.getOrNull()
+            }
         }
         downloadManager
         appScope.launch {
