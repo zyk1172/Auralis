@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * 下载并发（P0 第七项）：
- * - 全局最多 3 个并发（Semaphore 真实限制，不是注释）；
+ * - 全局最多 3 个并发（固定 worker 池真实限制，不是注释）；
  * - 8 个任务排队执行，最终全部 Downloaded；
  * - 进度写库节流：不是每个 buffer 都打一次 Room。
  */
@@ -77,6 +77,34 @@ class DownloadConcurrencyTest : OfflineTestBase() {
         assertTrue("应观察到并发 >1，实际 maxRunning=$maxRunning", maxRunning > 1)
         assertTrue("并发上限应为 3，实际 maxRunning=$maxRunning", maxRunning <= DownloadManager.MAX_CONCURRENT_DOWNLOADS)
         assertEquals(8, downloaded)
+    }
+
+    @Test
+    fun `排队任务取消后立即重试不会被旧清理删除`() = runBlocking {
+        delayedBody(512 * 1024)
+
+        repeat(3) { index -> manager.enqueue(track(id = "busy-$index")) }
+        val runningDeadline = System.currentTimeMillis() + 5_000
+        while (manager.runningCount.value < DownloadManager.MAX_CONCURRENT_DOWNLOADS &&
+            System.currentTimeMillis() < runningDeadline
+        ) {
+            delay(10)
+        }
+        assertEquals(DownloadManager.MAX_CONCURRENT_DOWNLOADS, manager.runningCount.value)
+
+        val retry = track(id = "retry")
+        manager.enqueue(retry)
+        manager.cancelDownloadOnly(retry.globalId)
+
+        // enqueue 是 suspend：若旧取消清理仍在进行，应等待 cleanup 完成后再写新的 Queued 状态。
+        manager.enqueue(retry)
+
+        val deadline = System.currentTimeMillis() + 15_000
+        while (System.currentTimeMillis() < deadline) {
+            if (repo.statusOf(retry.globalId) == DownloadStatus.Downloaded) break
+            delay(25)
+        }
+        assertEquals(DownloadStatus.Downloaded, repo.statusOf(retry.globalId))
     }
 
     @Test
