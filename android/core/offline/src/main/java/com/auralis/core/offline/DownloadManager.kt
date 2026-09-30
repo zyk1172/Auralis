@@ -291,9 +291,15 @@ class DownloadManager(
                 return
             }
             downloads.record(DownloadRecord(gid, DownloadStatus.Downloading, 0f, null))
+            if (tombstones.contains(key)) return
             val request = Request.Builder().url(url).build()
             val call = okHttp.newCall(request)
             activeCalls[key] = call
+            // Close the tiny race between newCall() and publishing it in activeCalls.
+            if (tombstones.contains(key)) {
+                call.cancel()
+                return
+            }
             call.execute().use { response ->
                 if (!response.isSuccessful) {
                     fail(gid, key, mapHttpFailure(response.code))
