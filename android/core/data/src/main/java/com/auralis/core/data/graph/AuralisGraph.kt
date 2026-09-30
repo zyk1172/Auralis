@@ -94,7 +94,7 @@ class AuralisGraph(context: Context) {
      * Public read API: current server + real local files. Existing Library/Search/Assistant callers
      * keep using graph.catalogRepository and automatically see the unified catalog.
      */
-    val catalogRepository = UnifiedCatalogRepository(cachedCatalogRepository, localMusicLibrary, appScope)
+    val catalogRepository = UnifiedCatalogRepository(cachedCatalogRepository, localMusicLibrary)
 
     /** 与 Catalog 使用同一个 Room 实例；Categories / Agent classifier 只能从这里访问索引。 */
     val recommendationIndex = RecommendationIndexStore(database)
@@ -127,15 +127,18 @@ class AuralisGraph(context: Context) {
      * 冷启动本地恢复：读已保存账号 → 按上次选中的端点类型（内/外网）重建客户端并登记。
      * 只做本地读取，不发起 ping / 不做网络门槛；随后 Shell 后台探测可再切换端点。
      */
-    suspend fun bootstrapFromLocal() {
+    suspend fun bootstrapFromLocal(): List<ServerId> {
         val servers = catalogRepository.servers()
-        servers.forEach { account -> registerAccount(account) }
-        if (servers.isNotEmpty()) {
-            val active = preferences.activeServerIdValue()
-            if (active == null || servers.none { it.id.value == active }) {
-                preferences.setActiveServerId(servers.first().id.value)
-            }
+        val registered = servers.mapNotNull { account ->
+            registerAccount(account)?.serverId
         }
+        val active = preferences.activeServerIdValue()
+        when {
+            registered.isEmpty() -> preferences.setActiveServerId(null)
+            active == null || registered.none { it.value == active } ->
+                preferences.setActiveServerId(registered.first().value)
+        }
+        return registered
     }
 
     /**
