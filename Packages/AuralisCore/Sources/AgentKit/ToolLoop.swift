@@ -332,6 +332,10 @@ public struct ToolLoop {
         let requestSemantics = plan.semantics
         let resolvedIntent = plan.intent
         let resolvedPolicy = plan.policy
+        // Direct Read 成功时整轮直接完成；若底层真实执行失败/超时，
+        // 下面会移除 Fast Path 标记并把失败事实交给模型继续换路径。
+        var executionPlan = plan
+        var initialRecoveryNote: String?
         // ConversationEngine/AgentCoordinator may supply a run-owned lease so
         // cancellation and stale callbacks can revoke a mutation. A direct
         // compatibility caller gets a fresh local lease; this is lifecycle
@@ -379,7 +383,7 @@ public struct ToolLoop {
            initialTaskState == nil,
            !requestSemantics.isMusicAppreciation,
            let directDescriptor = descriptor(named: directReadCapability.toolName, in: availableToolDescriptors) {
-            await runDirectReadFastPath(
+            let directOutcome = await runDirectReadFastPath(
                 descriptor: directDescriptor,
                 arguments: directReadCapability.arguments,
                 providerCapabilities: provider?.capabilities,
@@ -396,7 +400,22 @@ public struct ToolLoop {
                 emit: emit,
                 progress: progress
             )
-            return
+            switch directOutcome {
+            case .completed, .cancelled:
+                return
+            case let .failed(reason):
+                let recovery = "本地直接读取未完成：\(reason)。已记录该结果，将交给 Agent 改用其它可用路径继续。"
+                await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: recovery)]))
+                guard provider != nil else {
+                    await emit(AgentChatMessage(
+                        role: .assistant,
+                        messages: [.error("本地直接读取未完成：\(reason)；当前 AI Provider 不可用，无法继续换路径。")]
+                    ))
+                    return
+                }
+                executionPlan = planWithoutDirectRead(plan)
+                initialRecoveryNote = recovery
+            }
         }
         // Generic Agent 不再在模型规划前由 Runtime 判定“能力不足”并提前结束。
         // 工具可用性与真实执行结果交给模型，由模型决定继续、换策略或结束。
@@ -487,7 +506,8 @@ public struct ToolLoop {
                     systemService: systemService,
                     externalMusicService: externalMusicService,
                     webService: webService,
-                    plan: plan,
+                    plan: executionPlan,
+                    initialRecoveryNote: initialRecoveryNote,
                     availableToolDescriptors: availableToolDescriptors,
                     initialCustomToolRevision: customSnapshot.revision,
                     sideEffectAuthorization: resolvedAuthorization,
@@ -545,6 +565,12 @@ public struct ToolLoop {
     /// intentionally separate from `runGenericChat`: the latter is a model
     /// conversation loop and cannot guarantee that a simple request results
     /// in exactly one target tool call.
+    private enum DirectReadFastPathOutcome: Sendable {
+        case completed
+        case cancelled
+        case failed(String)
+    }
+
     private static func runDirectReadFastPath(
         descriptor: ToolDescriptor,
         arguments: [String: AIJSONValue],
@@ -561,7 +587,7 @@ public struct ToolLoop {
         toolTimeout: TimeInterval,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         progress: @escaping @Sendable (AgentProgress) async -> Void
-    ) async {
+    ) async -> DirectReadFastPathOutcome {
         let call = ToolCall(name: descriptor.name, arguments: arguments)
         await progress(AgentProgress(toolSteps: 1, currentStep: "读取 \(descriptor.summary)"))
 
@@ -593,21 +619,13 @@ public struct ToolLoop {
             }
         } catch is CancellationError {
             await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
-            return
+            return .cancelled
         } catch {
-            await emit(AgentChatMessage(
-                role: .assistant,
-                messages: [.error("读取 \(descriptor.summary) 失败：\(errorText(error))")]
-            ))
-            return
+            return .failed("读取 \(descriptor.summary) 失败：\(errorText(error))")
         }
 
         guard result.success else {
-            await emit(AgentChatMessage(
-                role: .assistant,
-                messages: [.error("读取 \(descriptor.summary) 失败：\(result.summary)")]
-            ))
-            return
+            return .failed("读取 \(descriptor.summary) 失败：\(result.summary)")
         }
 
         var messages: [AgentMessage] = []
@@ -625,6 +643,36 @@ public struct ToolLoop {
         if !messages.isEmpty {
             await emit(AgentChatMessage(role: .assistant, messages: messages))
         }
+        return .completed
+    }
+
+    /// Fast Path 已经真实执行失败时，后续 Agent 不能继续被同一个
+    /// directReadCapability 锁死在唯一工具上；保持原有 domain / intent /
+    /// authorization，只移除“必须单工具直读”的短路标记。
+    private static func planWithoutDirectRead(_ plan: AgentRequestPlan) -> AgentRequestPlan {
+        let semantics = plan.semantics
+        let fallbackSemantics = AgentRequestSemantics(
+            domain: semantics.domain,
+            operation: semantics.operation,
+            isMusicContext: semantics.isMusicContext,
+            isContinuation: semantics.isContinuation,
+            isRecommendationIndex: semantics.isRecommendationIndex,
+            isRecommendationIndexBuild: semantics.isRecommendationIndexBuild,
+            isMusicAppreciation: semantics.isMusicAppreciation,
+            requestedOperations: semantics.requestedOperations,
+            suggestedToolNamespaces: semantics.suggestedToolNamespaces,
+            directReadCapability: nil
+        )
+        return AgentRequestPlan(
+            currentUserText: plan.currentUserText,
+            relevantHistoryText: plan.relevantHistoryText,
+            semantics: fallbackSemantics,
+            intent: plan.intent,
+            policy: plan.policy,
+            authorization: plan.authorization,
+            executionLineage: plan.executionLineage,
+            completionSemantics: semantics
+        )
     }
 
     // MARK: - Generic conversation loop
@@ -645,6 +693,7 @@ public struct ToolLoop {
         externalMusicService: (any AgentExternalMusicService)?,
         webService: (any AgentWebService)?,
         plan: AgentRequestPlan,
+        initialRecoveryNote: String? = nil,
         availableToolDescriptors initialAvailableToolDescriptors: [ToolDescriptor],
         initialCustomToolRevision: UInt64,
         sideEffectAuthorization: SideEffectAuthorizationContext,
@@ -701,6 +750,12 @@ public struct ToolLoop {
         )]
         conversation.append(contentsOf: convertHistory(history, currentUserText: userText, permissions: context.privacyPermissions))
         conversation.append(AIMessage(role: .user, content: userText))
+        if let initialRecoveryNote, !initialRecoveryNote.isEmpty {
+            conversation.append(AIMessage(
+                role: .user,
+                content: "系统恢复：\(initialRecoveryNote) 不要原样重复刚才失败的工具调用；根据当前可用能力改用其它查询方式，或在没有其它可靠路径时明确说明失败原因。"
+            ))
+        }
 
         var toolSteps = 0
         // Generic chat still needs execution safety, but it does not need a
