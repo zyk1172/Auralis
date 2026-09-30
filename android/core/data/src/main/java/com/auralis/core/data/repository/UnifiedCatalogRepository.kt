@@ -15,15 +15,9 @@ import com.auralis.core.domain.SearchResults
 import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
 import com.auralis.core.domain.TrackQuality
-import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -31,7 +25,6 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -43,98 +36,48 @@ import kotlinx.coroutines.withContext
  * Server mutations still delegate to the real remote repository; local annotations/history are
  * handled by the local-library runtime and therefore never fall through to OpenSubsonic.
  *
- * ## 为什么除了「合并」还需要「合并结果缓存」
- *
- * `Flow` 的 `combine`/`map` transform **在收集者上下文执行**，而这里的合并后处理
- * （`TrackQuality.deduplicatedPreferringQuality`）是 O(N) 的字符串归一化 + HashMap 去重。
- * Compose 侧的习惯写法是「每个列表行订阅一次收藏集合」（见 `lib`/`LibraryTrackRow`），
- * 于是同一份全量收藏会被去重 N 次，而且全部落在 Main 上，形成行数 × 库规模的双重放大。
- *
- * 因此每个「远端 + 本地」家族在这里只建**每服务器一条**热流（`replay = 1`）：合并与去重
- * 只做一次，所有调用方共享同一个快照。同时所有上游（含 `suspend` 读取路径）统一切到
- * [CatalogDispatcher]，保证 JSON 解码与集合运算不再阻塞 Main。
+ * 合并后的集合运算统一通过 [CatalogDispatcher] 下放到 Default。这里保持冷 Flow 语义：
+ * 页面没有订阅时不持续收集，也不在 appScope 中永久保留 replay 快照。列表层会把收藏/
+ * 下载状态提升到父级统一订阅，避免过去“每行各自收集一次全量集合”的重复工作。
  */
 class UnifiedCatalogRepository(
     private val delegate: CachedCatalogRepository,
     private val local: AndroidLocalMusicLibrary,
-    scope: CoroutineScope,
 ) : CatalogRepository by delegate, DownloadRepository by delegate {
 
     private val localServerId: ServerId get() = AndroidLocalMusicLibrary.LOCAL_SERVER_ID
 
-    private val scope: CoroutineScope = scope
-
-    /** 合并流缓存项：热流 + 负责喂它的收集任务。 */
-    private class Cached<T>(val flow: SharedFlow<T>, val job: Job)
-
-    private val mergedArtists = ConcurrentHashMap<String, Cached<List<Artist>>>()
-    private val mergedAlbums = ConcurrentHashMap<String, Cached<List<Album>>>()
-    private val mergedTracks = ConcurrentHashMap<String, Cached<List<Track>>>()
-    private val mergedGenres = ConcurrentHashMap<String, Cached<List<Genre>>>()
-    private val mergedFavorites = ConcurrentHashMap<String, Cached<List<Track>>>()
-    private val mergedDisliked = ConcurrentHashMap<String, Cached<List<GlobalId>>>()
-
-    /**
-     * 把 [upstream] 变成每服务器一条的热流。
-     *
-     * `replay = 1` 保证后进入的页面立即拿到最近一次快照；`DROP_OLDEST` 保证下游消费慢时上游
-     * 收集器不会被 `emit` 挂住（快照语义下旧值可以直接丢弃）。
-     */
-    private fun <T> merged(
-        cache: ConcurrentHashMap<String, Cached<T>>,
-        serverId: ServerId,
-        upstream: () -> Flow<T>,
-    ): Flow<T> = cache.computeIfAbsent(serverId.value) {
-        val replay = MutableSharedFlow<T>(
-            replay = 1,
-            extraBufferCapacity = 1,
-            onBufferOverflow = BufferOverflow.DROP_OLDEST,
-        )
-        val job = scope.launch {
-            upstream().flowOn(CatalogDispatcher).collect { replay.emit(it) }
-        }
-        Cached(replay, job)
-    }.flow
-
     override fun observeArtists(serverId: ServerId?): Flow<List<Artist>> {
         val localFlow = local.tracks.map(::localArtists).distinctUntilChanged()
         if (serverId == null || serverId == localServerId) return localFlow.flowOn(CatalogDispatcher)
-        return merged(mergedArtists, serverId) {
-            combine(delegate.observeArtists(serverId), localFlow) { remote, localItems ->
-                remote + localItems
-            }
-        }
+        return combine(delegate.observeArtists(serverId), localFlow) { remote, localItems ->
+            remote + localItems
+        }.flowOn(CatalogDispatcher)
     }
 
     override fun observeAlbums(serverId: ServerId?): Flow<List<Album>> {
         val localFlow = local.tracks.map(::localAlbums).distinctUntilChanged()
         if (serverId == null || serverId == localServerId) return localFlow.flowOn(CatalogDispatcher)
-        return merged(mergedAlbums, serverId) {
-            combine(delegate.observeAlbums(serverId), localFlow) { remote, localItems ->
-                remote + localItems
-            }
-        }
+        return combine(delegate.observeAlbums(serverId), localFlow) { remote, localItems ->
+            remote + localItems
+        }.flowOn(CatalogDispatcher)
     }
 
     override fun observeTracks(serverId: ServerId?): Flow<List<Track>> {
         // 纯本地路径直接透传 StateFlow：它本身就是快照，没有需要下放的计算，且
         // SharedFlow 上的 flowOn 是无效操作（kotlinx.coroutines 已将其标记为 ERROR）。
         if (serverId == null || serverId == localServerId) return local.tracks
-        return merged(mergedTracks, serverId) {
-            combine(delegate.observeTracks(serverId), local.tracks) { remote, localTracks ->
-                TrackQuality.deduplicatedPreferringQuality(remote + localTracks)
-            }
-        }
+        return combine(delegate.observeTracks(serverId), local.tracks) { remote, localTracks ->
+            TrackQuality.deduplicatedPreferringQuality(remote + localTracks)
+        }.flowOn(CatalogDispatcher)
     }
 
     override fun observeGenres(serverId: ServerId?): Flow<List<Genre>> {
         val localFlow = local.tracks.map(::localGenres).distinctUntilChanged()
         if (serverId == null || serverId == localServerId) return localFlow.flowOn(CatalogDispatcher)
-        return merged(mergedGenres, serverId) {
-            combine(delegate.observeGenres(serverId), localFlow) { remote, localItems ->
-                mergeGenresForRead(remote, localItems)
-            }
-        }
+        return combine(delegate.observeGenres(serverId), localFlow) { remote, localItems ->
+            mergeGenresForRead(remote, localItems)
+        }.flowOn(CatalogDispatcher)
     }
 
     override fun observePlaylists(serverId: ServerId?): Flow<List<Playlist>> =
@@ -226,11 +169,9 @@ class UnifiedCatalogRepository(
     override fun observeFavoriteTracks(serverId: ServerId?): Flow<List<Track>> {
         val localFavorites = local.tracks.map { tracks -> tracks.filter { it.isFavorite } }.distinctUntilChanged()
         if (serverId == null || serverId == localServerId) return localFavorites.flowOn(CatalogDispatcher)
-        return merged(mergedFavorites, serverId) {
-            combine(delegate.observeFavoriteTracks(serverId), localFavorites) { remote, localItems ->
-                TrackQuality.deduplicatedPreferringQuality(remote + localItems)
-            }
-        }
+        return combine(delegate.observeFavoriteTracks(serverId), localFavorites) { remote, localItems ->
+            TrackQuality.deduplicatedPreferringQuality(remote + localItems)
+        }.flowOn(CatalogDispatcher)
     }
 
     override suspend fun favoriteTracks(serverId: ServerId?): List<Track> =
@@ -288,11 +229,9 @@ class UnifiedCatalogRepository(
             .distinctUntilChanged()
             .flowOn(CatalogDispatcher)
         if (serverId == null || serverId == localServerId) return localFlow
-        return merged(mergedDisliked, serverId) {
-            combine(delegate.observeDislikedIds(serverId), localFlow) { remote, localItems ->
-                (remote + localItems).distinct()
-            }
-        }
+        return combine(delegate.observeDislikedIds(serverId), localFlow) { remote, localItems ->
+            (remote + localItems).distinct()
+        }.flowOn(CatalogDispatcher)
     }
 
     override suspend fun isFavorite(globalId: GlobalId): Boolean =
@@ -374,13 +313,8 @@ class UnifiedCatalogRepository(
         if (serverId != localServerId) delegate.mergeGenres(serverId, values)
     }
 
-    /**
-     * 忘记服务器时同时释放合并流缓存，避免留下「仍在观察已删除服务器」的常驻收集任务。
-     */
     fun evict(serverId: ServerId) {
         if (serverId != localServerId) delegate.evict(serverId)
-        listOf(mergedArtists, mergedAlbums, mergedTracks, mergedGenres, mergedFavorites, mergedDisliked)
-            .forEach { cache -> cache.remove(serverId.value)?.job?.cancel() }
     }
 
     private fun localSearch(query: String, limit: Int): SearchResults {
