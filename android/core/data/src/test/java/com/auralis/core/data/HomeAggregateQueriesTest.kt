@@ -13,9 +13,10 @@ import com.auralis.core.domain.PlaylistId
 import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
 import com.auralis.core.domain.TrackId
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.withTimeout
@@ -151,16 +152,19 @@ class HomeAggregateQueriesTest : RoomDbTest() {
         repo.upsertServer(server(id = sid))
         seedCatalog()
 
+        val firstEmission = CompletableDeferred<Unit>()
         val collected = async {
             withTimeout(5_000) {
-                repo.homeChangeSignals(sid).take(3).toList()
+                repo.homeChangeSignals(sid)
+                    .onEach { firstEmission.complete(Unit) }
+                    .take(3)
+                    .toList()
             }
         }
 
-        // 等初始 combine 快照建立后，分别制造两类真实数据变化。
-        delay(100)
+        // 明确等到 collector 已经拿到初始快照，再制造两类真实变化；不依赖固定 sleep。
+        withTimeout(5_000) { firstEmission.await() }
         repo.setFavorite(GlobalId(sid, "t1"), FavoriteKind.Track, true)
-        delay(100)
         repo.recordPlay(GlobalId(sid, "t1"), completed = true)
 
         assertEquals(3, collected.await().size)
