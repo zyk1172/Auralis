@@ -21,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -226,12 +227,17 @@ class DownloadManager(
         _runningCount.value = runningKeys.size
         try {
             coroutineScope {
-                val job = launch {
+                // 先创建但不启动，写入 runningJob 后再做一次有效性检查，避免 cancel() 恰好落在
+                // “worker 取出任务”和“任务真正开始”之间时仍短暂启动旧下载。
+                val job = launch(start = CoroutineStart.LAZY) {
                     if (!tombstones.contains(key)) runDownload(key, task.track)
                 }
                 task.runningJob = job
-                // cancel() 可能恰好发生在 worker 取出任务和 runningJob 赋值之间。
-                if (activeTasks[key] !== task || tombstones.contains(key)) job.cancel()
+                if (activeTasks[key] !== task || tombstones.contains(key)) {
+                    job.cancel()
+                } else {
+                    job.start()
+                }
                 job.join()
             }
         } finally {
