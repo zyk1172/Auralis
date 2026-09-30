@@ -1,25 +1,31 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.auralis.mobile
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.AuralisTheme
 import com.auralis.core.designsystem.AuralisThemeController
@@ -43,9 +49,18 @@ import com.auralis.mobile.shell.MobileShell
  * because the user opens Settings. Playback itself remains owned by MediaSessionService.
  */
 class MainActivity : ComponentActivity() {
+    /**
+     * Android 13+ 需要运行时授权 `POST_NOTIFICATIONS`，否则播放/下载前台服务的通知不可见
+     * （服务本身仍可运行，但用户在通知栏看不到也无法从通知控制播放）。清单已声明该权限，
+     * 但历史上从未在代码里请求过。
+     */
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* 结果只决定通知可见性 */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        requestNotificationPermissionIfNeeded()
         setContent {
             val reduceMotion = rememberSystemReduceMotion()
             AuralisTheme(
@@ -56,6 +71,14 @@ class MainActivity : ComponentActivity() {
                 AppRoot(app.graph)
             }
         }
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) return
+        runCatching { notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }
     }
 }
 
@@ -74,7 +97,7 @@ private sealed interface Route {
 private fun AppRoot(graph: AuralisGraph) {
     var route by remember { mutableStateOf<Route>(Route.Boot) }
     var shellReady by remember { mutableStateOf(false) }
-    var startRecommendationIndexToken by remember { mutableStateOf(0) }
+    var startRecommendationIndexToken by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     val assistantCoordinator = remember(graph, scope) { AssistantCoordinator(graph, scope) }
     val recommendationIndexState by assistantCoordinator.recommendationIndex.collectAsState()

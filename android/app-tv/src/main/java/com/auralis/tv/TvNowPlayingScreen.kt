@@ -58,6 +58,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -84,6 +85,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -135,8 +137,13 @@ fun TvNowPlayingScreen(
 
     var playback by remember { mutableStateOf(controller.playback.value) }
     var queue by remember { mutableStateOf(controller.queue.value) }
-    val positionMs by controller.position.collectAsState()
     var playerContext by remember { mutableStateOf(TvPlayerContext.None) }
+
+    // 注意：这里**不能**订阅 `controller.position`。
+    // `position` 每 250ms 发射一次，而 composition 读取点会决定重组范围：一旦在
+    // `TvNowPlayingScreen` 函数体里读取，整屏（含全屏模糊背景、封面、控制层）就会
+    // 每秒重组 4 次，TV SoC 上直接表现为掉帧。需要连续进度的子组件（进度条/歌词）
+    // 各自订阅，把重组限制在最小范围内。
 
     // One focus sequence: transport 0...4, lyrics 5, queue 6.
     val primaryFocus = remember { List(7) { FocusRequester() } }
@@ -153,6 +160,15 @@ fun TvNowPlayingScreen(
         graph.catalogRepository.observeFavoriteTracks(currentTrack.serverId).collect { tracks ->
             favoriteIds = tracks.map { it.globalId }.toSet()
         }
+    }
+
+    // TV 上「只看不点」是常态：长时间不碰遥控器会触发屏保/待机，播放页被盖住。
+    // 仅在播放页可见且正在播放时保持常亮，离开或暂停即释放（DisposableEffect 保证成对）。
+    val hostView = LocalView.current
+    val keepScreenOn = playback.state.isActive
+    DisposableEffect(hostView, keepScreenOn) {
+        hostView.keepScreenOn = keepScreenOn
+        onDispose { hostView.keepScreenOn = false }
     }
 
     BackHandler {
@@ -215,7 +231,6 @@ fun TvNowPlayingScreen(
             controller = controller,
             playback = playback,
             track = currentTrack,
-            positionMs = positionMs,
             durationMs = durationMs,
             artworkSize = artworkSize,
             isFavorite = isFavorite,
@@ -278,7 +293,6 @@ fun TvNowPlayingScreen(
                     graph = graph,
                     controller = controller,
                     track = currentTrack,
-                    positionMs = positionMs,
                 )
                 TvPlayerContext.Queue -> TvQueuePanel(
                     queue = queue,
@@ -343,12 +357,14 @@ private fun TvPlayerAmbience(
         ),
     ) {
         if (!track.artworkKey.isNullOrBlank()) {
+            // 环境封面是 96dp 模糊后的背景层，原始分辨率不影响观感：1024 tier 的
+            // ARGB_8888 位图约 4MB，512 tier 只有 1MB。降低 tier 直接省掉 3MB 常驻内存。
             AuralisArtwork(
                 serverId = track.serverId,
                 artworkKey = track.artworkKey,
                 contentDescription = null,
                 titleForFallback = null,
-                targetSizeDp = 1024,
+                targetSizeDp = 512,
                 shape = RectangleShape,
                 modifier = Modifier
                     .fillMaxSize()
@@ -396,7 +412,6 @@ private fun TvPlaybackColumn(
     controller: PlaybackController,
     playback: PlaybackSnapshot,
     track: Track,
-    positionMs: Long,
     durationMs: Long,
     artworkSize: Dp,
     isFavorite: Boolean,
@@ -505,23 +520,28 @@ private fun TvPlaybackColumn(
         Spacer(Modifier.height(8.dp))
 
         TvSeekBar(
-            positionMs = positionMs,
+            controller = controller,
             durationMs = durationMs,
-            onSeek = controller::seekTo,
             modifier = Modifier.fillMaxWidth(),
         )
     }
 }
 
+/**
+ * TV 进度条。
+ *
+ * 订阅 `controller.position` 的职责放在这里（而不是 `TvNowPlayingScreen`）：进度 4Hz 变化，
+ * 重组范围只有这一条进度条 + 两个时间标签，而不是整个播放页（含全屏模糊背景）。
+ */
 @Composable
 private fun TvSeekBar(
-    positionMs: Long,
+    controller: PlaybackController,
     durationMs: Long,
-    onSeek: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
     val shape = RoundedCornerShape(10.dp)
+    val positionMs by controller.position.collectAsState()
     val clampedPosition = positionMs.coerceIn(0L, durationMs.coerceAtLeast(0L))
     val fraction = if (durationMs > 0L) {
         clampedPosition.toFloat() / durationMs.toFloat()
@@ -538,11 +558,11 @@ private fun TvSeekBar(
                     if (event.type != KeyEventType.KeyDown || durationMs <= 0L) return@onPreviewKeyEvent false
                     when (event.key) {
                         Key.DirectionLeft -> {
-                            onSeek((clampedPosition - 5_000L).coerceAtLeast(0L))
+                            controller.seekTo((clampedPosition - 5_000L).coerceAtLeast(0L))
                             true
                         }
                         Key.DirectionRight -> {
-                            onSeek((clampedPosition + 5_000L).coerceAtMost(durationMs))
+                            controller.seekTo((clampedPosition + 5_000L).coerceAtMost(durationMs))
                             true
                         }
                         else -> false
@@ -835,7 +855,6 @@ private fun TvLyricsPanel(
     graph: AuralisGraph,
     controller: PlaybackController,
     track: Track,
-    positionMs: Long,
 ) {
     val theme = LocalAuralisTheme.current
     val colors = theme.colors
@@ -850,6 +869,7 @@ private fun TvLyricsPanel(
     var loading by remember(track.globalId) { mutableStateOf(true) }
     var error by remember(track.globalId) { mutableStateOf<String?>(null) }
     var focusedLyricIndex by remember(track.globalId) { mutableStateOf<Int?>(null) }
+    var activeIndex by remember(track.globalId) { mutableStateOf<Int?>(null) }
     val listState = rememberLazyListState()
 
     LaunchedEffect(track.globalId) {
@@ -862,13 +882,23 @@ private fun TvLyricsPanel(
     }
 
     val doc = document
-    val activeIndex = if (doc?.isSynced == true) {
-        val seconds = positionMs / 1000.0
-        doc.lines.indexOfLast {
-            (it.startTimeSeconds ?: Double.MAX_VALUE) <= seconds + 0.05
-        }.takeIf { it >= 0 }
-    } else {
-        null
+
+    // 当前歌词行由 `position` 推导，但不能在 composition 里读 position：那样面板会
+    // 每 250ms 重组一次。改为在协程里收集、只在**行号真正变化**时写状态（mutableStateOf
+    // 结构相等，写同值不会触发失效），因此重组频率从 4Hz 降到「每句歌词一次」。
+    LaunchedEffect(doc, track.globalId) {
+        val lines = doc?.lines
+        if (doc?.isSynced != true || lines.isNullOrEmpty()) {
+            activeIndex = null
+            return@LaunchedEffect
+        }
+        controller.position.collect { position ->
+            val seconds = position / 1000.0
+            val next = lines.indexOfLast {
+                (it.startTimeSeconds ?: Double.MAX_VALUE) <= seconds + 0.05
+            }.takeIf { it >= 0 }
+            if (next != activeIndex) activeIndex = next
+        }
     }
 
     LaunchedEffect(activeIndex, track.globalId, focusedLyricIndex, reduceMotion) {
@@ -1174,9 +1204,15 @@ private enum class TvPlayerContext {
     Info,
 }
 
+/**
+ * 毫秒 → m:ss。
+ *
+ * 使用字符串模板而不是 `String.format`：后者每次都会新建 `java.util.Formatter` 并解析格式串，
+ * 而这里是**热路径**（进度每秒 4 次 × 2 个标签 + 队列每行一次）。
+ */
 private fun formatTvClock(ms: Long): String {
     val totalSeconds = ms.coerceAtLeast(0L) / 1000L
     val minutes = totalSeconds / 60L
     val seconds = totalSeconds % 60L
-    return "%d:%02d".format(minutes, seconds)
+    return "$minutes:${seconds.toString().padStart(2, '0')}"
 }

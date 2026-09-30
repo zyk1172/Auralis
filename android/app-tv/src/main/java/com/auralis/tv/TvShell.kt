@@ -483,38 +483,66 @@ private fun TvNowPlayingRailButton(
     }
 }
 
+/**
+ * 导航 rail 底部的播放指示条。
+ *
+ * 两点关键：
+ * 1. 只有 `active`（正在播放且未开启 reduce-motion）时才创建 `rememberInfiniteTransition`。
+ *    无限动画一旦存在就会持续请求帧回调 —— 即使 target 与 initial 相同也一直跑，使 TV 无法
+ *    进入空闲；历史实现无条件创建，于是只要加载过曲目，暂停状态下导航栏也在逐帧唤醒。
+ * 2. 动画值以 `State<Float>` 形式传入，并且**只在 `graphicsLayer` 的 lambda 内读取**，
+ *    把逐帧成本限制为一次图层变换，而不是重组整个 rail 按钮。
+ */
 @Composable
 private fun TvEqualizer(active: Boolean) {
     val colors = LocalAuralisTheme.current.colors
-    val transition = rememberInfiniteTransition(label = "tv-now-playing-eq")
-    val a by transition.animateFloat(
-        initialValue = 0.34f,
-        targetValue = if (active) 1f else 0.34f,
-        animationSpec = infiniteRepeatable(tween(420), RepeatMode.Reverse),
-        label = "eq-a",
-    )
-    val b by transition.animateFloat(
-        initialValue = 0.78f,
-        targetValue = if (active) 0.28f else 0.78f,
-        animationSpec = infiniteRepeatable(tween(570), RepeatMode.Reverse),
-        label = "eq-b",
-    )
-    val c by transition.animateFloat(
-        initialValue = 0.48f,
-        targetValue = if (active) 0.94f else 0.48f,
-        animationSpec = infiniteRepeatable(tween(500), RepeatMode.Reverse),
-        label = "eq-c",
-    )
+
+    val barFractions: List<androidx.compose.runtime.State<Float>> = if (active) {
+        val transition = rememberInfiniteTransition(label = "tv-now-playing-eq")
+        listOf(
+            transition.animateFloat(
+                initialValue = 0.34f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(tween(420), RepeatMode.Reverse),
+                label = "eq-a",
+            ),
+            transition.animateFloat(
+                initialValue = 0.78f,
+                targetValue = 0.28f,
+                animationSpec = infiniteRepeatable(tween(570), RepeatMode.Reverse),
+                label = "eq-b",
+            ),
+            transition.animateFloat(
+                initialValue = 0.48f,
+                targetValue = 0.94f,
+                animationSpec = infiniteRepeatable(tween(500), RepeatMode.Reverse),
+                label = "eq-c",
+            ),
+        )
+    } else {
+        remember {
+            listOf(
+                androidx.compose.runtime.mutableStateOf(0.34f),
+                androidx.compose.runtime.mutableStateOf(0.78f),
+                androidx.compose.runtime.mutableStateOf(0.48f),
+            )
+        }
+    }
+
     Row(
         modifier = Modifier.height(23.dp),
         verticalAlignment = Alignment.Bottom,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        listOf(a, b, c).forEach { fraction ->
+        barFractions.forEach { fractionState ->
             Box(
                 Modifier
                     .width(4.dp)
-                    .height((21f * fraction.coerceIn(0.25f, 1f)).dp)
+                    .height(21.dp)
+                    .graphicsLayer {
+                        scaleY = fractionState.value.coerceIn(0.25f, 1f)
+                        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 1f)
+                    }
                     .background(colors.accent, RoundedCornerShape(50)),
             )
         }
