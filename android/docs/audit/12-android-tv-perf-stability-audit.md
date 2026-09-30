@@ -163,34 +163,33 @@
 - **影响范围**：移动端 + TV（本地曲库功能为共用运行时）。
 - **修改方向**：本地库维护 `dislikedIds` 的内存索引（写入时同步更新，读时 O(1)）；`setFavorite/setRating` 改为局部更新（`mutableStateListOf` 或按 id 索引的持久结构）；所有全库排序/分组/洗牌移入 `Dispatchers.Default` 并在 use site 用 `remember`/`derivedStateOf` 去重计算。
 
-#### P-03 【P0·性能】首页每次信号变化都重查 9 类模块，含整库重洗牌与全库排序
+#### P-03 【P0·正确性/性能】远端 Home 自动刷新首帧后失效；本地变化又会触发全量重查
 
-- **表现/复现场景**：首页「随机歌曲」货架在播放/收藏/下载任一动作后**内容整批变化**（卡片 key 变化 → 封面重新请求）；首页刷新期间出现 4–5 次可见重组与中间态闪动。
+- **表现/复现场景**：
+  - 远端服务器路径：进入 Home 后，后续收藏/播放/下载数量变化可能**完全不刷新首页**；
+  - 本地曲库路径：`local.revision` 变化仍会触发 `refresh`，而 `refresh` 会重查所有开启模块，随机货架也会重新采样。
 - **根本原因**：
-  - `HomeState.kt:76-84`：`combine(prefs.homeLayoutFlow, repo.homeChangeSignals(serverId)).collect { refresh(serverId) }`；
-  - `RoomCatalogRepository.kt:462-471` `homeChangeSignals` 由 5 路 COUNT Flow 合并，任一变化即发射；`UnifiedCatalogRepository.kt:272-276` 还并入 `local.revision`；
-  - `HomeState.kt:156-175` `buildContentModules` 对**所有开启模块**重新查询，其中 `RandomSongs` 走 `randomTracks`（本地路径 = 整库 `shuffled()`）、`RecentlyPlayed`/`LongUnplayed` 走全库排序；
-  - `HomeState.kt:110-133` `refresh` 内连续 4–5 次状态写入（`stats`、`quickModules`、`contentModules`、`refreshing`、`loaded`），其中若干之间有挂起点，导致多次可见重组。
-- **影响范围**：移动端 + TV。
+  - `HomeState.kt` 用 `combine(prefs.homeLayoutFlow, repo.homeChangeSignals(serverId))` 驱动整页 `refresh`；
+  - 原 `RoomCatalogRepository.homeChangeSignals` 先把 5 路 COUNT 合并结果直接映射成 `Unit`，再调用 `distinctUntilChanged()`。第一次发射后所有值都是同一个 `Unit`，因此后续远端 COUNT 变化全部被吞掉；
+  - `UnifiedCatalogRepository` 另外 merge 了 `local.revision.map { Unit }`，这条本地信号没有上述 distinct，因此本地修改仍可能触发整页重查；
+  - `HomeState.refresh` 对所有开启模块重新查询，其中 Random/RecentlyPlayed/LongUnplayed 等包含洗牌或排序。
+- **影响范围**：移动端 + TV；同时包含“数据不更新”的正确性问题和“本地变化触发过度重算”的性能问题。
 - **修改方向**：
-  1. `refresh` 先在局部变量组装完再一次性提交（单次状态写入）；
-  2. `homeChangeSignals` 拆细：曲目数变化才重查列表类模块，收藏数变化只更新收藏相关模块与徽标；
-  3. `RandomSongs` 在非「换一批」动作下保持上次采样结果（不要因无关信号重洗）；
-  4. 整库排序放 `Dispatchers.Default`，并对 `lastPlayedMillis` 预先建 Map 而不是每元素查一次 SP。
+  1. 必须**先对真实计数快照 distinct，再映射为 Unit**；不能对 `Unit` 做 `distinctUntilChanged`；
+  2. 后续若要稳定随机货架，应使用明确的数据版本/失效键，不能永久缓存空样本或已删除/已取消收藏的旧 Track；
+  3. 更进一步可把 Home 信号拆成 typed change snapshot，只刷新受影响模块；
+  4. `refresh` 先在局部变量组装完整快照，再连续提交 UI 状态；整库排序/分组移到 `Dispatchers.Default`。
 
-### 3.2 Compose 重组与稳定性
+#### P-04 【P0·性能】每个可见列表行各订阅一次「全部收藏」和单曲下载状态
 
-#### P-04 【P0·性能】每个列表行各订阅一次「全部收藏」，并做全量去重/物化
-
-- **表现/复现场景**：进入歌曲列表（可见 ~10–15 行）后滚动明显掉帧；点一次收藏，整个列表重排一次重组。
+- **表现/复现场景**：歌曲列表滚动时，可见行越多，收藏集合的重复订阅/物化越多；收藏或下载状态变化会触发多条重复查询。
 - **根本原因**：
-  - `LibraryTracks.kt:104` `LibraryTrackRow` **每行**调用 `rememberFavoriteIds(graph, serverId)`；
-  - 该函数 `LibraryTracks.kt:80-84`：`remember(serverId){ observeFavoriteTracks(serverId) }` + `collectAsState` → **每行一条订阅**；且 `remember(tracks) { mutableStateOf(tracks?.map{...}?.toSet()) }` 在数据变化时返回**新的 State 实例**给所有调用方；
-  - 上游 `UnifiedCatalogRepository.kt:144-150` 每次发射都执行 `deduplicatedPreferringQuality(remote + localItems)`（O(N) 去重 + HashMap 建表），本地路径还要 `local.tracks.map{ filter{ isFavorite } }`（对整库 filter）；
-  - 叠加 `LibraryTracks.kt:103` 每行第二条 Flow `observe(track.globalId)`（`downloadDao.observe`）。
-  - 即：**100 行可见 ≈ 200 个活跃 Room 观察者 + 100 份全量收藏集合**。
-- **影响范围**：移动端 + TV（`LibraryTrackRow` 被 `LibraryScreen`、`BrowseDetailScreen` 共用，详情页上限 `DETAIL_TRACK_CAP = 1000`）。
-- **修改方向**：把收藏集合提升为**页面级单一订阅**（在 `LibraryScreen`/`BrowseDetailScreen` 顶层 `remember` 一次，用 `CompositionLocal` 或参数下传）；行内只做 `Set.contains`；用 `derivedStateOf` 避免新建 State 实例。
+  - `LibraryTrackRow` 每行调用一次 `rememberFavoriteIds(graph, serverId)`；
+  - 该 helper 每个调用点都会 `observeFavoriteTracks(serverId).collectAsState`，再把完整收藏列表转成一份 Set；
+  - 行内还各自调用 `observe(track.globalId)` 观察 downloads 表。Room 表失效时，这些行级观察者都会重新执行查询；
+  - LazyColumn 实际只保持可见/预取范围的行，而不是详情上限 1000 行全部同时活跃；但一屏约 10–20 行仍意味着 10–20 份全量收藏转换与同数量下载观察者。
+- **影响范围**：移动端 + TV（`LibraryTrackRow` 被 `LibraryScreen`、`BrowseDetailScreen` 共用）。
+- **修改方向**：在页面/列表父级分别只订阅一次 favorites 和 downloads 快照，构建 `Set<GlobalId>` / `Map<GlobalId, DownloadRecord>` 后将 `isFavorite` 与对应 DownloadRecord 参数下传；行组件不再创建全量订阅。
 
 #### P-05 【P0·性能/TV】TV Now Playing 每 250ms 整屏重组，并携带全屏模糊与多层渐变
 
@@ -525,13 +524,18 @@
 - **根本原因**：`TvNowPlayingScreen.kt:360` `.blur(96.dp)`。Compose 的 `Modifier.blur` **仅在 Android 12(API 31) 及以上生效**，以上版本通过 `RenderEffect` 实现（逐帧 GPU 全屏模糊）；API < 31 静默无效。`app-tv` minSdk = 26。
 - **修改方向**：改为「一次性预模糊位图」（track 变化时在 `Dispatchers.Default` 生成一张 64–128px 的模糊缩略图，再 `drawImage` 放大 + 渐变遮罩），既保证 API<31 视觉一致，又把逐帧成本降为一次绘制。
 
-### V-02 【P1·TV】Activity 无 `configChanges`，且根 `route` 用 `remember` → 任何配置变化都回到启动流程
+### V-02 【P1·TV】根路由只用 `remember`，Activity 重建后状态丢失
 
 - **表现/复现场景**：
-  - TV：切换系统语言、分辨率/HDR 变化、或某些盒子的 HDMI 重协商 → Activity 重建 → `AppRoot` 的 `route` 重置为 `Route.Boot` → 重新 `bootstrapFromLocal()`，用户被弹回启动画面；
-  - 移动端：`app-mobile/src/main/AndroidManifest.xml:31` 只有 `orientation|screenSize|keyboardHidden`，**缺 `uiMode|density|screenLayout|smallestScreenSize|keyboard|navigation`**；系统切换深色模式会重建 Activity（虽然产品主题不跟随系统，但重建代价与状态丢失仍发生）。
-- **根本原因**：`TvMainActivity.kt:87` `var route by remember { mutableStateOf<Route>(Route.Boot) }`（非 `rememberSaveable`），`shellReady`（`:88`）同理；`TvMainActivity` 清单无 `configChanges`。
-- **修改方向**：TV 加 `android:configChanges="keyboard|keyboardHidden|navigation|uiMode|density|screenLayout|smallestScreenSize|screenSize|orientation"`；`route` 相关的最小信息用 `rememberSaveable`（或 `onSaveInstanceState`）保留；避免在配置变化时重新 bootstrap。
+  - TV：系统语言、分辨率/HDR、HDMI 重协商等可能触发 Activity 重建；原 `route` / `shellReady` 使用普通 `remember`，会回到 `Route.Boot` 并重新走启动流程；
+  - 移动端也存在同类根路由状态丢失，只是 Manifest 原先拦截了部分 orientation/screenSize 变化。
+- **根本原因**：根导航状态没有保存。单纯扩大 `android:configChanges` 并不是可靠修复：它会把 density/uiMode/fontScale 等配置变化的处理责任转给 Activity，自定义资源/Compose 配置处理不完整时反而容易产生陈旧资源状态。
+- **影响范围**：移动端 + TV。
+- **修改方向**：
+  1. `route` 与 `shellReady` 使用 `rememberSaveable`/Saver 保存可重建的最小路由信息；
+  2. `AddServer` / `EditServer` 等携带不可保存对象的页面在恢复时降级到服务器列表；
+  3. bootstrap 只在恢复路由仍为 `Boot` 时决定首屏，不能覆盖已恢复路由；
+  4. 让系统按正常生命周期处理 uiMode/density/fontScale 等配置变化；除非 Activity 对某项配置有完整的 `onConfigurationChanged` 处理，否则不要通过扩大 `configChanges` 来规避重建。
 
 ### V-03 【P1·TV】四个共享屏幕零焦点代码，TV 交互只能依赖全局兜底
 
