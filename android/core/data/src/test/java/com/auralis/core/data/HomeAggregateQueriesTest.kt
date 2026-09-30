@@ -13,7 +13,12 @@ import com.auralis.core.domain.PlaylistId
 import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
 import com.auralis.core.domain.TrackId
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -137,6 +142,28 @@ class HomeAggregateQueriesTest : RoomDbTest() {
         // 无服务器过滤 = 全部。
         assertEquals(3, repo.favoriteCount(null))
         assertEquals(2, repo.playedTrackCount(null))
+    }
+
+    @Test
+    fun `首页变化信号_收藏和播放变化都会继续发射`() = runBlocking {
+        open()
+        val sid = ServerId("server-a")
+        repo.upsertServer(server(id = sid))
+        seedCatalog()
+
+        val collected = async {
+            withTimeout(5_000) {
+                repo.homeChangeSignals(sid).take(3).toList()
+            }
+        }
+
+        // 等初始 combine 快照建立后，分别制造两类真实数据变化。
+        delay(100)
+        repo.setFavorite(GlobalId(sid, "t1"), FavoriteKind.Track, true)
+        delay(100)
+        repo.recordPlay(GlobalId(sid, "t1"), completed = true)
+
+        assertEquals(3, collected.await().size)
     }
 
     @Test
