@@ -358,6 +358,7 @@ public struct ToolLoop {
             .filter { descriptor in
                 descriptor.name != "recommendation_ground_candidates"
                     || requestSemantics.domain == .recommendation
+                    || resolvedIntent == .musicDiscovery
             }
         let workflowRoute = WorkflowEngine.route(
             intent: resolvedIntent,
@@ -731,6 +732,7 @@ public struct ToolLoop {
                     .filter { descriptor in
                         descriptor.name != "recommendation_ground_candidates"
                             || plan.semantics.domain == .recommendation
+                            || plan.intent == .musicDiscovery
                     }
                 loadedCustomToolRevision = customSnapshot.revision
                 selectedTools.removeAll { $0.customToolID != nil }
@@ -1498,6 +1500,11 @@ public struct ToolLoop {
             let customSnapshot = await context.customToolRegistry.modelSnapshot()
             if loadedCustomToolRevision != customSnapshot.revision {
                 availableToolDescriptors = Self.descriptorsWithCustomTools(customSnapshot.descriptors)
+                    .filter { descriptor in
+                        descriptor.name != "recommendation_ground_candidates"
+                            || plan.semantics.domain == .recommendation
+                            || plan.intent == .musicDiscovery
+                    }
                 loadedCustomToolRevision = customSnapshot.revision
                 selectedTools.removeAll { $0.customToolID != nil }
                 for descriptor in customSnapshot.descriptors where Self.shouldExposeDescriptorForPlan(
