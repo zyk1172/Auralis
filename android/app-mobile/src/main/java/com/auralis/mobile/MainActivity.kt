@@ -111,14 +111,9 @@ private fun AppRoot(graph: AuralisGraph) {
         shellReady = restoredServers.isNotEmpty()
         route = when {
             // 保存的 Shell/Settings 路由只有在至少一个服务器成功恢复时才有意义。
-            // 若 Room 仍有坏账户但 registry 没有可用 client，必须降级到无返回按钮的服务器列表，
-            // 不能保留 Shell（mobile 会空白，TV 会一直显示 splash）。
-            !shellReady && route !is Route.ManageServers ->
-                Route.ManageServers(showBack = false)
-            !shellReady && route is Route.ManageServers ->
-                Route.ManageServers(showBack = false)
-            route == Route.Boot ->
-                Route.Shell
+            // 若 registry 没有可用 client，统一降级到服务器列表，避免恢复出空白 Shell。
+            !shellReady -> Route.ManageServers(showBack = false)
+            route == Route.Boot -> Route.Shell
             else -> route
         }
     }
