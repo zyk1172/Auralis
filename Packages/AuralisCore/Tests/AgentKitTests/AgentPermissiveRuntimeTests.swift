@@ -151,6 +151,8 @@ private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
 /// 可配置推荐结果的 AgentSystemService 桩。
 private final class PermissiveSystemService: AgentSystemService, @unchecked Sendable {
     var recommendationTracks: [TrackCard] = []
+    /// 置为 true 时 listServers 会睡眠，用于验证 Direct Read Fast Path 超时后回交 Agent。
+    var slowListServers = false
     /// 置为 true 时 testServerConnection 会睡眠（用于超时/取消路径）。
     var slowTestConnection = false
     func testServerConnection() async -> AgentConnectionTestResult {
@@ -172,7 +174,12 @@ private final class PermissiveSystemService: AgentSystemService, @unchecked Send
     func openPage(_ page: String) async -> Bool { true }
     func featureStatus() async -> AgentFeatureStatus { AgentFeatureStatus(backgroundAudioEnabled: true, siriEnabled: true) }
     // AgentServerService
-    func listServers() async -> [AgentServerInfo] { [] }
+    func listServers() async -> [AgentServerInfo] {
+        if slowListServers {
+            try? await Task.sleep(for: .seconds(10))
+        }
+        return []
+    }
     func currentServer() async -> AgentServerInfo? { nil }
     func serverCapabilities() async -> AgentCapabilitiesSummary { AgentCapabilitiesSummary(supportsStructuredLyrics: false, supportsSonicSimilarity: false) }
     func syncStatus() async -> AgentSyncStatus { AgentSyncStatus(isRunning: false, mode: "incremental", lastCompletedAt: .now, lastProcessedCount: 0, isStale: false) }
@@ -677,6 +684,41 @@ struct AgentPermissiveRuntimeTests {
             req.messages.contains { $0.role == .user && $0.content.contains("server_test_connection: 超时") }
         })
         #expect(await collector.containsText("改用本地搜索完成"))
+        #expect(await collector.containsError("已停止本次任务") == false)
+    }
+
+    @Test("Direct Read 超时后交回 Agent 换路径，不直接结束")
+    func directReadTimeoutFallsBackToAgent() async throws {
+        let store = try makePermStore()
+        let bridge = PermissiveBridge()
+        let system = PermissiveSystemService()
+        system.slowListServers = true
+        let collector = PermissiveCollector()
+        let provider = PermissiveScriptedProvider(
+            actionBatches: [
+                #"ACTION: {"tool":"server_get_current","args":{}}"#,
+            ],
+            closing: "本地直读超时后已改用其它服务器查询路径完成。"
+        )
+
+        await AgentRunner.run(
+            userText: "列出服务器",
+            provider: provider,
+            model: "scripted-model",
+            bridge: bridge,
+            catalog: store,
+            context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+            systemService: system,
+            toolTimeout: 0.05,
+            confirm: { _ in true },
+            emit: { await collector.record($0) }
+        )
+
+        #expect(provider.requests.count >= 2)
+        #expect(provider.requests.first?.messages.contains {
+            $0.role == .user && $0.content.contains("本地直接读取未完成")
+        } == true)
+        #expect(await collector.containsText("改用其它服务器查询路径完成"))
         #expect(await collector.containsError("已停止本次任务") == false)
     }
 
