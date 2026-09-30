@@ -108,6 +108,30 @@ class DownloadConcurrencyTest : OfflineTestBase() {
     }
 
     @Test
+    fun `运行中任务取消后立即重试不会丢失`() = runBlocking {
+        delayedBody(1024 * 1024)
+        val retry = track(id = "running-retry")
+        manager.enqueue(retry)
+
+        val runningDeadline = System.currentTimeMillis() + 5_000
+        while (manager.runningCount.value == 0 && System.currentTimeMillis() < runningDeadline) {
+            delay(10)
+        }
+        assertTrue("任务应已经进入 running", manager.runningCount.value > 0)
+
+        manager.cancelDownloadOnly(retry.globalId)
+        // submit 必须等待旧 worker 的 finally + cleanup 全部结束，再建立新任务。
+        manager.enqueue(retry)
+
+        val deadline = System.currentTimeMillis() + 15_000
+        while (System.currentTimeMillis() < deadline) {
+            if (repo.statusOf(retry.globalId) == DownloadStatus.Downloaded) break
+            delay(25)
+        }
+        assertEquals(DownloadStatus.Downloaded, repo.statusOf(retry.globalId))
+    }
+
+    @Test
     fun `进度写库被节流`() = runBlocking {
         delayedBody(2 * 1024 * 1024)
         manager.enqueue(track(id = "big"))
