@@ -27,6 +27,8 @@ import coil.imageLoader
 import coil.request.ImageRequest
 import com.auralis.core.designsystem.LocalAuralisTheme
 import com.auralis.core.domain.ServerId
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.max
 
 /**
@@ -181,7 +183,7 @@ internal fun FallbackArtwork(
  * `DiskLruCache` journal 失配。文件删除仅作为兜底保留。
  */
 @OptIn(coil.annotation.ExperimentalCoilApi::class)
-fun clearArtworkCaches(context: android.content.Context) {
+suspend fun clearArtworkCaches(context: android.content.Context) = withContext(Dispatchers.IO) {
     runCatching {
         val loader = context.imageLoader
         loader.memoryCache?.clear()
@@ -192,4 +194,5 @@ fun clearArtworkCaches(context: android.content.Context) {
             if (cacheDir.exists()) cacheDir.listFiles()?.forEach { it.deleteRecursively() }
         }
     }
+    Unit
 }
