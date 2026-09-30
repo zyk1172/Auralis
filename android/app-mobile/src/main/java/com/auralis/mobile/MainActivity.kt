@@ -103,11 +103,10 @@ private fun AppRoot(graph: AuralisGraph) {
     val recommendationIndexState by assistantCoordinator.recommendationIndex.collectAsState()
 
     LaunchedEffect(graph) {
-        runCatching { graph.bootstrapFromLocal() }
+        val restoredServers = runCatching { graph.bootstrapFromLocal() }.getOrDefault(emptyList())
         val savedTheme = runCatching { graph.preferences.selectedThemeId() }.getOrNull()
         AuralisThemeController.current = BuiltInThemes.byId(savedTheme)
-        val saved = runCatching { graph.catalogRepository.servers() }.getOrDefault(emptyList())
-        shellReady = saved.isNotEmpty()
+        shellReady = restoredServers.isNotEmpty()
         route = if (shellReady) Route.Shell else Route.ManageServers(showBack = false)
     }
 
