@@ -21,7 +21,6 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -31,8 +30,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -70,9 +69,15 @@ class DownloadManager(
     private val cacheDir = prepareLocalMusicDownloadDirectory(context)
     private val stagingDir = File(context.filesDir, STAGING_DIR_NAME).apply { mkdirs() }
 
-    private val activeTasks = ConcurrentHashMap<String, Job>()
+    private data class DownloadTask(
+        val key: String,
+        val track: Track,
+        @Volatile var runningJob: Job? = null,
+    )
+
+    private val activeTasks = ConcurrentHashMap<String, DownloadTask>()
     private val tombstones = ConcurrentHashMap.newKeySet<String>()
-    private val semaphore = Semaphore(MAX_CONCURRENT_DOWNLOADS)
+    private val queue = Channel<DownloadTask>(capacity = Channel.UNLIMITED)
     private val runningKeys = ConcurrentHashMap.newKeySet<String>()
     private val _activeCount = MutableStateFlow(0)
     private val _runningCount = MutableStateFlow(0)
@@ -82,18 +87,24 @@ class DownloadManager(
     val runningCount: StateFlow<Int> = _runningCount.asStateFlow()
     val failures: StateFlow<Map<String, DownloadFailure>> = _failures.asStateFlow()
 
+    /**
+     * 固定 worker 池：无论一次加入 10 首还是 10,000 首，真正存在的下载执行协程始终最多
+     * [MAX_CONCURRENT_DOWNLOADS] 个。队列本身只保存轻量任务对象，不再“一首歌一个挂起协程”。
+     */
+    private val workers: List<Job> = List(MAX_CONCURRENT_DOWNLOADS) {
+        scope.launch {
+            for (task in queue) consume(task)
+        }
+    }
+
     suspend fun enqueue(track: Track) {
-        val gid = track.globalId
-        val key = gid.serialized
-        if (activeTasks.containsKey(key)) return
-        downloads.record(DownloadRecord(gid, DownloadStatus.Queued, 0f, null))
-        submit(key, track)
+        submit(track.globalId.serialized, track)
     }
 
     fun cancel(gid: GlobalId) {
         val key = gid.serialized
         tombstones.add(key)
-        activeTasks.remove(key)?.cancel()
+        cancelTask(key)
         scope.launch {
             downloads.record(DownloadRecord(gid, DownloadStatus.NotDownloaded, 0f, null))
             downloads.remove(gid)
@@ -106,7 +117,7 @@ class DownloadManager(
     fun cancelDownloadOnly(gid: GlobalId) {
         val key = gid.serialized
         tombstones.add(key)
-        activeTasks.remove(key)?.cancel()
+        cancelTask(key)
         scope.launch {
             downloads.record(DownloadRecord(gid, DownloadStatus.NotDownloaded, 0f, null))
             downloads.remove(gid)
@@ -134,7 +145,6 @@ class DownloadManager(
                 DownloadStatus.Queued, DownloadStatus.Downloading -> {
                     val track = trackFor(record.globalId)
                     if (track != null && !activeTasks.containsKey(record.globalId.serialized)) {
-                        downloads.record(DownloadRecord(record.globalId, DownloadStatus.Queued, 0f, null))
                         submit(record.globalId.serialized, track)
                     } else {
                         downloads.record(
@@ -158,41 +168,80 @@ class DownloadManager(
     }
 
     fun release() {
+        queue.close()
         scope.cancel()
     }
 
     /**
      * 入队一个下载。
      *
-     * 并发上限只约束**同时执行**的数量（[semaphore]）；历史实现每次 `submit` 都无条件
-     * `scope.launch` 再挂在信号量上等待，因此「下载整张专辑/整个歌单」会一次性创建成百上千个
-     * 排队协程，各自持有 Track 引用。现在改为惰性启动 + 原子去重：`putIfAbsent` 失败说明同一
-     * key 已在队列中，直接取消本次新建的协程，不产生第二个排队者。
+     * 先用 activeTasks 原子占位，再落 Queued 状态并写入 Channel。固定 worker 池负责消费，
+     * 因此排队数量不会转化成同等数量的挂起协程；同一 key 的重复提交也会被 putIfAbsent 拦截。
      */
-    private fun submit(key: String, track: Track) {
+    private suspend fun submit(key: String, track: Track) {
         tombstones.remove(key)
-        val job = scope.launch(start = CoroutineStart.LAZY) {
-            semaphore.withPermit {
-                runningKeys.add(key)
-                _runningCount.value = runningKeys.size
-                try {
-                    if (!tombstones.contains(key)) runDownload(key, track)
-                } finally {
-                    runningKeys.remove(key)
-                    _runningCount.value = runningKeys.size
-                }
-            }
-        }
-        if (activeTasks.putIfAbsent(key, job) != null) {
-            job.cancel()
-            return
-        }
+        val task = DownloadTask(key, track)
+        if (activeTasks.putIfAbsent(key, task) != null) return
         _activeCount.value = activeTasks.size
-        job.invokeOnCompletion {
-            activeTasks.remove(key)
+        try {
+            downloads.record(DownloadRecord(track.globalId, DownloadStatus.Queued, 0f, null))
+            queue.send(task)
+        } catch (t: Throwable) {
+            activeTasks.remove(key, task)
+            _activeCount.value = activeTasks.size
+            throw t
+        }
+    }
+
+    /**
+     * 取消任务。运行中的任务保留 activeTasks 占位直到真正退出，防止旧下载仍在收尾时同 key
+     * 被立即重新入队并同时操作同一个 staging 文件；尚未运行的任务可立即从 active 集合移除，
+     * Channel 中残留的旧条目会被 worker 识别为 stale 并跳过。
+     */
+    private fun cancelTask(key: String) {
+        val task = activeTasks[key] ?: return
+        tombstones.add(key)
+        val running = task.runningJob
+        if (running != null) {
+            running.cancel()
+        } else if (activeTasks.remove(key, task)) {
             _activeCount.value = activeTasks.size
         }
-        job.start()
+    }
+
+    private suspend fun consume(task: DownloadTask) {
+        val key = task.key
+        if (activeTasks[key] !== task) {
+            if (!activeTasks.containsKey(key)) tombstones.remove(key)
+            return
+        }
+        if (tombstones.contains(key)) {
+            activeTasks.remove(key, task)
+            _activeCount.value = activeTasks.size
+            tombstones.remove(key)
+            return
+        }
+
+        runningKeys.add(key)
+        _runningCount.value = runningKeys.size
+        try {
+            coroutineScope {
+                val job = launch {
+                    if (!tombstones.contains(key)) runDownload(key, task.track)
+                }
+                task.runningJob = job
+                // cancel() 可能恰好发生在 worker 取出任务和 runningJob 赋值之间。
+                if (activeTasks[key] !== task || tombstones.contains(key)) job.cancel()
+                job.join()
+            }
+        } finally {
+            task.runningJob = null
+            runningKeys.remove(key)
+            _runningCount.value = runningKeys.size
+            activeTasks.remove(key, task)
+            _activeCount.value = activeTasks.size
+            if (!activeTasks.containsKey(key)) tombstones.remove(key)
+        }
     }
 
     private suspend fun runDownload(key: String, track: Track) {
@@ -224,10 +273,7 @@ class DownloadManager(
                     var lastWriteAt = 0L
                     val contentLength = body.contentLength()
                     while (source.read(buffer).also { read = it } != -1) {
-                        if (tombstones.contains(key)) {
-                            fail(gid, key, DownloadFailure(DownloadFailureKind.Interrupted, "已取消"))
-                            return
-                        }
+                        if (tombstones.contains(key)) return
                         output.write(buffer, 0, read)
                         total += read
                         val progress = if (contentLength > 0) total.toFloat() / contentLength else 0f
