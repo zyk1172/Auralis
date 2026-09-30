@@ -118,6 +118,10 @@ class DownloadManager(
                 promotionStore.remove(gid)
                 stagingFor(key).delete()
             } finally {
+                // running task 的 OkHttp/文件 finally 可能比 Room cleanup 更晚结束。
+                // canceling key 必须保留到旧 active task 真正退出，否则立即 retry 会被 putIfAbsent
+                // 当成“重复任务”静默丢弃。
+                while (activeTasks.containsKey(key)) delay(CANCEL_REENQUEUE_POLL_MS)
                 cancelingKeys.remove(key)
             }
         }
@@ -134,6 +138,7 @@ class DownloadManager(
                 downloads.remove(gid)
                 stagingFor(key).delete()
             } finally {
+                while (activeTasks.containsKey(key)) delay(CANCEL_REENQUEUE_POLL_MS)
                 cancelingKeys.remove(key)
             }
         }
