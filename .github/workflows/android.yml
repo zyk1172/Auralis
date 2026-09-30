@@ -86,12 +86,20 @@ jobs:
       - name: Build app-tv debug APK (Leanback)
         run: ./gradlew :app-tv:assembleDebug --stacktrace
 
+      # `perf` 变体 = 非 debuggable + R8 全量优化 + 资源收缩 + debug 签名。
+      # 真机流畅性/崩溃结论必须基于它，而不是 debug：debug 构建没有 AOT profile、
+      # 没有 R8 优化，并且带调试开销，会把性能问题放大成噪声。
+      - name: Build installable R8-optimized APKs (perf)
+        run: ./gradlew :app-mobile:assemblePerf :app-tv:assemblePerf --stacktrace
+
       - name: Upload APK artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: auralis-android-debug-apks
+          name: auralis-android-apks
           path: |
             android/app-mobile/build/outputs/apk/debug/*.apk
             android/app-tv/build/outputs/apk/debug/*.apk
+            android/app-mobile/build/outputs/apk/perf/*.apk
+            android/app-tv/build/outputs/apk/perf/*.apk
           if-no-files-found: ignore
