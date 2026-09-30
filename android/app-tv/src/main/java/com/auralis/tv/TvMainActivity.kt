@@ -119,11 +119,10 @@ private fun AppRoot(graph: AuralisGraph) {
     val recommendationIndexState by assistantCoordinator.recommendationIndex.collectAsState()
 
     LaunchedEffect(graph) {
-        runCatching { graph.bootstrapFromLocal() }
+        val restoredServers = runCatching { graph.bootstrapFromLocal() }.getOrDefault(emptyList())
         val savedTheme = runCatching { graph.preferences.selectedThemeId() }.getOrNull()
         AuralisThemeController.current = BuiltInThemes.byId(savedTheme)
-        val saved = runCatching { graph.catalogRepository.servers() }.getOrDefault(emptyList())
-        shellReady = saved.isNotEmpty()
+        shellReady = restoredServers.isNotEmpty()
         // 只有仍停留在 Boot 时才决定首屏路由；否则恢复出来的路由会被冷启动逻辑覆盖。
         if (route == Route.Boot) {
             route = if (shellReady) Route.Shell else Route.ManageServers(showBack = false)
