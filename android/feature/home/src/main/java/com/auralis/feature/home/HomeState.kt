@@ -17,6 +17,8 @@ import com.auralis.core.domain.Track
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 
 /**
@@ -69,21 +71,22 @@ class HomeState(
     /** 进入 Home 后启动：观察 active 服务器 + 布局 + 目录信号自动刷新。 */
     fun start() {
         scope.launch {
-            prefs.activeServerIdFlow.collect { sid ->
-                if (sid == null) {
-                    refresh(null)
-                } else {
-                    val serverId = ServerId(sid)
-                    combine(
-                        prefs.homeLayoutFlow,
-                        repo.homeChangeSignals(serverId),
-                    ) { layout, _ -> layout }
-                        .collect { layoutValue ->
-                            layout = layoutValue
-                            refresh(serverId)
-                        }
+            prefs.activeServerIdFlow
+                .flatMapLatest { sid ->
+                    if (sid == null) {
+                        flowOf(null to null)
+                    } else {
+                        val serverId = ServerId(sid)
+                        combine(
+                            prefs.homeLayoutFlow,
+                            repo.homeChangeSignals(serverId),
+                        ) { layoutValue, _ -> serverId to layoutValue }
+                    }
                 }
-            }
+                .collect { (serverId, layoutValue) ->
+                    if (layoutValue != null) layout = layoutValue
+                    refresh(serverId)
+                }
         }
     }
 
