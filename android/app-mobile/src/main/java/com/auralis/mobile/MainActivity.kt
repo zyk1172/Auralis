@@ -22,6 +22,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -95,8 +97,8 @@ private sealed interface Route {
 
 @Composable
 private fun AppRoot(graph: AuralisGraph) {
-    var route by remember { mutableStateOf<Route>(Route.Boot) }
-    var shellReady by remember { mutableStateOf(false) }
+    var route by rememberSaveable(stateSaver = MobileRouteSaver) { mutableStateOf<Route>(Route.Boot) }
+    var shellReady by rememberSaveable { mutableStateOf(false) }
     var startRecommendationIndexToken by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     val assistantCoordinator = remember(graph, scope) { AssistantCoordinator(graph, scope) }
@@ -191,6 +193,32 @@ private fun AppRoot(graph: AuralisGraph) {
         }
     }
 }
+
+private val MobileRouteSaver: Saver<Route, String> = Saver(
+    save = { route ->
+        when (route) {
+            Route.Boot -> "boot"
+            Route.Shell -> "shell"
+            Route.Settings -> "settings"
+            Route.AiSettings -> "ai-settings"
+            Route.HomeLayoutEdit -> "home-layout"
+            is Route.ManageServers -> if (route.showBack) "servers-back" else "servers"
+            is Route.AddServer -> "servers-back"
+            is Route.EditServer -> "servers-back"
+        }
+    },
+    restore = { tag ->
+        when (tag) {
+            "shell" -> Route.Shell
+            "settings" -> Route.Settings
+            "ai-settings" -> Route.AiSettings
+            "home-layout" -> Route.HomeLayoutEdit
+            "servers" -> Route.ManageServers(showBack = false)
+            "servers-back" -> Route.ManageServers(showBack = true)
+            else -> Route.Boot
+        }
+    },
+)
 
 @Composable
 private fun BootSplash() {
