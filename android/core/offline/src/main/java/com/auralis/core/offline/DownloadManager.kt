@@ -18,10 +18,10 @@ import com.auralis.core.domain.Track
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -56,7 +56,16 @@ class DownloadManager(
     private val urlFactory: suspend (Track) -> String?,
     private val okHttp: OkHttpClient = defaultOkHttpClient(),
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /**
+     * 下载执行器。
+     *
+     * 必须是 `Dispatchers.IO`：`runDownload` 内部用的是**阻塞式** `okHttp.newCall(...).execute()`
+     * 与文件流拷贝。历史上这里用 `Dispatchers.Default`（并行度 = max(2, CPU-1)，4 核手机仅 3），
+     * 而 `MAX_CONCURRENT_DOWNLOADS = 3` 恰好能把 Default 池占满；`AuralisGraph.appScope`
+     * （bootstrap、下载水合、本地扫描、目录解码）同样跑在 Default 上，于是「下载」会把整个应用的
+     * 后台工作饿死，表现为首页不刷新、扫描停滞、界面假死。
+     */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val promotionStore = DownloadPromotionStore(context)
     private val cacheDir = prepareLocalMusicDownloadDirectory(context)
     private val stagingDir = File(context.filesDir, STAGING_DIR_NAME).apply { mkdirs() }
@@ -65,7 +74,6 @@ class DownloadManager(
     private val tombstones = ConcurrentHashMap.newKeySet<String>()
     private val semaphore = Semaphore(MAX_CONCURRENT_DOWNLOADS)
     private val runningKeys = ConcurrentHashMap.newKeySet<String>()
-    private val pendingQueue = ConcurrentLinkedQueue<Pair<String, Track>>()
     private val _activeCount = MutableStateFlow(0)
     private val _runningCount = MutableStateFlow(0)
     private val _failures = MutableStateFlow<Map<String, DownloadFailure>>(emptyMap())
@@ -153,11 +161,17 @@ class DownloadManager(
         scope.cancel()
     }
 
+    /**
+     * 入队一个下载。
+     *
+     * 并发上限只约束**同时执行**的数量（[semaphore]）；历史实现每次 `submit` 都无条件
+     * `scope.launch` 再挂在信号量上等待，因此「下载整张专辑/整个歌单」会一次性创建成百上千个
+     * 排队协程，各自持有 Track 引用。现在改为惰性启动 + 原子去重：`putIfAbsent` 失败说明同一
+     * key 已在队列中，直接取消本次新建的协程，不产生第二个排队者。
+     */
     private fun submit(key: String, track: Track) {
-        if (tombstones.contains(key)) tombstones.remove(key)
-        if (activeTasks.containsKey(key)) return
-        pendingQueue.add(key to track)
-        val job = scope.launch {
+        tombstones.remove(key)
+        val job = scope.launch(start = CoroutineStart.LAZY) {
             semaphore.withPermit {
                 runningKeys.add(key)
                 _runningCount.value = runningKeys.size
@@ -169,13 +183,16 @@ class DownloadManager(
                 }
             }
         }
-        activeTasks[key] = job
+        if (activeTasks.putIfAbsent(key, job) != null) {
+            job.cancel()
+            return
+        }
         _activeCount.value = activeTasks.size
         job.invokeOnCompletion {
             activeTasks.remove(key)
             _activeCount.value = activeTasks.size
-            pendingQueue.removeAll { it.first == key }
         }
+        job.start()
     }
 
     private suspend fun runDownload(key: String, track: Track) {
@@ -204,7 +221,6 @@ class DownloadManager(
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                     var read: Int
                     var total = 0L
-                    var lastWrittenProgress = 0f
                     var lastWriteAt = 0L
                     val contentLength = body.contentLength()
                     while (source.read(buffer).also { read = it } != -1) {
@@ -216,10 +232,11 @@ class DownloadManager(
                         total += read
                         val progress = if (contentLength > 0) total.toFloat() / contentLength else 0f
                         val now = System.currentTimeMillis()
-                        if (progress - lastWrittenProgress >= PROGRESS_WRITE_DELTA ||
-                            now - lastWriteAt >= PROGRESS_WRITE_INTERVAL_MS
-                        ) {
-                            lastWrittenProgress = progress
+                        // 进度写库会 invalidate `downloads` 表，从而让所有 `observe(globalId)` /
+                        // `observeAll` 的订阅者（资料库列表每行一个）重新发射。历史节流是
+                        // 「变化 ≥1% 或 250ms」，最坏 3 并发 × 4 次/秒 = 12 次整表刷新/秒。
+                        // 收敛到 1 次/秒即可保持进度条观感，同时把刷新风暴降为原来的 1/4。
+                        if (now - lastWriteAt >= PROGRESS_WRITE_INTERVAL_MS) {
                             lastWriteAt = now
                             downloads.record(
                                 DownloadRecord(gid, DownloadStatus.Downloading, progress.coerceIn(0f, 1f), null),
@@ -235,6 +252,8 @@ class DownloadManager(
                 }
                 promotionStore.promote(gid)
                 downloads.record(DownloadRecord(gid, DownloadStatus.Downloaded, 1f, cacheFile.absolutePath))
+                // 重试/重新下载成功后清除历史失败记录，避免 failures 只增不减。
+                clearFailure(key)
             }
         } catch (e: CancellationException) {
             if (!tombstones.contains(key)) {
@@ -256,8 +275,32 @@ class DownloadManager(
 
     private suspend fun fail(gid: GlobalId, key: String, failure: DownloadFailure) {
         stagingFor(key).delete()
-        _failures.value = _failures.value + (key to failure)
+        rememberFailure(key, failure)
         downloads.record(DownloadRecord(gid, DownloadStatus.Failed, 0f, null))
+    }
+
+    /**
+     * 记录失败。
+     *
+     * 历史实现是 `_failures.value = _failures.value + (key to failure)`：整表复制且**永不清除**，
+     * 长期使用后 Map 无界增长，且每次失败都触发一次 O(size) 拷贝 + StateFlow 发射。
+     * 现在按插入顺序保留最近 [MAX_REMEMBERED_FAILURES] 条。
+     */
+    private fun rememberFailure(key: String, failure: DownloadFailure) {
+        val next = LinkedHashMap(_failures.value)
+        next.remove(key)
+        next[key] = failure
+        while (next.size > MAX_REMEMBERED_FAILURES) {
+            val oldest = next.keys.firstOrNull() ?: break
+            next.remove(oldest)
+        }
+        _failures.value = next
+    }
+
+    private fun clearFailure(key: String) {
+        val current = _failures.value
+        if (!current.containsKey(key)) return
+        _failures.value = LinkedHashMap(current).apply { remove(key) }
     }
 
     private fun mapHttpFailure(code: Int): DownloadFailure = when (code) {
@@ -275,8 +318,12 @@ class DownloadManager(
         private const val LEGACY_CACHE_DIR_NAME = "trackcache"
         private const val STAGING_DIR_NAME = "downloadstaging"
         const val MAX_CONCURRENT_DOWNLOADS = 3
-        private const val PROGRESS_WRITE_DELTA = 0.01f
-        private const val PROGRESS_WRITE_INTERVAL_MS = 250L
+
+        /** 进度落库节流：1 次/秒（见 runDownload 内的说明）。 */
+        private const val PROGRESS_WRITE_INTERVAL_MS = 1_000L
+
+        /** `failures` 的保留上限，避免长期运行后无界增长。 */
+        private const val MAX_REMEMBERED_FAILURES = 200
 
         private fun prepareLocalMusicDownloadDirectory(context: Context): File {
             val root = File(context.filesDir, "localmusic").apply { mkdirs() }
@@ -296,10 +343,18 @@ class DownloadManager(
             return target
         }
 
+        /**
+         * 下载用 OkHttp。
+         *
+         * `readTimeout = 0`（永不超时）意味着服务器半开连接或卡流时，执行 `execute()` 的线程
+         * 会**永久**占住调度器；配合 `Dispatchers.Default` 时代直接饿死整个应用的后台工作。
+         * 现在改回有限读超时：单次 socket 读 60s 无数据即失败，交给既有的 retry / fail 路径处理。
+         */
         private fun defaultOkHttpClient(): OkHttpClient =
             OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(0, TimeUnit.MILLISECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .callTimeout(30, TimeUnit.MINUTES)
                 .build()
     }
 }
@@ -320,10 +375,19 @@ class DownloadService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val mgr = manager ?: DownloadServiceHolder.manager
         if (mgr == null) {
-            stopSelf()
+            stopSelf(startId)
             return START_NOT_STICKY
         }
         manager = mgr
+        // `startForegroundService` 契约：启动后必须在约 5s 内调用 `startForeground`。
+        // 历史实现直接用 activeCount 决定是否进入前台，于是存在这样的竞态窗口 ——
+        // 收集器读到 count>0 并发出 startForegroundService 之后、本回调执行之前，
+        // 最后一个下载恰好完成使 count 归零，于是走 `count == 0` 分支只执行
+        // `stopForeground/stopSelf`，**从未调用 startForeground**。部分 OEM 与 Android 12+
+        // 会把这种情况上报为 `ForegroundServiceDidNotStartInTimeException`
+        // （android.app.RemoteServiceException）并杀掉进程。
+        // 因此这里无条件先进入前台，再按任务数决定是否降级退出。
+        promoteToForeground()
         updateForegroundState(mgr.activeCount.value)
         if (activeCountJob == null) {
             activeCountJob = scope.launch {
@@ -342,12 +406,15 @@ class DownloadService : Service() {
         super.onDestroy()
     }
 
+    private fun promoteToForeground() {
+        if (isForegrounded) return
+        startForeground(NOTIFICATION_ID, buildNotification())
+        isForegrounded = true
+    }
+
     private fun updateForegroundState(count: Int) {
         if (count > 0) {
-            if (!isForegrounded) {
-                startForeground(NOTIFICATION_ID, buildNotification())
-                isForegrounded = true
-            }
+            promoteToForeground()
             return
         }
         if (isForegrounded) {
