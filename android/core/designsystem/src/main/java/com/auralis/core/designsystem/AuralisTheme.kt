@@ -78,42 +78,39 @@ fun AuralisTheme(
 
     val colors = resolvedTheme.colors
 
-    // MaterialTheme 只是 Compose 组件的底座：产品颜色一律由 LocalAuralisTheme 提供（见上面的
-    // 动画 token）。因此这里刻意用**目标主题**（`theme.colors`，动画期间稳定）而不是逐帧变化的
-    // `colors` 作为 remember key —— 否则主题过渡的 200–420ms 里每一帧都会重建一个约 30 个字段的
-    // ColorScheme 与整套 Typography，属于纯粹的分配抖动。可见的颜色过渡仍由 LocalAuralisTheme 完成。
-    val scheme = remember(theme.colors, theme.colorScheme) {
-        if (theme.colorScheme == AuralisColorScheme.Dark) {
-            darkColorScheme(
-                primary = theme.colors.accent,
-                secondary = theme.colors.accentSecondary,
-                background = theme.colors.background,
-                surface = theme.colors.surface,
-                surfaceVariant = theme.colors.elevated,
-                error = theme.colors.error,
-                onPrimary = theme.colors.background,
-                onSecondary = theme.colors.background,
-                onBackground = theme.colors.primaryText,
-                onSurface = theme.colors.primaryText,
-                onSurfaceVariant = theme.colors.secondaryText,
-                outline = theme.colors.separator,
-            )
-        } else {
-            lightColorScheme(
-                primary = theme.colors.accent,
-                secondary = theme.colors.accentSecondary,
-                background = theme.colors.background,
-                surface = theme.colors.surface,
-                surfaceVariant = theme.colors.elevated,
-                error = theme.colors.error,
-                onPrimary = theme.colors.background,
-                onSecondary = theme.colors.background,
-                onBackground = theme.colors.primaryText,
-                onSurface = theme.colors.primaryText,
-                onSurfaceVariant = theme.colors.secondaryText,
-                outline = theme.colors.separator,
-            )
-        }
+    // Material3 控件（Switch / OutlinedTextField / Button 等）仍会读取 MaterialTheme.colorScheme。
+    // 因此 ColorScheme 必须和 Auralis 的动画 token 同步，否则主题切换时业务颜色渐变、
+    // 默认 Material 控件却会瞬间跳到目标色，形成两套不同步的视觉状态。
+    val scheme = if (theme.colorScheme == AuralisColorScheme.Dark) {
+        darkColorScheme(
+            primary = colors.accent,
+            secondary = colors.accentSecondary,
+            background = colors.background,
+            surface = colors.surface,
+            surfaceVariant = colors.elevated,
+            error = colors.error,
+            onPrimary = colors.background,
+            onSecondary = colors.background,
+            onBackground = colors.primaryText,
+            onSurface = colors.primaryText,
+            onSurfaceVariant = colors.secondaryText,
+            outline = colors.separator,
+        )
+    } else {
+        lightColorScheme(
+            primary = colors.accent,
+            secondary = colors.accentSecondary,
+            background = colors.background,
+            surface = colors.surface,
+            surfaceVariant = colors.elevated,
+            error = colors.error,
+            onPrimary = colors.background,
+            onSecondary = colors.background,
+            onBackground = colors.primaryText,
+            onSurface = colors.primaryText,
+            onSurfaceVariant = colors.secondaryText,
+            outline = colors.separator,
+        )
     }
     val typography = remember(theme.typography) { appleLikeTypography(theme.typography) }
 
