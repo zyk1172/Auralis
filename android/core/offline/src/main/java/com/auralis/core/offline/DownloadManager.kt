@@ -79,6 +79,7 @@ class DownloadManager(
     )
 
     private val activeTasks = ConcurrentHashMap<String, DownloadTask>()
+    private val activeCalls = ConcurrentHashMap<String, okhttp3.Call>()
     private val tombstones = ConcurrentHashMap.newKeySet<String>()
     private val cancelingKeys = ConcurrentHashMap.newKeySet<String>()
     private val queue = Channel<DownloadTask>(capacity = Channel.UNLIMITED)
@@ -224,6 +225,9 @@ class DownloadManager(
     private fun cancelTask(key: String) {
         val task = activeTasks[key] ?: return
         tombstones.add(key)
+        // Coroutine cancellation alone cannot interrupt blocking Call.execute()/source.read().
+        // Cancel the OkHttp Call as well so the socket closes immediately.
+        activeCalls[key]?.cancel()
         val running = task.runningJob
         if (running != null) {
             running.cancel()
@@ -288,7 +292,9 @@ class DownloadManager(
             }
             downloads.record(DownloadRecord(gid, DownloadStatus.Downloading, 0f, null))
             val request = Request.Builder().url(url).build()
-            okHttp.newCall(request).execute().use { response ->
+            val call = okHttp.newCall(request)
+            activeCalls[key] = call
+            call.execute().use { response ->
                 if (!response.isSuccessful) {
                     fail(gid, key, mapHttpFailure(response.code))
                     return
@@ -338,14 +344,30 @@ class DownloadManager(
                 downloads.record(DownloadRecord(gid, DownloadStatus.Failed, 0f, null))
             }
         } catch (e: java.net.SocketTimeoutException) {
-            fail(gid, key, DownloadFailure(DownloadFailureKind.TimedOut, "下载超时"))
+            if (!tombstones.contains(key)) {
+                fail(gid, key, DownloadFailure(DownloadFailureKind.TimedOut, "下载超时"))
+            }
         } catch (e: java.net.UnknownHostException) {
-            fail(gid, key, DownloadFailure(DownloadFailureKind.NetworkUnavailable, "网络不可用"))
+            if (!tombstones.contains(key)) {
+                fail(gid, key, DownloadFailure(DownloadFailureKind.NetworkUnavailable, "网络不可用"))
+            }
         } catch (e: IOException) {
-            fail(gid, key, DownloadFailure(DownloadFailureKind.NetworkUnavailable, "网络错误"))
+            // OkHttp Call.cancel() intentionally surfaces as IOException. User cancellation must not
+            // be converted into a Failed/NetworkUnavailable record after cancel cleanup wrote NotDownloaded.
+            if (!tombstones.contains(key)) {
+                fail(gid, key, DownloadFailure(DownloadFailureKind.NetworkUnavailable, "网络错误"))
+            }
         } catch (e: Exception) {
-            fail(gid, key, DownloadFailure(DownloadFailureKind.Unknown, "未知错误"))
+            if (!tombstones.contains(key)) {
+                fail(gid, key, DownloadFailure(DownloadFailureKind.Unknown, "未知错误"))
+            }
         } finally {
+            activeCalls.remove(key)?.let { call ->
+                if (!call.isCanceled()) {
+                    // Completed calls need no work; this only closes a still-live call on exceptional exit.
+                    call.cancel()
+                }
+            }
             staging.delete()
             tombstones.remove(key)
         }
