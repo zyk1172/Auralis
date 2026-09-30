@@ -562,7 +562,11 @@ class RoomCatalogRepository(
             annotationDao.observeFavoriteTrackCount(sid),
             annotationDao.observePlayedTrackCount(sid),
             downloadDao.observeDownloadedCount(sid),
-        ) { _, _, _, _, _ -> Unit }.distinctUntilChanged()
+        ) { trackCount, playlistCount, favoriteCount, playedCount, downloadedCount ->
+            // 必须先对真实计数快照去重，再映射成 Unit。
+            // 旧实现先映射成 Unit 再 distinctUntilChanged()，第一次发射后所有后续变化都会被吞掉。
+            listOf(trackCount, playlistCount, favoriteCount, playedCount, downloadedCount)
+        }.distinctUntilChanged().map { Unit }
     }
 
     // -------------------------------------------------------------- downloads
