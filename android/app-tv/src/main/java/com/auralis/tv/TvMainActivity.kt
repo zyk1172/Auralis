@@ -123,9 +123,12 @@ private fun AppRoot(graph: AuralisGraph) {
         val savedTheme = runCatching { graph.preferences.selectedThemeId() }.getOrNull()
         AuralisThemeController.current = BuiltInThemes.byId(savedTheme)
         shellReady = restoredServers.isNotEmpty()
-        // 只有仍停留在 Boot 时才决定首屏路由；否则恢复出来的路由会被冷启动逻辑覆盖。
-        if (route == Route.Boot) {
-            route = if (shellReady) Route.Shell else Route.ManageServers(showBack = false)
+        route = when {
+            // 保存的 Shell/Settings 路由只有在至少一个服务器成功恢复时才有意义。
+            // 若 registry 没有可用 client，统一降级到服务器列表，避免永远停在 splash。
+            !shellReady -> Route.ManageServers(showBack = false)
+            route == Route.Boot -> Route.Shell
+            else -> route
         }
     }
 
