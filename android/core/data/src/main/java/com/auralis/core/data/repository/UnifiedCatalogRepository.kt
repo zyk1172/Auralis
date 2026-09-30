@@ -15,13 +15,17 @@ import com.auralis.core.domain.SearchResults
 import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
 import com.auralis.core.domain.TrackQuality
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.withContext
 
 /**
  * Public read facade for Auralis' unified library.
@@ -31,6 +35,10 @@ import kotlinx.coroutines.flow.merge
  * Home and the Assistant see one library without inventing a fake ServerAccount for local files.
  * Server mutations still delegate to the real remote repository; local annotations/history are
  * handled by the local-library runtime and therefore never fall through to OpenSubsonic.
+ *
+ * 合并后的集合运算统一通过 [CatalogDispatcher] 下放到 Default。这里保持冷 Flow 语义：
+ * 页面没有订阅时不持续收集，也不在 appScope 中永久保留 replay 快照。列表层会把收藏/
+ * 下载状态提升到父级统一订阅，避免过去“每行各自收集一次全量集合”的重复工作。
  */
 class UnifiedCatalogRepository(
     private val delegate: CachedCatalogRepository,
@@ -41,33 +49,35 @@ class UnifiedCatalogRepository(
 
     override fun observeArtists(serverId: ServerId?): Flow<List<Artist>> {
         val localFlow = local.tracks.map(::localArtists).distinctUntilChanged()
-        if (serverId == null || serverId == localServerId) return localFlow
+        if (serverId == null || serverId == localServerId) return localFlow.flowOn(CatalogDispatcher)
         return combine(delegate.observeArtists(serverId), localFlow) { remote, localItems ->
             remote + localItems
-        }
+        }.flowOn(CatalogDispatcher)
     }
 
     override fun observeAlbums(serverId: ServerId?): Flow<List<Album>> {
         val localFlow = local.tracks.map(::localAlbums).distinctUntilChanged()
-        if (serverId == null || serverId == localServerId) return localFlow
+        if (serverId == null || serverId == localServerId) return localFlow.flowOn(CatalogDispatcher)
         return combine(delegate.observeAlbums(serverId), localFlow) { remote, localItems ->
             remote + localItems
-        }
+        }.flowOn(CatalogDispatcher)
     }
 
     override fun observeTracks(serverId: ServerId?): Flow<List<Track>> {
+        // 纯本地路径直接透传 StateFlow：它本身就是快照，没有需要下放的计算，且
+        // SharedFlow 上的 flowOn 是无效操作（kotlinx.coroutines 已将其标记为 ERROR）。
         if (serverId == null || serverId == localServerId) return local.tracks
         return combine(delegate.observeTracks(serverId), local.tracks) { remote, localTracks ->
             TrackQuality.deduplicatedPreferringQuality(remote + localTracks)
-        }
+        }.flowOn(CatalogDispatcher)
     }
 
     override fun observeGenres(serverId: ServerId?): Flow<List<Genre>> {
         val localFlow = local.tracks.map(::localGenres).distinctUntilChanged()
-        if (serverId == null || serverId == localServerId) return localFlow
+        if (serverId == null || serverId == localServerId) return localFlow.flowOn(CatalogDispatcher)
         return combine(delegate.observeGenres(serverId), localFlow) { remote, localItems ->
             mergeGenresForRead(remote, localItems)
-        }
+        }.flowOn(CatalogDispatcher)
     }
 
     override fun observePlaylists(serverId: ServerId?): Flow<List<Playlist>> =
@@ -77,33 +87,45 @@ class UnifiedCatalogRepository(
         if (globalId.serverId == localServerId) local.track(globalId) else delegate.track(globalId)
 
     override suspend fun album(globalId: GlobalId): Album? =
-        if (globalId.serverId == localServerId) localAlbums(local.tracks.value).firstOrNull { it.globalId == globalId }
-        else delegate.album(globalId)
+        if (globalId.serverId == localServerId) {
+            withContext(CatalogDispatcher) { localAlbums(local.tracks.value).firstOrNull { it.globalId == globalId } }
+        } else {
+            delegate.album(globalId)
+        }
 
     override suspend fun artist(globalId: GlobalId): Artist? =
-        if (globalId.serverId == localServerId) localArtists(local.tracks.value).firstOrNull { it.globalId == globalId }
-        else delegate.artist(globalId)
+        if (globalId.serverId == localServerId) {
+            withContext(CatalogDispatcher) { localArtists(local.tracks.value).firstOrNull { it.globalId == globalId } }
+        } else {
+            delegate.artist(globalId)
+        }
 
     override suspend fun playlist(globalId: GlobalId): Playlist? =
         if (globalId.serverId == localServerId) null else delegate.playlist(globalId)
 
     override suspend fun albumTracks(albumGlobalId: GlobalId): List<Track> =
         if (albumGlobalId.serverId == localServerId) {
-            local.tracks.value.filter { it.albumId.value == albumGlobalId.remoteId }
+            withContext(CatalogDispatcher) {
+                local.tracks.value.filter { it.albumId.value == albumGlobalId.remoteId }
+            }
         } else {
             delegate.albumTracks(albumGlobalId)
         }
 
     override suspend fun artistAlbums(artistGlobalId: GlobalId): List<Album> =
         if (artistGlobalId.serverId == localServerId) {
-            localAlbums(local.tracks.value).filter { it.artistId.value == artistGlobalId.remoteId }
+            withContext(CatalogDispatcher) {
+                localAlbums(local.tracks.value).filter { it.artistId.value == artistGlobalId.remoteId }
+            }
         } else {
             delegate.artistAlbums(artistGlobalId)
         }
 
     override suspend fun artistTracks(artistGlobalId: GlobalId): List<Track> =
         if (artistGlobalId.serverId == localServerId) {
-            local.tracks.value.filter { it.artistId.value == artistGlobalId.remoteId }
+            withContext(CatalogDispatcher) {
+                local.tracks.value.filter { it.artistId.value == artistGlobalId.remoteId }
+            }
         } else {
             delegate.artistTracks(artistGlobalId)
         }
@@ -112,18 +134,21 @@ class UnifiedCatalogRepository(
         if (playlistGlobalId.serverId == localServerId) emptyList() else delegate.playlistTracks(playlistGlobalId)
 
     override suspend fun search(serverId: ServerId?, query: String, limit: Int): SearchResults {
-        val localResult = localSearch(query, limit)
+        // 本地全库扫描必须后台执行：即使当前选中的是远端服务器，这一步也无条件先跑一次。
+        val localResult = withContext(CatalogDispatcher) { localSearch(query, limit) }
         if (serverId == null || serverId == localServerId) return localResult
         val remote = delegate.search(serverId, query, limit)
-        return SearchResults(
-            songs = TrackQuality.deduplicatedPreferringQuality(remote.songs + localResult.songs).take(limit),
-            albums = (remote.albums + localResult.albums).distinctBy { it.globalId }.take(limit),
-            artists = (remote.artists + localResult.artists).distinctBy { it.globalId }.take(limit),
-            playlists = remote.playlists.take(limit),
-        )
+        return withContext(CatalogDispatcher) {
+            SearchResults(
+                songs = TrackQuality.deduplicatedPreferringQuality(remote.songs + localResult.songs).take(limit),
+                albums = (remote.albums + localResult.albums).distinctBy { it.globalId }.take(limit),
+                artists = (remote.artists + localResult.artists).distinctBy { it.globalId }.take(limit),
+                playlists = remote.playlists.take(limit),
+            )
+        }
     }
 
-    override suspend fun stats(serverId: ServerId?): LibraryStats {
+    override suspend fun stats(serverId: ServerId?): LibraryStats = withContext(CatalogDispatcher) {
         val localTracks = local.tracks.value
         val localStats = LibraryStats(
             artistCount = localArtists(localTracks).size,
@@ -131,9 +156,9 @@ class UnifiedCatalogRepository(
             trackCount = localTracks.size,
             playlistCount = 0,
         )
-        if (serverId == null || serverId == localServerId) return localStats
+        if (serverId == null || serverId == localServerId) return@withContext localStats
         val remote = delegate.stats(serverId)
-        return LibraryStats(
+        LibraryStats(
             artistCount = remote.artistCount + localStats.artistCount,
             albumCount = remote.albumCount + localStats.albumCount,
             trackCount = remote.trackCount + localStats.trackCount,
@@ -143,24 +168,25 @@ class UnifiedCatalogRepository(
 
     override fun observeFavoriteTracks(serverId: ServerId?): Flow<List<Track>> {
         val localFavorites = local.tracks.map { tracks -> tracks.filter { it.isFavorite } }.distinctUntilChanged()
-        if (serverId == null || serverId == localServerId) return localFavorites
+        if (serverId == null || serverId == localServerId) return localFavorites.flowOn(CatalogDispatcher)
         return combine(delegate.observeFavoriteTracks(serverId), localFavorites) { remote, localItems ->
             TrackQuality.deduplicatedPreferringQuality(remote + localItems)
-        }
+        }.flowOn(CatalogDispatcher)
     }
 
     override suspend fun favoriteTracks(serverId: ServerId?): List<Track> =
         observeFavoriteTracks(serverId).firstSnapshot()
 
-    override suspend fun mostPlayedTracks(serverId: ServerId?, limit: Int): List<Track> {
-        val localItems = local.tracks.value
-            .map { it to local.playCount(it.globalId) }
-            .filter { it.second > 0 }
-            .sortedByDescending { it.second }
-            .map { it.first }
-        if (serverId == null || serverId == localServerId) return localItems.take(limit)
-        return TrackQuality.deduplicatedPreferringQuality(delegate.mostPlayedTracks(serverId, limit) + localItems).take(limit)
-    }
+    override suspend fun mostPlayedTracks(serverId: ServerId?, limit: Int): List<Track> =
+        withContext(CatalogDispatcher) {
+            val localItems = local.tracks.value
+                .map { it to local.playCount(it.globalId) }
+                .filter { it.second > 0 }
+                .sortedByDescending { it.second }
+                .map { it.first }
+            if (serverId == null || serverId == localServerId) return@withContext localItems.take(limit)
+            TrackQuality.deduplicatedPreferringQuality(delegate.mostPlayedTracks(serverId, limit) + localItems).take(limit)
+        }
 
     override suspend fun setFavorite(globalId: GlobalId, kind: FavoriteKind, value: Boolean) {
         if (globalId.serverId == localServerId) {
@@ -194,16 +220,18 @@ class UnifiedCatalogRepository(
     override suspend fun isDisliked(globalId: GlobalId): Boolean =
         if (globalId.serverId == localServerId) local.isDisliked(globalId) else delegate.isDisliked(globalId)
 
-    override suspend fun dislikedIds(serverId: ServerId): Set<GlobalId> =
-        if (serverId == null || serverId == localServerId) local.dislikedIds() else delegate.dislikedIds(serverId) + local.dislikedIds()
+    override suspend fun dislikedIds(serverId: ServerId): Set<GlobalId> = withContext(CatalogDispatcher) {
+        if (serverId == localServerId) local.dislikedIds() else delegate.dislikedIds(serverId) + local.dislikedIds()
+    }
 
     override fun observeDislikedIds(serverId: ServerId?): Flow<List<GlobalId>> {
         val localFlow = combine(local.tracks, local.revision) { _, _ -> local.dislikedIds().toList() }
             .distinctUntilChanged()
+            .flowOn(CatalogDispatcher)
         if (serverId == null || serverId == localServerId) return localFlow
         return combine(delegate.observeDislikedIds(serverId), localFlow) { remote, localItems ->
             (remote + localItems).distinct()
-        }
+        }.flowOn(CatalogDispatcher)
     }
 
     override suspend fun isFavorite(globalId: GlobalId): Boolean =
@@ -214,66 +242,72 @@ class UnifiedCatalogRepository(
         if (globalId.serverId == localServerId) kind == FavoriteKind.Track && local.track(globalId)?.isFavorite == true
         else delegate.isFavorite(globalId, kind)
 
-    override suspend fun neverPlayed(serverId: ServerId?, limit: Int): List<Track> {
-        val localItems = local.tracks.value.filter { local.playCount(it.globalId) == 0 }
-        if (serverId == null || serverId == localServerId) return localItems.take(limit)
-        return TrackQuality.deduplicatedPreferringQuality(delegate.neverPlayed(serverId, limit) + localItems).take(limit)
-    }
-
-    override suspend fun longUnplayed(serverId: ServerId?, limit: Int): List<Track> {
-        val localItems = local.tracks.value.sortedBy { local.lastPlayedMillis(it.globalId) ?: Long.MIN_VALUE }
-        if (serverId == null || serverId == localServerId) return localItems.take(limit)
-        return TrackQuality.deduplicatedPreferringQuality(delegate.longUnplayed(serverId, limit) + localItems).take(limit)
-    }
-
-    override suspend fun recentlyPlayed(serverId: ServerId?, limit: Int): List<Track> {
-        val localItems = local.tracks.value
-            .mapNotNull { track -> local.lastPlayedMillis(track.globalId)?.let { track to it } }
-            .sortedByDescending { it.second }
-            .map { it.first }
-        if (serverId == null || serverId == localServerId) return localItems.take(limit)
-        return TrackQuality.deduplicatedPreferringQuality(delegate.recentlyPlayed(serverId, limit) + localItems).take(limit)
-    }
-
-    override suspend fun randomTracks(serverId: ServerId?, limit: Int): List<Track> {
-        val localItems = local.tracks.value.shuffled().take(limit)
-        if (serverId == null || serverId == localServerId) return localItems
-        return TrackQuality.deduplicatedPreferringQuality(delegate.randomTracks(serverId, limit) + localItems)
-            .shuffled()
-            .take(limit)
-    }
-
-    override suspend fun favoriteRandom(serverId: ServerId?, limit: Int): List<Track> {
-        val localItems = local.tracks.value.filter { it.isFavorite }.shuffled().take(limit)
-        if (serverId == null || serverId == localServerId) return localItems
-        return TrackQuality.deduplicatedPreferringQuality(delegate.favoriteRandom(serverId, limit) + localItems)
-            .shuffled()
-            .take(limit)
-    }
-
-    override suspend fun favoriteCount(serverId: ServerId?): Int {
-        val localCount = local.tracks.value.count { it.isFavorite }
-        return if (serverId == null || serverId == localServerId) localCount else delegate.favoriteCount(serverId) + localCount
-    }
-
-    override suspend fun playedTrackCount(serverId: ServerId?): Int {
-        val localCount = local.tracks.value.count { local.playCount(it.globalId) > 0 }
-        return if (serverId == null || serverId == localServerId) localCount else delegate.playedTrackCount(serverId) + localCount
-    }
-
-    override suspend fun genreTracks(serverId: ServerId?, genreName: String): List<Track> {
-        val localItems = local.tracks.value.filter { track ->
-            track.genres.any { it.equals(genreName, ignoreCase = true) }
+    override suspend fun neverPlayed(serverId: ServerId?, limit: Int): List<Track> =
+        withContext(CatalogDispatcher) {
+            val localItems = local.tracks.value.filter { local.playCount(it.globalId) == 0 }
+            if (serverId == null || serverId == localServerId) return@withContext localItems.take(limit)
+            TrackQuality.deduplicatedPreferringQuality(delegate.neverPlayed(serverId, limit) + localItems).take(limit)
         }
-        if (serverId == null || serverId == localServerId) return localItems
-        return TrackQuality.deduplicatedPreferringQuality(delegate.genreTracks(serverId, genreName) + localItems)
+
+    override suspend fun longUnplayed(serverId: ServerId?, limit: Int): List<Track> =
+        withContext(CatalogDispatcher) {
+            val localItems = local.tracks.value.sortedBy { local.lastPlayedMillis(it.globalId) ?: Long.MIN_VALUE }
+            if (serverId == null || serverId == localServerId) return@withContext localItems.take(limit)
+            TrackQuality.deduplicatedPreferringQuality(delegate.longUnplayed(serverId, limit) + localItems).take(limit)
+        }
+
+    override suspend fun recentlyPlayed(serverId: ServerId?, limit: Int): List<Track> =
+        withContext(CatalogDispatcher) {
+            val localItems = local.tracks.value
+                .mapNotNull { track -> local.lastPlayedMillis(track.globalId)?.let { track to it } }
+                .sortedByDescending { it.second }
+                .map { it.first }
+            if (serverId == null || serverId == localServerId) return@withContext localItems.take(limit)
+            TrackQuality.deduplicatedPreferringQuality(delegate.recentlyPlayed(serverId, limit) + localItems).take(limit)
+        }
+
+    override suspend fun randomTracks(serverId: ServerId?, limit: Int): List<Track> =
+        withContext(CatalogDispatcher) {
+            val localItems = local.tracks.value.shuffled().take(limit)
+            if (serverId == null || serverId == localServerId) return@withContext localItems
+            TrackQuality.deduplicatedPreferringQuality(delegate.randomTracks(serverId, limit) + localItems)
+                .shuffled()
+                .take(limit)
+        }
+
+    override suspend fun favoriteRandom(serverId: ServerId?, limit: Int): List<Track> =
+        withContext(CatalogDispatcher) {
+            val localItems = local.tracks.value.filter { it.isFavorite }.shuffled().take(limit)
+            if (serverId == null || serverId == localServerId) return@withContext localItems
+            TrackQuality.deduplicatedPreferringQuality(delegate.favoriteRandom(serverId, limit) + localItems)
+                .shuffled()
+                .take(limit)
+        }
+
+    override suspend fun favoriteCount(serverId: ServerId?): Int = withContext(CatalogDispatcher) {
+        val localCount = local.tracks.value.count { it.isFavorite }
+        if (serverId == null || serverId == localServerId) localCount else delegate.favoriteCount(serverId) + localCount
     }
+
+    override suspend fun playedTrackCount(serverId: ServerId?): Int = withContext(CatalogDispatcher) {
+        val localCount = local.tracks.value.count { local.playCount(it.globalId) > 0 }
+        if (serverId == null || serverId == localServerId) localCount else delegate.playedTrackCount(serverId) + localCount
+    }
+
+    override suspend fun genreTracks(serverId: ServerId?, genreName: String): List<Track> =
+        withContext(CatalogDispatcher) {
+            val localItems = local.tracks.value.filter { track ->
+                track.genres.any { it.equals(genreName, ignoreCase = true) }
+            }
+            if (serverId == null || serverId == localServerId) return@withContext localItems
+            TrackQuality.deduplicatedPreferringQuality(delegate.genreTracks(serverId, genreName) + localItems)
+        }
 
     fun homeChangeSignals(serverId: ServerId?): Flow<Unit> =
         merge(
             if (serverId == null || serverId == localServerId) flowOf(Unit) else delegate.homeChangeSignals(serverId),
             local.revision.map { Unit },
-        )
+        ).flowOn(CatalogDispatcher)
 
     suspend fun mergeGenres(serverId: ServerId, values: List<Genre>) {
         if (serverId != localServerId) delegate.mergeGenres(serverId, values)
@@ -321,20 +355,29 @@ class UnifiedCatalogRepository(
             )
         }.sortedWith(compareBy<Album> { it.artistName.lowercase() }.thenBy { it.title.lowercase() })
 
-    private fun localGenres(tracks: List<Track>): List<Genre> =
-        tracks.flatMap { it.genres }
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .groupingBy { it.lowercase() }
-            .eachCount()
-            .map { (normalized, count) ->
-                val display = tracks.asSequence().flatMap { it.genres.asSequence() }
-                    .firstOrNull { it.trim().lowercase() == normalized }
-                    ?.trim()
-                    ?: normalized
-                Genre(display, count, localServerId)
+    /**
+     * 归一化流派表。
+     *
+     * 历史实现对**每个**归一化流派重新遍历全部曲目的 genres 去找显示名（O(G×N)），且每次比较
+     * 都新建 `trim().lowercase()` 字符串。改为一趟建立「归一化 → 首个原始写法」映射后整体降为
+     * O(N)，比较不再产生额外分配。
+     */
+    private fun localGenres(tracks: List<Track>): List<Genre> {
+        val displayByNormalized = HashMap<String, String>()
+        val countByNormalized = HashMap<String, Int>()
+        tracks.forEach { track ->
+            track.genres.forEach { raw ->
+                val trimmed = raw.trim()
+                if (trimmed.isEmpty()) return@forEach
+                val normalized = trimmed.lowercase()
+                displayByNormalized.putIfAbsent(normalized, trimmed)
+                countByNormalized[normalized] = (countByNormalized[normalized] ?: 0) + 1
             }
-            .sortedBy { it.name.lowercase() }
+        }
+        return countByNormalized.map { (normalized, count) ->
+            Genre(displayByNormalized[normalized] ?: normalized, count, localServerId)
+        }.sortedBy { it.name.lowercase() }
+    }
 
     private fun mergeGenresForRead(remote: List<Genre>, localItems: List<Genre>): List<Genre> {
         val result = LinkedHashMap<String, Genre>()
@@ -347,4 +390,13 @@ class UnifiedCatalogRepository(
     }
 
     private suspend fun <T> Flow<List<T>>.firstSnapshot(): List<T> = first()
+
+    private companion object {
+        /**
+         * 目录合并/解码的执行器。
+         *
+         * 用 Default 而不是 IO：JSON 反序列化与集合去重是 CPU 工作，IO 池需要留给网络与文件。
+         */
+        val CatalogDispatcher: CoroutineDispatcher = Dispatchers.Default
+    }
 }

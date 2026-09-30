@@ -46,10 +46,17 @@ import com.auralis.core.domain.DownloadStatus
 import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
 
-/** 时长格式化（对齐 Swift `formatDuration`：m:ss）。 */
+/**
+ * 时长格式化（对齐 Swift `formatDuration`：m:ss）。
+ *
+ * 用字符串模板而不是 `String.format`：后者每次都会新建 `java.util.Formatter` 并解析格式串，
+ * 而本函数在每一行曲目的 composition 中被调用（列表可达 1000 项），滚动时逐行触发。
+ */
 fun formatDurationSeconds(seconds: Double): String {
     val total = seconds.toInt().coerceAtLeast(0)
-    return "%d:%02d".format(total / 60, total % 60)
+    val minutes = total / 60
+    val remaining = total % 60
+    return "$minutes:${remaining.toString().padStart(2, '0')}"
 }
 
 /**

@@ -126,10 +126,21 @@ fun MobileShell(
         ),
         label = "auralis-shell-dock-progress",
     )
-    val scrollBottomClearance = (
-        AuralisChrome.expandedInteractionHeight.value +
-            (AuralisChrome.compactInteractionHeight.value - AuralisChrome.expandedInteractionHeight.value) * dockProgress
-        ).dp
+
+    /**
+     * 列表底部预留取「两端离散值」，而不是逐帧动画插值。
+     *
+     * 这个值最终会进入 `LazyColumn/LazyGrid` 的 `contentPadding`。历史实现按 `dockProgress`
+     * 线性插值，于是 Dock 展开/收起的 560ms（约 34 帧）内，每个页面每帧都要重新 measure 整个
+     * 列表，并且 `rememberDockBottomReservation` 还会因 padding 变化再 `scrollBy` 一次 —— 每帧
+     * 两次布局。改成在同一阈值（与 `AppleBottomChrome` 切换折叠形态的阈值一致）上取值后，
+     * 整个动画期间 padding 最多变化一次，而底边锚定由 reservation 逻辑负责。
+     */
+    val scrollBottomClearance = if (dockProgress >= AuralisChrome.compactInteractionThreshold) {
+        AuralisChrome.compactInteractionHeight
+    } else {
+        AuralisChrome.expandedInteractionHeight
+    }
 
     fun setDockCompact(compact: Boolean) {
         dockCompactTarget = compact && canCompactDock

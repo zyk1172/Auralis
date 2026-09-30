@@ -108,13 +108,19 @@ jobs:
           yes | "${sdkmanager}" --licenses >/dev/null 2>&1 || true
           "${sdkmanager}" "platforms;android-36" "build-tools;35.0.0" >/dev/null
 
-      - name: Run Android tests and build installable debug APKs
+      - name: Run Android tests and build installable APKs
         run: |
           set -euo pipefail
+          # 同时产出 debug 与 perf 两种变体：
+          # - debug：便于带日志排查；
+          # - perf ：非 debuggable + R8 优化 + 资源收缩（debug 签名），这才是流畅性与崩溃
+          #   结论应该基于的产物。仅交付 debug 会让所有性能反馈都被调试开销污染。
           ./gradlew --no-daemon --max-workers=2 \
             testDebugUnitTest \
             :app-mobile:assembleDebug \
             :app-tv:assembleDebug \
+            :app-mobile:assemblePerf \
+            :app-tv:assemblePerf \
             -PauralisVersionName="${VERSION_NAME}" \
             -PauralisVersionCode="${VERSION_CODE}" \
             --stacktrace
@@ -128,13 +134,17 @@ jobs:
 
           mobile_apk="$(find app-mobile/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
           tv_apk="$(find app-tv/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
-          for apk in "${mobile_apk}" "${tv_apk}"; do
+          mobile_perf_apk="$(find app-mobile/build/outputs/apk/perf -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          tv_perf_apk="$(find app-tv/build/outputs/apk/perf -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          for apk in "${mobile_apk}" "${tv_apk}" "${mobile_perf_apk}" "${tv_perf_apk}"; do
             [[ -s "${apk}" ]] || { echo "::error::APK was not produced: ${apk}" >&2; exit 1; }
             "${apksigner}" verify --verbose "${apk}"
           done
 
           output_dir="${GITHUB_WORKSPACE}/release-assets"
           mkdir -p "${output_dir}"
+          cp "${mobile_perf_apk}" "${output_dir}/Auralis-${RELEASE_TAG}-Android-Mobile.apk"
+          cp "${tv_perf_apk}" "${output_dir}/Auralis-${RELEASE_TAG}-Android-TV.apk"
           cp "${mobile_apk}" "${output_dir}/Auralis-${RELEASE_TAG}-Android-Mobile-debug.apk"
           cp "${tv_apk}" "${output_dir}/Auralis-${RELEASE_TAG}-Android-TV-debug.apk"
 

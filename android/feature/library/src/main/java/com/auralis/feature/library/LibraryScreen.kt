@@ -25,6 +25,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -639,18 +640,27 @@ internal fun TrackRows(
     val listState = rememberLazyListState()
     listState.rememberDockBottomReservation(bottomPadding)
 
+    val favoriteIds = rememberFavoriteIds(graph, serverId)
+    val downloadRecords by remember(serverId) {
+        graph.catalogRepository.observeAll(serverId)
+    }.collectAsState(initial = emptyList())
+    val downloadsById = remember(downloadRecords) {
+        downloadRecords.associateBy { it.globalId }
+    }
+
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = bottomPadding + AuralisSpacing.large),
     ) {
-        items(tracks, key = { it.globalId.serialized }) { track ->
+        itemsIndexed(tracks, key = { _, track -> track.globalId.serialized }) { index, track ->
             LibraryTrackRow(
                 graph = graph,
-                serverId = serverId,
                 track = track,
+                isFavorite = favoriteIds?.contains(track.globalId) == true,
+                download = downloadsById[track.globalId],
                 showDownloadBadge = showDownloadBadge,
-                onClick = { onPlayTracks(tracks, tracks.indexOfFirst { it.globalId == track.globalId }.coerceAtLeast(0)) },
+                onClick = { onPlayTracks(tracks, index) },
                 onPlayNext = { onPlayNext(listOf(track)) },
                 onAppendToQueue = { onAppendToQueue(listOf(track)) },
             )

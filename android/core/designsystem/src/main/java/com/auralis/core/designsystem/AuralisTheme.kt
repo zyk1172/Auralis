@@ -14,6 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -76,7 +77,11 @@ fun AuralisTheme(
     )
 
     val colors = resolvedTheme.colors
-    val scheme = if (resolvedTheme.colorScheme == AuralisColorScheme.Dark) {
+
+    // Material3 控件（Switch / OutlinedTextField / Button 等）仍会读取 MaterialTheme.colorScheme。
+    // 因此 ColorScheme 必须和 Auralis 的动画 token 同步，否则主题切换时业务颜色渐变、
+    // 默认 Material 控件却会瞬间跳到目标色，形成两套不同步的视觉状态。
+    val scheme = if (theme.colorScheme == AuralisColorScheme.Dark) {
         darkColorScheme(
             primary = colors.accent,
             secondary = colors.accentSecondary,
@@ -107,6 +112,7 @@ fun AuralisTheme(
             outline = colors.separator,
         )
     }
+    val typography = remember(theme.typography) { appleLikeTypography(theme.typography) }
 
     CompositionLocalProvider(
         LocalAuralisTheme provides resolvedTheme,
@@ -114,7 +120,7 @@ fun AuralisTheme(
     ) {
         MaterialTheme(
             colorScheme = scheme,
-            typography = appleLikeTypography(resolvedTheme.typography),
+            typography = typography,
             content = content,
         )
     }

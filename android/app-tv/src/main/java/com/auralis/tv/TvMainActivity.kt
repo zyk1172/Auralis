@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.auralis.tv
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -24,6 +28,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -31,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.AuralisTheme
 import com.auralis.core.designsystem.AuralisThemeController
@@ -53,9 +60,17 @@ import com.auralis.feature.settings.SettingsScreen
  * top-level TV routes; only the first-run server picker may fall through to Activity exit.
  */
 class TvMainActivity : ComponentActivity() {
+    /**
+     * Android 13+ 需要运行时授权 `POST_NOTIFICATIONS`，否则播放/下载前台服务的通知在 TV 上
+     * 不可见（服务仍可运行）。清单已声明该权限，但历史上从未在代码里请求过。
+     */
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* 结果只决定通知可见性 */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        requestNotificationPermissionIfNeeded()
         setContent {
             val reduceMotion = rememberSystemReduceMotion()
             AuralisTheme(
@@ -68,6 +83,14 @@ class TvMainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) return
+        runCatching { notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }
     }
 }
 
@@ -84,8 +107,10 @@ private sealed interface Route {
 
 @Composable
 private fun AppRoot(graph: AuralisGraph) {
-    var route by remember { mutableStateOf<Route>(Route.Boot) }
-    var shellReady by remember { mutableStateOf(false) }
+    // 顶层路由必须可跨配置变化/进程重建存活：TV 上切换语言、分辨率或 HDMI 重协商都会重建
+    // Activity，历史上 `remember` 会把它重置为 Boot 并重新 bootstrapFromLocal，用户被弹回启动画面。
+    var route by rememberSaveable(stateSaver = TvRouteSaver) { mutableStateOf<Route>(Route.Boot) }
+    var shellReady by rememberSaveable { mutableStateOf(false) }
     var startRecommendationIndexToken by remember { mutableIntStateOf(0) }
     val shellStateHolder = rememberSaveableStateHolder()
     val settingsStateHolder = rememberSaveableStateHolder()
@@ -94,12 +119,17 @@ private fun AppRoot(graph: AuralisGraph) {
     val recommendationIndexState by assistantCoordinator.recommendationIndex.collectAsState()
 
     LaunchedEffect(graph) {
-        runCatching { graph.bootstrapFromLocal() }
+        val restoredServers = runCatching { graph.bootstrapFromLocal() }.getOrDefault(emptyList())
         val savedTheme = runCatching { graph.preferences.selectedThemeId() }.getOrNull()
         AuralisThemeController.current = BuiltInThemes.byId(savedTheme)
-        val saved = runCatching { graph.catalogRepository.servers() }.getOrDefault(emptyList())
-        shellReady = saved.isNotEmpty()
-        route = if (shellReady) Route.Shell else Route.ManageServers(showBack = false)
+        shellReady = restoredServers.isNotEmpty()
+        route = when {
+            // 保存的 Shell/Settings 路由只有在至少一个服务器成功恢复时才有意义。
+            // 若 registry 没有可用 client，统一降级到服务器列表，避免永远停在 splash。
+            !shellReady -> Route.ManageServers(showBack = false)
+            route == Route.Boot -> Route.Shell
+            else -> route
+        }
     }
 
     val currentRoute = route
@@ -209,6 +239,38 @@ private fun AppRoot(graph: AuralisGraph) {
         }
     }
 }
+
+/**
+ * [Route] 的可保存表示。
+ *
+ * 只有能够无损重建的路由才会被恢复；`AddServer` / `EditServer` 携带 `ServerAccount`
+ * （不可序列化、且可能已被删除），因此退化为服务器列表页而不是回到启动画面。
+ */
+private val TvRouteSaver: Saver<Route, String> = Saver(
+    save = { route ->
+        when (route) {
+            Route.Boot -> "boot"
+            Route.Shell -> "shell"
+            Route.Settings -> "settings"
+            Route.AiSettings -> "ai-settings"
+            Route.HomeLayoutEdit -> "home-layout"
+            is Route.ManageServers -> if (route.showBack) "servers-back" else "servers"
+            is Route.AddServer -> "servers-back"
+            is Route.EditServer -> "servers-back"
+        }
+    },
+    restore = { tag ->
+        when (tag) {
+            "shell" -> Route.Shell
+            "settings" -> Route.Settings
+            "ai-settings" -> Route.AiSettings
+            "home-layout" -> Route.HomeLayoutEdit
+            "servers" -> Route.ManageServers(showBack = false)
+            "servers-back" -> Route.ManageServers(showBack = true)
+            else -> Route.Boot
+        }
+    },
+)
 
 @Composable
 private fun TvSplash() {

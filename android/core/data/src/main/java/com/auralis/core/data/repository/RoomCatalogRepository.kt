@@ -44,14 +44,17 @@ import com.auralis.core.domain.Playlist
 import com.auralis.core.domain.ServerAccount
 import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import com.auralis.core.domain.SearchResults
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -78,6 +81,63 @@ class RoomCatalogRepository(
 ) : CatalogRepository, DownloadRepository {
 
     private val json: Json = json
+
+    /**
+     * 目录读取的执行上下文。
+     *
+     * Room 的 suspend DAO 只把 SQL 段放到自己的 query executor；**返回之后的**
+     * `map { decode<T>(payload) }`、全表 `filter`、`sortedBy` 都在**调用者上下文**执行。
+     * 调用者常常是 Compose（`collectAsState` 在 Main 收集）或 `LaunchedEffect`，
+     * 因此万级曲库下这些「看起来只是 map」的代码会直接把主线程阻塞成百上千毫秒。
+     *
+     * 约定：本类所有「可能读取多行并逐行 JSON 解码」的读取路径都必须显式切到
+     * [CatalogDispatcher]；只有单行点查与 COUNT 允许留在调用者上下文。
+     */
+    private suspend fun <T> onCatalogDispatcher(block: suspend () -> T): T =
+        withContext(CatalogDispatcher) { block() }
+
+    /**
+     * `IN (...)` 分批读取。
+     *
+     * Room 会把集合展开成等量的绑定变量，超过 SQLite 上限（旧版本 999）会直接抛
+     * `SQLiteException: too many SQL variables`。收藏/歌单/快照提交都可能超过该上限，
+     * 所以读写两侧统一走分块。
+     */
+    private suspend fun trackEntitiesByIds(globalIds: List<String>): Map<String, TrackEntity> {
+        if (globalIds.isEmpty()) return emptyMap()
+        if (globalIds.size <= TRACK_ID_CHUNK) {
+            return trackDao.getMany(globalIds).associateBy { it.globalId }
+        }
+        val merged = LinkedHashMap<String, TrackEntity>(globalIds.size)
+        globalIds.chunked(TRACK_ID_CHUNK).forEach { chunk ->
+            trackDao.getMany(chunk).forEach { merged[it.globalId] = it }
+        }
+        return merged
+    }
+
+    private suspend fun artistEntitiesByIds(globalIds: List<String>): Map<String, ArtistEntity> {
+        if (globalIds.isEmpty()) return emptyMap()
+        if (globalIds.size <= TRACK_ID_CHUNK) {
+            return artistDao.getMany(globalIds).associateBy { it.globalId }
+        }
+        val merged = LinkedHashMap<String, ArtistEntity>(globalIds.size)
+        globalIds.chunked(TRACK_ID_CHUNK).forEach { chunk ->
+            artistDao.getMany(chunk).forEach { merged[it.globalId] = it }
+        }
+        return merged
+    }
+
+    private suspend fun albumEntitiesByIds(globalIds: List<String>): Map<String, AlbumEntity> {
+        if (globalIds.isEmpty()) return emptyMap()
+        if (globalIds.size <= TRACK_ID_CHUNK) {
+            return albumDao.getMany(globalIds).associateBy { it.globalId }
+        }
+        val merged = LinkedHashMap<String, AlbumEntity>(globalIds.size)
+        globalIds.chunked(TRACK_ID_CHUNK).forEach { chunk ->
+            albumDao.getMany(chunk).forEach { merged[it.globalId] = it }
+        }
+        return merged
+    }
 
     // ------------------------------------------------------------- server
 
@@ -135,19 +195,29 @@ class RoomCatalogRepository(
     // ------------------------------------------------------------ observe
 
     override fun observeArtists(serverId: ServerId?) =
-        artistDao.observeAll(serverId?.value).map { it.map { e -> decode<Artist>(e.payload) } }
+        artistDao.observeAll(serverId?.value)
+            .map { it.map { e -> decode<Artist>(e.payload) } }
+            .flowOn(CatalogDispatcher)
 
     override fun observeAlbums(serverId: ServerId?) =
-        albumDao.observeAll(serverId?.value).map { it.map { e -> decode<Album>(e.payload) } }
+        albumDao.observeAll(serverId?.value)
+            .map { it.map { e -> decode<Album>(e.payload) } }
+            .flowOn(CatalogDispatcher)
 
     override fun observeTracks(serverId: ServerId?) =
-        trackDao.observeAll(serverId?.value).map { it.map { e -> decode<Track>(e.payload) } }
+        trackDao.observeAll(serverId?.value)
+            .map { it.map { e -> decode<Track>(e.payload) } }
+            .flowOn(CatalogDispatcher)
 
     override fun observeGenres(serverId: ServerId?) =
-        genreDao.observeAll(serverId?.value).map { it.map { e -> decode<Genre>(e.payload) } }
+        genreDao.observeAll(serverId?.value)
+            .map { it.map { e -> decode<Genre>(e.payload) } }
+            .flowOn(CatalogDispatcher)
 
     override fun observePlaylists(serverId: ServerId?) =
-        playlistDao.observeAll(serverId?.value).map { it.map { e -> decode<Playlist>(e.payload) } }
+        playlistDao.observeAll(serverId?.value)
+            .map { it.map { e -> decode<Playlist>(e.payload) } }
+            .flowOn(CatalogDispatcher)
 
     // -------------------------------------------------------------- getters
 
@@ -164,49 +234,59 @@ class RoomCatalogRepository(
         playlistDao.get(globalId.serialized)?.let { decode<Playlist>(it.payload) }
 
     override suspend fun albumTracks(albumGlobalId: GlobalId) =
-        trackDao.byAlbum(albumGlobalId.serialized).map { decode<Track>(it.payload) }
+        onCatalogDispatcher { trackDao.byAlbum(albumGlobalId.serialized).map { decode<Track>(it.payload) } }
 
     override suspend fun artistAlbums(artistGlobalId: GlobalId) =
-        albumDao.byArtist(artistGlobalId.serialized).map { decode<Album>(it.payload) }
+        onCatalogDispatcher { albumDao.byArtist(artistGlobalId.serialized).map { decode<Album>(it.payload) } }
 
     override suspend fun artistTracks(artistGlobalId: GlobalId) =
-        trackDao.byArtist(artistGlobalId.serialized).map { decode<Track>(it.payload) }
+        onCatalogDispatcher { trackDao.byArtist(artistGlobalId.serialized).map { decode<Track>(it.payload) } }
 
-    override suspend fun playlistTracks(playlistGlobalId: GlobalId): List<Track> {
-        val trackGids = playlistDao.tracks(playlistGlobalId.serialized).map { it.trackGid }
-        if (trackGids.isEmpty()) return emptyList()
-        val byId = trackDao.getMany(trackGids).associateBy { it.globalId }
-        return trackGids.mapNotNull { byId[it]?.let { e -> decode<Track>(e.payload) } }
-    }
+    override suspend fun playlistTracks(playlistGlobalId: GlobalId): List<Track> =
+        onCatalogDispatcher {
+            val trackGids = playlistDao.tracks(playlistGlobalId.serialized).map { it.trackGid }
+            if (trackGids.isEmpty()) return@onCatalogDispatcher emptyList()
+            val byId = trackEntitiesByIds(trackGids)
+            trackGids.mapNotNull { byId[it]?.let { e -> decode<Track>(e.payload) } }
+        }
 
     // -------------------------------------------------------------- derived
 
     override suspend fun favoriteTracks(serverId: ServerId?): List<Track> =
-        resolveTrackGids(annotationDao.favoriteTrackIds(serverId?.value))
+        onCatalogDispatcher { resolveTrackGids(annotationDao.favoriteTrackIds(serverId?.value)) }
 
     override suspend fun mostPlayedTracks(serverId: ServerId?, limit: Int) =
-        trackDao.mostPlayed(serverId?.value, limit).map { decode<Track>(it.payload) }
+        onCatalogDispatcher { trackDao.mostPlayed(serverId?.value, limit).map { decode<Track>(it.payload) } }
 
     override suspend fun search(serverId: ServerId?, query: String, limit: Int): SearchResults {
         val trimmed = query.trim()
         if (trimmed.isEmpty()) return SearchResults()
-        val songs = trackDao.searchFts(toFtsMatch(trimmed), serverId?.value, limit)
-            .map { decode<Track>(it.payload) }
-        val albums = albumDao.observeAll(serverId?.value).first()
-            .filter { it.name.contains(trimmed, ignoreCase = true) }.take(limit)
-            .map { decode<Album>(it.payload) }
-        val artists = artistDao.observeAll(serverId?.value).first()
-            .filter { it.name.contains(trimmed, ignoreCase = true) }.take(limit)
-            .map { decode<Artist>(it.payload) }
-        val playlists = playlistDao.observeAll(serverId?.value).first()
-            .filter { it.name.contains(trimmed, ignoreCase = true) }.take(limit)
-            .map { decode<Playlist>(it.payload) }
-        return SearchResults(songs, albums, artists, playlists)
+        // 搜索每敲一个字都会走一次：全表读 + 逐行解码必须在后台，否则直接阻塞输入。
+        return onCatalogDispatcher {
+            val songs = trackDao.searchFts(toFtsMatch(trimmed), serverId?.value, limit)
+                .map { decode<Track>(it.payload) }
+            val albums = albumDao.observeAll(serverId?.value).first()
+                .filter { it.name.contains(trimmed, ignoreCase = true) }.take(limit)
+                .map { decode<Album>(it.payload) }
+            val artists = artistDao.observeAll(serverId?.value).first()
+                .filter { it.name.contains(trimmed, ignoreCase = true) }.take(limit)
+                .map { decode<Artist>(it.payload) }
+            val playlists = playlistDao.observeAll(serverId?.value).first()
+                .filter { it.name.contains(trimmed, ignoreCase = true) }.take(limit)
+                .map { decode<Playlist>(it.payload) }
+            SearchResults(songs, albums, artists, playlists)
+        }
     }
 
+    /**
+     * 资料库四项统计。
+     *
+     * 历史实现把 `artists`/`albums` **全表读进内存再取 `.size`**，只为拿两个计数。改成
+     * SQL `COUNT(*)` 后，即使十万级曲库也只是一次索引扫描，不再产生任何解码与列表分配。
+     */
     override suspend fun stats(serverId: ServerId?): LibraryStats = LibraryStats(
-        artistCount = artistDao.observeAll(serverId?.value).first().size,
-        albumCount = albumDao.observeAll(serverId?.value).first().size,
+        artistCount = artistDao.count(serverId?.value),
+        albumCount = albumDao.count(serverId?.value),
         trackCount = trackDao.count(serverId?.value),
         playlistCount = playlistDao.count(serverId?.value),
     )
@@ -285,14 +365,16 @@ class RoomCatalogRepository(
         annotationDao.isDisliked(globalId.serialized)
 
     override suspend fun dislikedIds(serverId: ServerId): Set<GlobalId> =
-        annotationDao.dislikedIds(serverId.value).mapNotNullTo(mutableSetOf()) { raw ->
-            runCatching { GlobalId.parse(raw) }.getOrNull()
+        onCatalogDispatcher {
+            annotationDao.dislikedIds(serverId.value).mapNotNullTo(mutableSetOf()) { raw ->
+                runCatching { GlobalId.parse(raw) }.getOrNull()
+            }
         }
 
     override fun observeDislikedIds(serverId: ServerId?): Flow<List<GlobalId>> =
         annotationDao.observeDislikedIds(serverId?.value).map { list ->
             list.mapNotNull { raw -> runCatching { GlobalId.parse(raw) }.getOrNull() }
-        }
+        }.flowOn(CatalogDispatcher)
 
     override suspend fun isFavorite(globalId: GlobalId): Boolean =
         isFavorite(globalId, FavoriteKind.Track)
@@ -301,22 +383,22 @@ class RoomCatalogRepository(
         annotationDao.isFavorite(globalId.serialized, kind.name) ?: false
 
     override suspend fun neverPlayed(serverId: ServerId?, limit: Int) =
-        trackDao.neverPlayed(serverId?.value, limit).map { decode<Track>(it.payload) }
+        onCatalogDispatcher { trackDao.neverPlayed(serverId?.value, limit).map { decode<Track>(it.payload) } }
 
     override suspend fun longUnplayed(serverId: ServerId?, limit: Int) =
-        trackDao.longUnplayed(serverId?.value, limit).map { decode<Track>(it.payload) }
+        onCatalogDispatcher { trackDao.longUnplayed(serverId?.value, limit).map { decode<Track>(it.payload) } }
 
     override suspend fun recentlyAdded(serverId: ServerId?, limit: Int) =
-        trackDao.recentlyAdded(serverId?.value, limit).map { decode<Track>(it.payload) }
+        onCatalogDispatcher { trackDao.recentlyAdded(serverId?.value, limit).map { decode<Track>(it.payload) } }
 
     override suspend fun recentlyPlayed(serverId: ServerId?, limit: Int) =
-        trackDao.recentlyPlayed(serverId?.value, limit).map { decode<Track>(it.payload) }
+        onCatalogDispatcher { trackDao.recentlyPlayed(serverId?.value, limit).map { decode<Track>(it.payload) } }
 
     override suspend fun randomTracks(serverId: ServerId?, limit: Int) =
-        trackDao.random(serverId?.value, limit).map { decode<Track>(it.payload) }
+        onCatalogDispatcher { trackDao.random(serverId?.value, limit).map { decode<Track>(it.payload) } }
 
     override suspend fun favoriteRandom(serverId: ServerId?, limit: Int) =
-        trackDao.favoriteRandom(serverId?.value, limit).map { decode<Track>(it.payload) }
+        onCatalogDispatcher { trackDao.favoriteRandom(serverId?.value, limit).map { decode<Track>(it.payload) } }
 
     override suspend fun topArtists(serverId: ServerId?, limit: Int): List<Artist> =
         homeTopArtists(serverId, limit).map { it.first }
@@ -336,40 +418,50 @@ class RoomCatalogRepository(
 
     /** 已下载曲目（下载完整文件，首页「下载」模块）。 */
     override suspend fun downloadedTracks(serverId: ServerId?, limit: Int): List<Track> =
-        trackDao.downloadedTracks(serverId?.value, limit).map { decode<Track>(it.payload) }
+        onCatalogDispatcher {
+            trackDao.downloadedTracks(serverId?.value, limit).map { decode<Track>(it.payload) }
+        }
 
     /** 近 [days] 天内同步入库的曲目（首页「最近添加」30 天窗口）。 */
     override suspend fun recentlyAddedWithin(
         serverId: ServerId?,
         days: Int,
         limit: Int,
-    ): List<Track> = trackDao.recentlyAddedSince(
-        serverId?.value,
-        sinceMillis = System.currentTimeMillis() - days * 86_400_000L,
-        limit = limit,
-    ).map { decode<Track>(it.payload) }
+    ): List<Track> = onCatalogDispatcher {
+        trackDao.recentlyAddedSince(
+            serverId?.value,
+            sinceMillis = System.currentTimeMillis() - days * 86_400_000L,
+            limit = limit,
+        ).map { decode<Track>(it.payload) }
+    }
 
     /**
      * 常听艺术家：按艺人名下全部曲目播放量真实聚合降序（对齐 Apple
      * `HomeSnapshotBuilder` 的 artistTotals），返回 (艺人, 播放量) 对。
+     *
+     * 历史实现是「聚合结果里每一行各发一次 `artistDao.get`」的 N+1 查询；改为一次分批
+     * `IN` 批量取回后再解码，避免长列表把 SQLite 往返放大成 O(艺人数量)。
      */
-    override suspend fun homeTopArtists(serverId: ServerId?, limit: Int): List<Pair<Artist, Int>> {
-        val rows = trackDao.artistPlayTotals(serverId?.value, limit)
-        if (rows.isEmpty()) return emptyList()
-        val byGid = rows.mapNotNull { row ->
-            artistDao.get(row.ownerId)?.let { decode<Artist>(it.payload) to row.total }
+    override suspend fun homeTopArtists(serverId: ServerId?, limit: Int): List<Pair<Artist, Int>> =
+        onCatalogDispatcher {
+            val rows = trackDao.artistPlayTotals(serverId?.value, limit)
+            if (rows.isEmpty()) return@onCatalogDispatcher emptyList()
+            val byId = artistEntitiesByIds(rows.map { it.ownerId })
+            rows.mapNotNull { row ->
+                byId[row.ownerId]?.let { decode<Artist>(it.payload) to row.total }
+            }
         }
-        return byGid
-    }
 
     /** 常听专辑：语义同上，返回 (专辑, 播放量) 对。 */
-    override suspend fun homeTopAlbums(serverId: ServerId?, limit: Int): List<Pair<Album, Int>> {
-        val rows = trackDao.albumPlayTotals(serverId?.value, limit)
-        if (rows.isEmpty()) return emptyList()
-        return rows.mapNotNull { row ->
-            albumDao.get(row.ownerId)?.let { decode<Album>(it.payload) to row.total }
+    override suspend fun homeTopAlbums(serverId: ServerId?, limit: Int): List<Pair<Album, Int>> =
+        onCatalogDispatcher {
+            val rows = trackDao.albumPlayTotals(serverId?.value, limit)
+            if (rows.isEmpty()) return@onCatalogDispatcher emptyList()
+            val byId = albumEntitiesByIds(rows.map { it.ownerId })
+            rows.mapNotNull { row ->
+                byId[row.ownerId]?.let { decode<Album>(it.payload) to row.total }
+            }
         }
-    }
 
     // ------------------------------------------------------------ Library（S4）
 
@@ -379,17 +471,19 @@ class RoomCatalogRepository(
         val sid = serverId?.value
         return annotationDao.observeFavoriteTrackCount(sid).flatMapLatest {
             flow { emit(resolveTrackGids(annotationDao.favoriteTrackIds(sid))) }
-        }
+        }.flowOn(CatalogDispatcher)
     }
 
     /** 流派筛选：对齐 Swift `tracks(for:)` 的内存过滤语义（track.genres，大小写不敏感）。 */
     override suspend fun genreTracks(serverId: ServerId?, genreName: String): List<Track> {
         if (genreName.isBlank()) return emptyList()
-        return trackDao.observeAll(serverId?.value).first()
-            .asSequence()
-            .mapNotNull { runCatching { decode<Track>(it.payload) }.getOrNull() }
-            .filter { track -> track.genres.any { it.equals(genreName, ignoreCase = true) } }
-            .toList()
+        return onCatalogDispatcher {
+            trackDao.observeAll(serverId?.value).first()
+                .asSequence()
+                .mapNotNull { runCatching { decode<Track>(it.payload) }.getOrNull() }
+                .filter { track -> track.genres.any { it.equals(genreName, ignoreCase = true) } }
+                .toList()
+        }
     }
 
     /** 歌单详情落盘：单事务更新歌单头并整体替换其曲目关联。 */
@@ -467,16 +561,24 @@ class RoomCatalogRepository(
             annotationDao.observeFavoriteTrackCount(sid),
             annotationDao.observePlayedTrackCount(sid),
             downloadDao.observeDownloadedCount(sid),
-        ) { _, _, _, _, _ -> Unit }.distinctUntilChanged()
+        ) { trackCount, playlistCount, favoriteCount, playedCount, downloadedCount ->
+            // 必须先对真实计数快照去重，再映射成 Unit。
+            // 旧实现先映射成 Unit 再 distinctUntilChanged()，第一次发射后所有后续变化都会被吞掉。
+            listOf(trackCount, playlistCount, favoriteCount, playedCount, downloadedCount)
+        }.distinctUntilChanged().map { Unit }
     }
 
     // -------------------------------------------------------------- downloads
 
     override fun observe(globalId: GlobalId): Flow<DownloadRecord?> =
-        downloadDao.observe(globalId.serialized).map { it?.let(::toDownloadRecord) }
+        downloadDao.observe(globalId.serialized)
+            .map { it?.let(::toDownloadRecord) }
+            .flowOn(CatalogDispatcher)
 
     override fun observeAll(serverId: ServerId?): Flow<List<DownloadRecord>> =
-        downloadDao.observeAll(serverId?.value).map { it.map(::toDownloadRecord) }
+        downloadDao.observeAll(serverId?.value)
+            .map { rows -> rows.mapNotNull(::toDownloadRecord) }
+            .flowOn(CatalogDispatcher)
 
     override suspend fun localPath(globalId: GlobalId): String? =
         downloadDao.get(globalId.serialized)?.localPath
@@ -685,14 +787,21 @@ class RoomCatalogRepository(
             }
             // 歌单曲目关联：直接替换（在 withTransaction 内避免嵌套 @Transaction DAO 方法）。
             playlists.forEach { playlist ->
-                val trackGids = playlist.trackIds.mapNotNull { tid ->
-                    trackDao.get("$sid:${tid.value}")?.globalId
-                }
-                playlistDao.deleteTracks(playlist.globalId.serialized)
-                if (trackGids.isNotEmpty()) {
-                    playlistDao.insertTracks(
-                        trackGids.mapIndexed { index, gid -> PlaylistTrackEntity(playlist.globalId.serialized, index, gid) },
-                    )
+                // 历史实现是「每个 trackId 一次 trackDao.get」的点查循环：一张千首歌单就是
+                // 一千次 SQLite 往返，全部压在同一次事务里，长时间持锁并阻塞其它读写。
+                // 改为按批 `IN` 读取后再按原顺序过滤。
+                val requested = playlist.trackIds.map { "$sid:${it.value}" }
+                if (requested.isEmpty()) {
+                    playlistDao.deleteTracks(playlist.globalId.serialized)
+                } else {
+                    val existing = trackEntitiesByIds(requested)
+                    val trackGids = requested.filter { existing.containsKey(it) }
+                    playlistDao.deleteTracks(playlist.globalId.serialized)
+                    if (trackGids.isNotEmpty()) {
+                        playlistDao.insertTracks(
+                            trackGids.mapIndexed { index, gid -> PlaylistTrackEntity(playlist.globalId.serialized, index, gid) },
+                        )
+                    }
                 }
             }
         }
@@ -726,13 +835,15 @@ class RoomCatalogRepository(
 
     /** 歌单曲目关联是否仅用于已入库曲目（帮助判断 playlist 是否需要按需拉详情）。 */
     suspend fun playlistTrackGids(playlistGlobalId: GlobalId): List<String> =
-        playlistDao.tracks(playlistGlobalId.serialized).map { it.trackGid }
+        onCatalogDispatcher {
+            playlistDao.tracks(playlistGlobalId.serialized).map { it.trackGid }
+        }
 
     // ---------------------------------------------------------------- helpers
 
     private suspend fun resolveTrackGids(gids: List<String>): List<Track> {
         if (gids.isEmpty()) return emptyList()
-        val byId = trackDao.getMany(gids).associateBy { it.globalId }
+        val byId = trackEntitiesByIds(gids)
         return gids.mapNotNull { byId[it]?.let { e -> decode<Track>(e.payload) } }
     }
 
@@ -745,13 +856,23 @@ class RoomCatalogRepository(
         credentialReference = e.credentialReference,
     )
 
-    private fun toDownloadRecord(e: DownloadEntity) = DownloadRecord(
-        globalId = GlobalId.parse(e.globalId),
-        status = DownloadStatus.valueOf(e.state),
-        progress = e.progress,
-        localPath = e.localPath,
-        updatedAtMillis = e.updatedAt,
-    )
+    /**
+     * `downloads` 行的映射是**容错解析**：`state` 与 `global_id` 都可能来自历史版本或外部
+     * 写入。历史实现直接 `GlobalId.parse` / `DownloadStatus.valueOf`，一旦遇到脏数据就在
+     * Flow 的 `map` 里抛出，导致整个观察流终止（列表永久不刷新，或冒泡成崩溃）。
+     * 现在非法行降级为 `null` 并被过滤掉。
+     */
+    private fun toDownloadRecord(e: DownloadEntity): DownloadRecord? {
+        val globalId = runCatching { GlobalId.parse(e.globalId) }.getOrNull() ?: return null
+        val status = runCatching { DownloadStatus.valueOf(e.state) }.getOrNull() ?: return null
+        return DownloadRecord(
+            globalId = globalId,
+            status = status,
+            progress = e.progress,
+            localPath = e.localPath,
+            updatedAtMillis = e.updatedAt,
+        )
+    }
 
     /** FTS MATCH 表达式：每个词加引号 + 前缀通配。 */
     private fun toFtsMatch(query: String): String = query
@@ -765,6 +886,17 @@ class RoomCatalogRepository(
         /** 单批写入行数：低于 SQLite 变量数上限(999)，避免大批量 IN/UPSERT 崩。 */
         const val WRITE_CHUNK = 800
         const val FTS_DELETE_CHUNK = 800
+
+        /** `IN (...)` 读取的批次上限，与写入侧保持同一安全水位。 */
+        const val TRACK_ID_CHUNK = 800
+
+        /**
+         * 目录解码/排序的执行器。
+         *
+         * 用 Default 而不是 IO：这里的工作是 CPU 密集的 JSON 反序列化与集合运算，
+         * 不是阻塞 IO；IO 池需要留给网络与文件。
+         */
+        private val CatalogDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.Default
     }
 }
 

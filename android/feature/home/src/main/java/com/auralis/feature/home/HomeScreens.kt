@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -340,11 +341,14 @@ private fun TrackShelf(
     onPlayTracks: (tracks: List<Track>, startIndex: Int) -> Unit,
 ) {
     LazyRow(horizontalArrangement = Arrangement.spacedBy(AuralisChrome.homeCardSpacing)) {
-        items(module.tracks, key = { it.globalId.serialized }) { track ->
-            val index = module.tracks.indexOfFirst { it.globalId.serialized == track.globalId.serialized }
+        // 用 itemsIndexed 直接拿下标。历史实现对每个 item 做
+        // `indexOfFirst { it.globalId.serialized == track.globalId.serialized }`：
+        // 单个货架 O(n²)，而且 `GlobalId.serialized` 是计算属性 —— 每次比较都新建字符串
+        // （24 项 × 24 次 × 2 个字符串 ≈ 每次首页重建上千次分配）。
+        itemsIndexed(module.tracks, key = { _, track -> track.globalId.serialized }) { index, track ->
             HomeTrackCard(
                 track = track,
-                onClick = { onPlayTracks(module.tracks, index.coerceAtLeast(0)) },
+                onClick = { onPlayTracks(module.tracks, index) },
             )
         }
     }

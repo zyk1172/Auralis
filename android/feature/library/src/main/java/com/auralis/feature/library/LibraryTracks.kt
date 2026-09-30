@@ -74,21 +74,27 @@ import kotlinx.coroutines.launch
  * 立即播放 / 下一首播放 / 加入队列 / 添加到歌单 / 下载·取消·删缓存 / 收藏切换。
  */
 
-/** 收藏曲目 id 集合（null = 首帧未就绪）。收藏表变化自动更新。 */
+/**
+ * 收藏曲目 id 集合（null = 首帧未就绪）。
+ *
+ * 这个函数应当在列表/详情的父级调用一次，再把 isFavorite 传给各行。这样每次收藏变化只做
+ * 一次全量 List -> Set 转换，而不是每个可见行各自订阅、各自构造一份 HashSet。
+ */
 @Composable
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-internal fun rememberFavoriteIds(graph: AuralisGraph, serverId: ServerId): androidx.compose.runtime.State<Set<GlobalId>?> {
+internal fun rememberFavoriteIds(graph: AuralisGraph, serverId: ServerId): Set<GlobalId>? {
     val flow = remember(serverId) { graph.catalogRepository.observeFavoriteTracks(serverId) }
     val tracks by flow.collectAsState(initial = null)
-    return remember(tracks) { mutableStateOf(tracks?.map { it.globalId }?.toSet()) }
+    return remember(tracks) { tracks?.mapTo(HashSet()) { it.globalId } }
 }
 
-/** 行组件：徽标态由 downloads 表与 favorites 表实时观察驱动。 */
+/** 行组件：下载/收藏状态由父级列表统一观察后下传。 */
 @Composable
 internal fun LibraryTrackRow(
     graph: AuralisGraph,
-    serverId: ServerId,
     track: Track,
+    isFavorite: Boolean,
+    download: DownloadRecord?,
     onClick: () -> Unit,
     onPlayNext: () -> Unit,
     onAppendToQueue: () -> Unit,
@@ -100,9 +106,6 @@ internal fun LibraryTrackRow(
 ) {
     val colors = LocalAuralisTheme.current.colors
     val context = LocalContext.current
-    val download by remember(track.globalId) { graph.catalogRepository.observe(track.globalId) }.collectAsState(initial = null)
-    val favorites = rememberFavoriteIds(graph, serverId)
-    val isFavorite = favorites.value?.contains(track.globalId) == true
     var addingToPlaylist by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()

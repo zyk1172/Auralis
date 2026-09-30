@@ -39,6 +39,35 @@ android {
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
+
+    /**
+     * 变体职责：
+     * - `debug`：开发用，保持 debuggable + 不开启 R8，便于断点与 Compose 工具；
+     * - `release`：正式产物，R8 全量收缩/优化 + 资源收缩；
+     * - `perf`：**交给测试者安装的性能验证产物**。它与 `release` 完全同构（非 debuggable +
+     *   已 R8 优化），但用默认 debug 签名，因此 CI 无需配置正式签名即可产出可安装 APK。
+     *   测试者拿到的流畅性/崩溃结论应基于该变体，而不是 `debug`。
+     */
+    buildTypes {
+        getByName("debug") {
+            isMinifyEnabled = false
+        }
+        getByName("release") {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "$rootDir/proguard-rules.pro",
+            )
+        }
+        create("perf") {
+            initWith(getByName("release"))
+            // 无正式签名时也能产出可安装 APK；不引入 applicationIdSuffix，避免测试者丢失已存服务器状态。
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
+            isDebuggable = false
+        }
+    }
 }
 
 dependencies {

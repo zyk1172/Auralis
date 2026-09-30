@@ -389,6 +389,16 @@ private fun TrackListWithHeader(
     val listState = rememberLazyListState()
     listState.rememberDockBottomReservation(bottomChromeClearance)
 
+    // 详情页同样只订阅一次收藏/下载集合；行组件只消费布尔值和对应记录。
+    val rowServerId = serverId ?: load.tracks.first().serverId
+    val favoriteIds = rememberFavoriteIds(graph, rowServerId)
+    val downloadRecords by remember(rowServerId) {
+        graph.catalogRepository.observeAll(rowServerId)
+    }.collectAsState(initial = emptyList())
+    val downloadsById = remember(downloadRecords) {
+        downloadRecords.associateBy { it.globalId }
+    }
+
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
@@ -509,8 +519,9 @@ private fun TrackListWithHeader(
             val track = load.tracks[index]
             LibraryTrackRow(
                 graph = graph,
-                serverId = serverId ?: track.serverId,
                 track = track,
+                isFavorite = favoriteIds?.contains(track.globalId) == true,
+                download = downloadsById[track.globalId],
                 onClick = { onPlayRow(index) },
                 onPlayNext = { onPlayNext(listOf(track)) },
                 onAppendToQueue = { onAppendToQueue(listOf(track)) },

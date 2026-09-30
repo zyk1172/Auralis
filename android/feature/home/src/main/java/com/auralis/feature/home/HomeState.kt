@@ -14,8 +14,11 @@ import com.auralis.core.domain.HomeQuickEntry
 import com.auralis.core.domain.LibraryStats
 import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 
 /**
@@ -65,24 +68,32 @@ class HomeState(
     private var layout: HomeLayoutPreference = HomeLayoutPreference()
     private var activeServer: ServerId? = null
 
+    /**
+     * Random shelves are intentionally stable across unrelated Home refreshes.
+     * Empty results are never cached; non-empty samples are re-resolved by globalId before reuse,
+     * so deleted tracks / changed metadata cannot remain stale forever.
+     */
+    private val randomSamples = HashMap<HomeModuleId, List<Track>>()
+
     /** 进入 Home 后启动：观察 active 服务器 + 布局 + 目录信号自动刷新。 */
     fun start() {
         scope.launch {
-            prefs.activeServerIdFlow.collect { sid ->
-                if (sid == null) {
-                    refresh(null)
-                } else {
-                    val serverId = ServerId(sid)
-                    combine(
-                        prefs.homeLayoutFlow,
-                        repo.homeChangeSignals(serverId),
-                    ) { layout, _ -> layout }
-                        .collect { layoutValue ->
-                            layout = layoutValue
-                            refresh(serverId)
-                        }
+            prefs.activeServerIdFlow
+                .flatMapLatest { sid ->
+                    if (sid == null) {
+                        flowOf(null to null)
+                    } else {
+                        val serverId = ServerId(sid)
+                        combine(
+                            prefs.homeLayoutFlow,
+                            repo.homeChangeSignals(serverId),
+                        ) { layoutValue, _ -> serverId to layoutValue }
+                    }
                 }
-            }
+                .collect { (serverId, layoutValue) ->
+                    if (layoutValue != null) layout = layoutValue
+                    refresh(serverId)
+                }
         }
     }
 
@@ -92,22 +103,36 @@ class HomeState(
         scope.launch { refresh(sid) }
     }
 
-    /** 换一批：random / favoriteRandom 本地重采样（SQL RANDOM，不发网络）。 */
+    /**
+     * 换一批：random / favoriteRandom 本地重采样（SQL RANDOM，不发网络）。
+     *
+     * 必须与 [refresh] 一样做异常兜底：`scope` 来自 `rememberCoroutineScope()`（父 Job 没有
+     * `SupervisorJob`），未捕获异常会一路冒到组合作用域并终结进程 —— 用户点一下「换一批」
+     * 就会崩，而不是看到错误提示。
+     */
     fun reshuffle(moduleId: HomeModuleId) {
         val sid = activeServer ?: return
         scope.launch {
-            val sampled = when (moduleId) {
-                HomeModuleId.RandomSongs -> repo.randomTracks(sid, HomeModuleId.RESHUFFLE_SAMPLE)
-                HomeModuleId.FavoriteRandom -> repo.favoriteRandom(sid, HomeModuleId.RESHUFFLE_SAMPLE)
-                else -> return@launch
-            }
-            contentModules = contentModules.map { module ->
-                if (module.id == moduleId) module.withTracks(sampled) else module
+            try {
+                val sampled = when (moduleId) {
+                    HomeModuleId.RandomSongs -> repo.randomTracks(sid, HomeModuleId.RESHUFFLE_SAMPLE)
+                    HomeModuleId.FavoriteRandom -> repo.favoriteRandom(sid, HomeModuleId.RESHUFFLE_SAMPLE)
+                    else -> return@launch
+                }
+                if (sampled.isEmpty()) randomSamples.remove(moduleId) else randomSamples[moduleId] = sampled
+                contentModules = contentModules.map { module ->
+                    if (module.id == moduleId) module.withTracks(sampled) else module
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                lastError = context.getString(R.string.home_load_failed, t.message)
             }
         }
     }
 
     private suspend fun refresh(serverId: ServerId?) {
+        if (activeServer != serverId) randomSamples.clear()
         activeServer = serverId
         serverName = null
         if (serverId == null) {
@@ -117,13 +142,22 @@ class HomeState(
             return
         }
         val accounts = runCatching { repo.servers() }.getOrDefault(emptyList())
-        hasServer = accounts.isNotEmpty()
         refreshing = true
         try {
-            stats = repo.stats(serverId)
-            buildQuickModules(serverId)
-            buildContentModules(serverId)
+            // 先在局部变量里组装完整快照，再一次性提交。
+            // 历史实现在 try 块里逐项赋值（stats → quickModules → contentModules → refreshing
+            // → loaded），每一项之间都有挂起点，于是刷新期间会出现 4–5 次可见重组，并且会渲染出
+            // 「新 stats + 旧 modules」这类不一致的中间态。
+            val nextStats = repo.stats(serverId)
+            val nextQuick = buildQuickModules(serverId, nextStats)
+            val nextContent = buildContentModules(serverId)
+            hasServer = accounts.isNotEmpty()
+            stats = nextStats
+            quickModules = nextQuick
+            contentModules = nextContent
             lastError = null
+        } catch (e: CancellationException) {
+            throw e
         } catch (t: Throwable) {
             lastError = context.getString(R.string.home_load_failed, t.message)
         } finally {
@@ -133,8 +167,11 @@ class HomeState(
     }
 
     /** 快捷入口：按布局顺序渲染「开启 && 有数据」。 */
-    private suspend fun buildQuickModules(serverId: ServerId) {
-        val playlistCount = stats.playlistCount
+    private suspend fun buildQuickModules(
+        serverId: ServerId,
+        currentStats: LibraryStats,
+    ): List<QuickEntryModule> {
+        val playlistCount = currentStats.playlistCount
         val favoriteCount = repo.favoriteCount(serverId)
         val playedCount = repo.playedTrackCount(serverId)
         val counts = mapOf(
@@ -142,7 +179,7 @@ class HomeState(
             HomeQuickEntry.Favorites to favoriteCount,
             HomeQuickEntry.MostPlayed to playedCount,
         )
-        quickModules = layout.quickEntries
+        return layout.quickEntries
             .filter { it.visible }
             .mapNotNull { entry ->
                 val id = runCatching { HomeQuickEntry.valueOf(entry.id) }.getOrNull() ?: return@mapNotNull null
@@ -153,25 +190,66 @@ class HomeState(
     }
 
     /** 内容模块：只查询「开启」的模块；有数据才渲染。 */
-    private suspend fun buildContentModules(serverId: ServerId) {
+    private suspend fun buildContentModules(serverId: ServerId): List<HomeModuleSnapshot> {
         val built = ArrayList<HomeModuleSnapshot>()
         for (entry in layout.contentModules) {
             if (!entry.visible) continue
             val id = runCatching { HomeModuleId.valueOf(entry.id) }.getOrNull() ?: continue
             val snapshot = when (id) {
-                HomeModuleId.RandomSongs -> tracksModule(id, repo.randomTracks(serverId, HomeModuleId.RESHUFFLE_SAMPLE))
+                HomeModuleId.RandomSongs -> tracksModule(
+                    id,
+                    stableRandomSample(id, requireFavorite = false) {
+                        repo.randomTracks(serverId, HomeModuleId.RESHUFFLE_SAMPLE)
+                    },
+                )
+
+                HomeModuleId.FavoriteRandom -> tracksModule(
+                    id,
+                    stableRandomSample(id, requireFavorite = true) {
+                        repo.favoriteRandom(serverId, HomeModuleId.RESHUFFLE_SAMPLE)
+                    },
+                )
+
                 HomeModuleId.RecentlyPlayed -> tracksModule(id, repo.recentlyPlayed(serverId, MODULE_SHELF_LIMIT))
                 HomeModuleId.RecentlyAdded -> tracksModule(id, repo.recentlyAddedWithin(serverId, 30, MODULE_SHELF_LIMIT))
                 HomeModuleId.LongUnplayed -> tracksModule(id, repo.longUnplayed(serverId, MODULE_SHELF_LIMIT))
                 HomeModuleId.NeverPlayed -> tracksModule(id, repo.neverPlayed(serverId, MODULE_SHELF_LIMIT))
-                HomeModuleId.FavoriteRandom -> tracksModule(id, repo.favoriteRandom(serverId, HomeModuleId.RESHUFFLE_SAMPLE))
                 HomeModuleId.Downloads -> tracksModule(id, repo.downloadedTracks(serverId, MODULE_SHELF_LIMIT))
                 HomeModuleId.TopArtists -> artistsModule(id, repo.homeTopArtists(serverId, MODULE_SHELF_LIMIT))
                 HomeModuleId.TopAlbums -> albumsModule(id, repo.homeTopAlbums(serverId, MODULE_SHELF_LIMIT))
             }
             if (snapshot.hasData) built.add(snapshot)
         }
-        contentModules = built
+        return built
+    }
+
+    /**
+     * Reuse a random shelf without pinning stale data.
+     *
+     * - Empty samples are not cached, so a shelf that was empty during initial sync can appear later.
+     * - Cached ids are resolved again so metadata updates are reflected and deleted tracks invalidate.
+     * - FavoriteRandom additionally verifies every cached item is still favorite.
+     * - New tracks/favorites alone do not reshuffle an already-valid shelf; the user can use “换一批”.
+     */
+    private suspend fun stableRandomSample(
+        moduleId: HomeModuleId,
+        requireFavorite: Boolean,
+        loadFresh: suspend () -> List<Track>,
+    ): List<Track> {
+        val cached = randomSamples[moduleId]
+        if (!cached.isNullOrEmpty()) {
+            val current = cached.mapNotNull { repo.track(it.globalId) }
+            val stillValid = current.size == cached.size &&
+                (!requireFavorite || current.all { repo.isFavorite(it.globalId) })
+            if (stillValid) {
+                randomSamples[moduleId] = current
+                return current
+            }
+        }
+
+        val fresh = loadFresh()
+        if (fresh.isEmpty()) randomSamples.remove(moduleId) else randomSamples[moduleId] = fresh
+        return fresh
     }
 
     private fun tracksModule(id: HomeModuleId, tracks: List<Track>) =

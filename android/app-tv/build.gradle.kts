@@ -44,6 +44,30 @@ android {
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
+
+    /**
+     * 与 `app-mobile` 保持同一套变体职责：`debug` 用于开发，`release` 为正式产物，
+     * `perf` 为 CI 交付给真机 TV 测试者的「非 debuggable + 已 R8 优化」可安装产物。
+     */
+    buildTypes {
+        getByName("debug") {
+            isMinifyEnabled = false
+        }
+        getByName("release") {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "$rootDir/proguard-rules.pro",
+            )
+        }
+        create("perf") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
+            isDebuggable = false
+        }
+    }
 }
 
 dependencies {

@@ -18,10 +18,10 @@ import com.auralis.core.domain.Track
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -30,9 +30,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -56,16 +58,32 @@ class DownloadManager(
     private val urlFactory: suspend (Track) -> String?,
     private val okHttp: OkHttpClient = defaultOkHttpClient(),
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /**
+     * 下载执行器。
+     *
+     * 必须是 `Dispatchers.IO`：`runDownload` 内部用的是**阻塞式** `okHttp.newCall(...).execute()`
+     * 与文件流拷贝。历史上这里用 `Dispatchers.Default`（并行度 = max(2, CPU-1)，4 核手机仅 3），
+     * 而 `MAX_CONCURRENT_DOWNLOADS = 3` 恰好能把 Default 池占满；`AuralisGraph.appScope`
+     * （bootstrap、下载水合、本地扫描、目录解码）同样跑在 Default 上，于是「下载」会把整个应用的
+     * 后台工作饿死，表现为首页不刷新、扫描停滞、界面假死。
+     */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val promotionStore = DownloadPromotionStore(context)
     private val cacheDir = prepareLocalMusicDownloadDirectory(context)
     private val stagingDir = File(context.filesDir, STAGING_DIR_NAME).apply { mkdirs() }
 
-    private val activeTasks = ConcurrentHashMap<String, Job>()
+    private data class DownloadTask(
+        val key: String,
+        val track: Track,
+        @Volatile var runningJob: Job? = null,
+    )
+
+    private val activeTasks = ConcurrentHashMap<String, DownloadTask>()
+    private val activeCalls = ConcurrentHashMap<String, okhttp3.Call>()
     private val tombstones = ConcurrentHashMap.newKeySet<String>()
-    private val semaphore = Semaphore(MAX_CONCURRENT_DOWNLOADS)
+    private val cancelingKeys = ConcurrentHashMap.newKeySet<String>()
+    private val queue = Channel<DownloadTask>(capacity = Channel.UNLIMITED)
     private val runningKeys = ConcurrentHashMap.newKeySet<String>()
-    private val pendingQueue = ConcurrentLinkedQueue<Pair<String, Track>>()
     private val _activeCount = MutableStateFlow(0)
     private val _runningCount = MutableStateFlow(0)
     private val _failures = MutableStateFlow<Map<String, DownloadFailure>>(emptyMap())
@@ -74,35 +92,58 @@ class DownloadManager(
     val runningCount: StateFlow<Int> = _runningCount.asStateFlow()
     val failures: StateFlow<Map<String, DownloadFailure>> = _failures.asStateFlow()
 
+    /**
+     * 固定 worker 池：无论一次加入 10 首还是 10,000 首，真正存在的下载执行协程始终最多
+     * [MAX_CONCURRENT_DOWNLOADS] 个。队列本身只保存轻量任务对象，不再“一首歌一个挂起协程”。
+     */
+    private val workers: List<Job> = List(MAX_CONCURRENT_DOWNLOADS) {
+        scope.launch {
+            for (task in queue) consume(task)
+        }
+    }
+
     suspend fun enqueue(track: Track) {
-        val gid = track.globalId
-        val key = gid.serialized
-        if (activeTasks.containsKey(key)) return
-        downloads.record(DownloadRecord(gid, DownloadStatus.Queued, 0f, null))
-        submit(key, track)
+        submit(track.globalId.serialized, track)
     }
 
     fun cancel(gid: GlobalId) {
         val key = gid.serialized
+        cancelingKeys.add(key)
         tombstones.add(key)
-        activeTasks.remove(key)?.cancel()
+        cancelTask(key)
         scope.launch {
-            downloads.record(DownloadRecord(gid, DownloadStatus.NotDownloaded, 0f, null))
-            downloads.remove(gid)
-            cacheFor(gid)?.delete()
-            promotionStore.remove(gid)
-            stagingFor(key).delete()
+            try {
+                downloads.record(DownloadRecord(gid, DownloadStatus.NotDownloaded, 0f, null))
+                downloads.remove(gid)
+                cacheFor(gid).delete()
+                promotionStore.remove(gid)
+                stagingFor(key).delete()
+            } finally {
+                // running task 的 OkHttp/文件 finally 可能比 Room cleanup 更晚结束。
+                // canceling key 必须保留到旧 active task 真正退出，否则立即 retry 会被 putIfAbsent
+                // 当成“重复任务”静默丢弃。
+                while (activeTasks.containsKey(key)) delay(CANCEL_REENQUEUE_POLL_MS)
+                tombstones.remove(key)
+                cancelingKeys.remove(key)
+            }
         }
     }
 
     fun cancelDownloadOnly(gid: GlobalId) {
         val key = gid.serialized
+        cancelingKeys.add(key)
         tombstones.add(key)
-        activeTasks.remove(key)?.cancel()
+        cancelTask(key)
         scope.launch {
-            downloads.record(DownloadRecord(gid, DownloadStatus.NotDownloaded, 0f, null))
-            downloads.remove(gid)
-            stagingFor(key).delete()
+            try {
+                downloads.record(DownloadRecord(gid, DownloadStatus.NotDownloaded, 0f, null))
+                downloads.remove(gid)
+                stagingFor(key).delete()
+            } finally {
+                while (activeTasks.containsKey(key)) delay(CANCEL_REENQUEUE_POLL_MS)
+                tombstones.remove(key)
+                cancelingKeys.remove(key)
+            }
         }
     }
 
@@ -126,7 +167,6 @@ class DownloadManager(
                 DownloadStatus.Queued, DownloadStatus.Downloading -> {
                     val track = trackFor(record.globalId)
                     if (track != null && !activeTasks.containsKey(record.globalId.serialized)) {
-                        downloads.record(DownloadRecord(record.globalId, DownloadStatus.Queued, 0f, null))
                         submit(record.globalId.serialized, track)
                     } else {
                         downloads.record(
@@ -150,31 +190,95 @@ class DownloadManager(
     }
 
     fun release() {
+        queue.close()
         scope.cancel()
     }
 
-    private fun submit(key: String, track: Track) {
-        if (tombstones.contains(key)) tombstones.remove(key)
-        if (activeTasks.containsKey(key)) return
-        pendingQueue.add(key to track)
-        val job = scope.launch {
-            semaphore.withPermit {
-                runningKeys.add(key)
-                _runningCount.value = runningKeys.size
-                try {
-                    if (!tombstones.contains(key)) runDownload(key, track)
-                } finally {
-                    runningKeys.remove(key)
-                    _runningCount.value = runningKeys.size
-                }
+    /**
+     * 入队一个下载。
+     *
+     * 先用 activeTasks 原子占位，再落 Queued 状态并写入 Channel。固定 worker 池负责消费，
+     * 因此排队数量不会转化成同等数量的挂起协程；同一 key 的重复提交也会被 putIfAbsent 拦截。
+     */
+    private suspend fun submit(key: String, track: Track) {
+        // 取消清理完成前等待同 key 的旧 cleanup 结束，否则旧 cleanup 可能删除新任务刚写入的
+        // Room 状态。enqueue 本身是 suspend，因此这里等待比静默丢弃用户的“立即重试”更正确。
+        while (cancelingKeys.contains(key)) delay(CANCEL_REENQUEUE_POLL_MS)
+        tombstones.remove(key)
+        val task = DownloadTask(key, track)
+        if (activeTasks.putIfAbsent(key, task) != null) return
+        _activeCount.update { it + 1 }
+        try {
+            downloads.record(DownloadRecord(track.globalId, DownloadStatus.Queued, 0f, null))
+            queue.send(task)
+        } catch (t: Throwable) {
+            if (activeTasks.remove(key, task)) {
+                _activeCount.update { (it - 1).coerceAtLeast(0) }
             }
+            throw t
         }
-        activeTasks[key] = job
-        _activeCount.value = activeTasks.size
-        job.invokeOnCompletion {
-            activeTasks.remove(key)
-            _activeCount.value = activeTasks.size
-            pendingQueue.removeAll { it.first == key }
+    }
+
+    /**
+     * 取消任务。运行中的任务保留 activeTasks 占位直到真正退出，防止旧下载仍在收尾时同 key
+     * 被立即重新入队并同时操作同一个 staging 文件；尚未运行的任务可立即从 active 集合移除，
+     * Channel 中残留的旧条目会被 worker 识别为 stale 并跳过。
+     */
+    private fun cancelTask(key: String) {
+        val task = activeTasks[key] ?: return
+        tombstones.add(key)
+        // Coroutine cancellation alone cannot interrupt blocking Call.execute()/source.read().
+        // Cancel the OkHttp Call as well so the socket closes immediately.
+        activeCalls[key]?.cancel()
+        val running = task.runningJob
+        if (running != null) {
+            running.cancel()
+        } else if (activeTasks.remove(key, task)) {
+            _activeCount.update { (it - 1).coerceAtLeast(0) }
+        }
+    }
+
+    private suspend fun consume(task: DownloadTask) {
+        val key = task.key
+        if (activeTasks[key] !== task) {
+            if (!activeTasks.containsKey(key)) tombstones.remove(key)
+            return
+        }
+        if (tombstones.contains(key)) {
+            if (activeTasks.remove(key, task)) {
+                _activeCount.update { (it - 1).coerceAtLeast(0) }
+            }
+            tombstones.remove(key)
+            return
+        }
+
+        if (runningKeys.add(key)) {
+            _runningCount.update { it + 1 }
+        }
+        try {
+            coroutineScope {
+                // 先创建但不启动，写入 runningJob 后再做一次有效性检查，避免 cancel() 恰好落在
+                // “worker 取出任务”和“任务真正开始”之间时仍短暂启动旧下载。
+                val job = launch(start = CoroutineStart.LAZY) {
+                    if (!tombstones.contains(key)) runDownload(key, task.track)
+                }
+                task.runningJob = job
+                if (activeTasks[key] !== task || tombstones.contains(key)) {
+                    job.cancel()
+                } else {
+                    job.start()
+                }
+                job.join()
+            }
+        } finally {
+            task.runningJob = null
+            if (runningKeys.remove(key)) {
+                _runningCount.update { (it - 1).coerceAtLeast(0) }
+            }
+            if (activeTasks.remove(key, task)) {
+                _activeCount.update { (it - 1).coerceAtLeast(0) }
+            }
+            if (!activeTasks.containsKey(key)) tombstones.remove(key)
         }
     }
 
@@ -189,8 +293,16 @@ class DownloadManager(
                 return
             }
             downloads.record(DownloadRecord(gid, DownloadStatus.Downloading, 0f, null))
+            if (tombstones.contains(key)) return
             val request = Request.Builder().url(url).build()
-            okHttp.newCall(request).execute().use { response ->
+            val call = okHttp.newCall(request)
+            activeCalls[key] = call
+            // Close the tiny race between newCall() and publishing it in activeCalls.
+            if (tombstones.contains(key)) {
+                call.cancel()
+                return
+            }
+            call.execute().use { response ->
                 if (!response.isSuccessful) {
                     fail(gid, key, mapHttpFailure(response.code))
                     return
@@ -204,22 +316,19 @@ class DownloadManager(
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                     var read: Int
                     var total = 0L
-                    var lastWrittenProgress = 0f
                     var lastWriteAt = 0L
                     val contentLength = body.contentLength()
                     while (source.read(buffer).also { read = it } != -1) {
-                        if (tombstones.contains(key)) {
-                            fail(gid, key, DownloadFailure(DownloadFailureKind.Interrupted, "已取消"))
-                            return
-                        }
+                        if (tombstones.contains(key)) return
                         output.write(buffer, 0, read)
                         total += read
                         val progress = if (contentLength > 0) total.toFloat() / contentLength else 0f
                         val now = System.currentTimeMillis()
-                        if (progress - lastWrittenProgress >= PROGRESS_WRITE_DELTA ||
-                            now - lastWriteAt >= PROGRESS_WRITE_INTERVAL_MS
-                        ) {
-                            lastWrittenProgress = progress
+                        // 进度写库会 invalidate `downloads` 表，从而让所有 `observe(globalId)` /
+                        // `observeAll` 的订阅者（资料库列表每行一个）重新发射。历史节流是
+                        // 「变化 ≥1% 或 250ms」，最坏 3 并发 × 4 次/秒 = 12 次整表刷新/秒。
+                        // 收敛到 1 次/秒即可保持进度条观感，同时把刷新风暴降为原来的 1/4。
+                        if (now - lastWriteAt >= PROGRESS_WRITE_INTERVAL_MS) {
                             lastWriteAt = now
                             downloads.record(
                                 DownloadRecord(gid, DownloadStatus.Downloading, progress.coerceIn(0f, 1f), null),
@@ -235,20 +344,38 @@ class DownloadManager(
                 }
                 promotionStore.promote(gid)
                 downloads.record(DownloadRecord(gid, DownloadStatus.Downloaded, 1f, cacheFile.absolutePath))
+                // 重试/重新下载成功后清除历史失败记录，避免 failures 只增不减。
+                clearFailure(key)
             }
         } catch (e: CancellationException) {
             if (!tombstones.contains(key)) {
                 downloads.record(DownloadRecord(gid, DownloadStatus.Failed, 0f, null))
             }
         } catch (e: java.net.SocketTimeoutException) {
-            fail(gid, key, DownloadFailure(DownloadFailureKind.TimedOut, "下载超时"))
+            if (!tombstones.contains(key)) {
+                fail(gid, key, DownloadFailure(DownloadFailureKind.TimedOut, "下载超时"))
+            }
         } catch (e: java.net.UnknownHostException) {
-            fail(gid, key, DownloadFailure(DownloadFailureKind.NetworkUnavailable, "网络不可用"))
+            if (!tombstones.contains(key)) {
+                fail(gid, key, DownloadFailure(DownloadFailureKind.NetworkUnavailable, "网络不可用"))
+            }
         } catch (e: IOException) {
-            fail(gid, key, DownloadFailure(DownloadFailureKind.NetworkUnavailable, "网络错误"))
+            // OkHttp Call.cancel() intentionally surfaces as IOException. User cancellation must not
+            // be converted into a Failed/NetworkUnavailable record after cancel cleanup wrote NotDownloaded.
+            if (!tombstones.contains(key)) {
+                fail(gid, key, DownloadFailure(DownloadFailureKind.NetworkUnavailable, "网络错误"))
+            }
         } catch (e: Exception) {
-            fail(gid, key, DownloadFailure(DownloadFailureKind.Unknown, "未知错误"))
+            if (!tombstones.contains(key)) {
+                fail(gid, key, DownloadFailure(DownloadFailureKind.Unknown, "未知错误"))
+            }
         } finally {
+            activeCalls.remove(key)?.let { call ->
+                if (!call.isCanceled()) {
+                    // Completed calls need no work; this only closes a still-live call on exceptional exit.
+                    call.cancel()
+                }
+            }
             staging.delete()
             tombstones.remove(key)
         }
@@ -256,8 +383,35 @@ class DownloadManager(
 
     private suspend fun fail(gid: GlobalId, key: String, failure: DownloadFailure) {
         stagingFor(key).delete()
-        _failures.value = _failures.value + (key to failure)
+        rememberFailure(key, failure)
         downloads.record(DownloadRecord(gid, DownloadStatus.Failed, 0f, null))
+    }
+
+    /**
+     * 记录失败。
+     *
+     * 历史实现是 `_failures.value = _failures.value + (key to failure)`：整表复制且**永不清除**，
+     * 长期使用后 Map 无界增长，且每次失败都触发一次 O(size) 拷贝 + StateFlow 发射。
+     * 现在按插入顺序保留最近 [MAX_REMEMBERED_FAILURES] 条。
+     */
+    private fun rememberFailure(key: String, failure: DownloadFailure) {
+        _failures.update { current ->
+            val next = LinkedHashMap(current)
+            next.remove(key)
+            next[key] = failure
+            while (next.size > MAX_REMEMBERED_FAILURES) {
+                val oldest = next.keys.firstOrNull() ?: break
+                next.remove(oldest)
+            }
+            next
+        }
+    }
+
+    private fun clearFailure(key: String) {
+        _failures.update { current ->
+            if (!current.containsKey(key)) current
+            else LinkedHashMap(current).apply { remove(key) }
+        }
     }
 
     private fun mapHttpFailure(code: Int): DownloadFailure = when (code) {
@@ -275,8 +429,13 @@ class DownloadManager(
         private const val LEGACY_CACHE_DIR_NAME = "trackcache"
         private const val STAGING_DIR_NAME = "downloadstaging"
         const val MAX_CONCURRENT_DOWNLOADS = 3
-        private const val PROGRESS_WRITE_DELTA = 0.01f
-        private const val PROGRESS_WRITE_INTERVAL_MS = 250L
+
+        /** 进度落库节流：1 次/秒（见 runDownload 内的说明）。 */
+        private const val PROGRESS_WRITE_INTERVAL_MS = 1_000L
+
+        /** `failures` 的保留上限，避免长期运行后无界增长。 */
+        private const val MAX_REMEMBERED_FAILURES = 200
+        private const val CANCEL_REENQUEUE_POLL_MS = 10L
 
         private fun prepareLocalMusicDownloadDirectory(context: Context): File {
             val root = File(context.filesDir, "localmusic").apply { mkdirs() }
@@ -296,10 +455,18 @@ class DownloadManager(
             return target
         }
 
+        /**
+         * 下载用 OkHttp。
+         *
+         * `readTimeout = 0`（永不超时）意味着服务器半开连接或卡流时，执行 `execute()` 的线程
+         * 会**永久**占住调度器；配合 `Dispatchers.Default` 时代直接饿死整个应用的后台工作。
+         * 现在改回有限读超时：单次 socket 读 60s 无数据即失败，交给既有的 retry / fail 路径处理。
+         */
         private fun defaultOkHttpClient(): OkHttpClient =
             OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(0, TimeUnit.MILLISECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .callTimeout(30, TimeUnit.MINUTES)
                 .build()
     }
 }
@@ -320,10 +487,19 @@ class DownloadService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val mgr = manager ?: DownloadServiceHolder.manager
         if (mgr == null) {
-            stopSelf()
+            stopSelf(startId)
             return START_NOT_STICKY
         }
         manager = mgr
+        // `startForegroundService` 契约：启动后必须在约 5s 内调用 `startForeground`。
+        // 历史实现直接用 activeCount 决定是否进入前台，于是存在这样的竞态窗口 ——
+        // 收集器读到 count>0 并发出 startForegroundService 之后、本回调执行之前，
+        // 最后一个下载恰好完成使 count 归零，于是走 `count == 0` 分支只执行
+        // `stopForeground/stopSelf`，**从未调用 startForeground**。部分 OEM 与 Android 12+
+        // 会把这种情况上报为 `ForegroundServiceDidNotStartInTimeException`
+        // （android.app.RemoteServiceException）并杀掉进程。
+        // 因此这里无条件先进入前台，再按任务数决定是否降级退出。
+        promoteToForeground()
         updateForegroundState(mgr.activeCount.value)
         if (activeCountJob == null) {
             activeCountJob = scope.launch {
@@ -342,12 +518,15 @@ class DownloadService : Service() {
         super.onDestroy()
     }
 
+    private fun promoteToForeground() {
+        if (isForegrounded) return
+        startForeground(NOTIFICATION_ID, buildNotification())
+        isForegrounded = true
+    }
+
     private fun updateForegroundState(count: Int) {
         if (count > 0) {
-            if (!isForegrounded) {
-                startForeground(NOTIFICATION_ID, buildNotification())
-                isForegrounded = true
-            }
+            promoteToForeground()
             return
         }
         if (isForegrounded) {

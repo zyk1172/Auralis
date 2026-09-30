@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -228,8 +229,10 @@ private fun AppleModuleSection(
             module.tracks.isNotEmpty() -> LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(AuralisChrome.homeCardSpacing),
             ) {
-                items(module.tracks, key = { it.globalId.serialized }) { track ->
-                    val index = module.tracks.indexOfFirst { it.globalId == track.globalId }.coerceAtLeast(0)
+                // 用 itemsIndexed 直接拿下标。历史实现对每个 item 做
+                // `module.tracks.indexOfFirst { it.globalId == track.globalId }`，
+                // 单个货架是 O(n²) 的相等比较（n = 24 时 576 次/货架），纯粹为算一个常量。
+                itemsIndexed(module.tracks, key = { _, track -> track.globalId.serialized }) { index, track ->
                     AppleTrackCard(track = track) { onPlayTracks(module.tracks, index) }
                 }
             }

@@ -75,8 +75,13 @@ internal fun NowPlayingArtworkGlow(
         }
     }
 
-    val glowScale = if (animates) 0.99f + 0.05f * pulse.value else 1f
-    val glowAlpha = if (animates) 0.30f + 0.14f * pulse.value else 0.30f
+    // 关键：动画值只在 `graphicsLayer {}` 的 lambda 里读取，**不在 composition 里读取**。
+    // `pulse.value` 是 Compose 状态；如果像历史实现那样在函数体里算出 `glowScale/glowAlpha`，
+    // 每个动画帧都会让整个光晕组件重组，并连带重建 `AuralisArtwork` 的 Modifier 链
+    // （含 `CompositingStrategy.Offscreen` 离屏图层 + blur），播放期间就是每帧一次昂贵合成。
+    // 放进 lambda 后，每帧只重跑 layer 块，不触发重组。
+    val glowScale: () -> Float = { if (animates) 0.99f + 0.05f * pulse.value else 1f }
+    val glowAlpha: () -> Float = { if (animates) 0.30f + 0.14f * pulse.value else 0.30f }
     val shape = RoundedCornerShape(artworkSize * 0.0514f) // 350dp artwork ≈ Apple 18pt artwork radius.
 
     Box(
@@ -94,9 +99,10 @@ internal fun NowPlayingArtworkGlow(
                 modifier = Modifier
                     .requiredSize(lightFrame)
                     .graphicsLayer {
-                        scaleX = glowScale
-                        scaleY = glowScale
-                        alpha = glowAlpha
+                        val scale = glowScale()
+                        scaleX = scale
+                        scaleY = scale
+                        alpha = glowAlpha()
                         compositingStrategy = CompositingStrategy.Offscreen
                     }
                     .blur(blurRadius)
@@ -119,12 +125,23 @@ internal fun NowPlayingArtworkGlow(
                     },
             )
         } else {
-            Canvas(Modifier.requiredSize(canvasSize)) {
+            // 静态渐变 + 图层 alpha：脉冲只改变整体透明度，不再逐帧重建径向渐变 brush。
+            // 原视觉把 brush alpha 乘以 glowAlpha/0.30（最大约 1.4667）。graphicsLayer.alpha
+            // 不能大于 1，因此不能直接把这个倍率塞给图层；否则高亮半程会被夹到 1 而失去呼吸幅度。
+            // 等价变换：先把 brush 固定在原来的“最大亮度”，再用 0.30/0.44...1 的图层 alpha
+            // 向下调制，这样有效 alpha 与旧实现完全一致，同时 brush 仍是静态缓存。
+            val maxPulseAlpha = 0.44f
+            val maxBrightnessScale = maxPulseAlpha / 0.30f
+            Canvas(
+                Modifier
+                    .requiredSize(canvasSize)
+                    .graphicsLayer { alpha = (glowAlpha() / maxPulseAlpha).coerceIn(0f, 1f) },
+            ) {
                 drawCircle(
                     brush = Brush.radialGradient(
                         colors = listOf(
-                            colors.accent.copy(alpha = 0.16f * glowAlpha / 0.30f),
-                            colors.accentSecondary.copy(alpha = 0.06f * glowAlpha / 0.30f),
+                            colors.accent.copy(alpha = 0.16f * maxBrightnessScale),
+                            colors.accentSecondary.copy(alpha = 0.06f * maxBrightnessScale),
                             Color.Transparent,
                         ),
                         center = center,
@@ -140,9 +157,10 @@ internal fun NowPlayingArtworkGlow(
             Modifier
                 .requiredSize(canvasSize)
                 .graphicsLayer {
-                    scaleX = glowScale
-                    scaleY = glowScale
-                    alpha = glowAlpha * 0.35f
+                    val scale = glowScale()
+                    scaleX = scale
+                    scaleY = scale
+                    alpha = glowAlpha() * 0.35f
                 },
         ) {
             val ellipseWidth = size.width * 0.90f
