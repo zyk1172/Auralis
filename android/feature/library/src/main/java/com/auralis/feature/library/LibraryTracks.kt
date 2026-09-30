@@ -39,6 +39,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -74,13 +75,22 @@ import kotlinx.coroutines.launch
  * 立即播放 / 下一首播放 / 加入队列 / 添加到歌单 / 下载·取消·删缓存 / 收藏切换。
  */
 
-/** 收藏曲目 id 集合（null = 首帧未就绪）。收藏表变化自动更新。 */
+/**
+ * 收藏曲目 id 集合（null = 首帧未就绪）。收藏表变化自动更新。
+ *
+ * 两个要点：
+ * - 用 `derivedStateOf` 而不是 `remember(tracks) { mutableStateOf(...) }`：后者在每次收藏
+ *   数据变化时都会产生**新的 State 实例**交给所有调用方，等价于强制整列表失效；
+ * - 上游 `observeFavoriteTracks` 现在由 `UnifiedCatalogRepository` 以「每服务器一条热流」
+ *   提供（合并/去重只做一次）并切到后台调度器，因此即使每个列表行各自订阅，也只是一次
+ *   `Set` 查找，而不是一次全量去重。
+ */
 @Composable
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 internal fun rememberFavoriteIds(graph: AuralisGraph, serverId: ServerId): androidx.compose.runtime.State<Set<GlobalId>?> {
     val flow = remember(serverId) { graph.catalogRepository.observeFavoriteTracks(serverId) }
     val tracks by flow.collectAsState(initial = null)
-    return remember(tracks) { mutableStateOf(tracks?.map { it.globalId }?.toSet()) }
+    return remember { derivedStateOf { tracks?.mapTo(HashSet()) { it.globalId } } }
 }
 
 /** 行组件：徽标态由 downloads 表与 favorites 表实时观察驱动。 */
