@@ -1324,6 +1324,11 @@ struct BrowseDetailSheet: View {
     let theme: BuiltInTheme
     let showsCloseButton: Bool
     @State private var isConfirmingDownload = false
+    @State private var isRenamingCurrentPlaylist = false
+    @State private var currentPlaylistRenameText = ""
+    @State private var currentPlaylistPendingDeletion: Playlist?
+    @State private var isSavingCollectionAsPlaylist = false
+    @State private var collectionPlaylistName = ""
     /// 从歌单总览左滑后暂存目标；确认后才会删除服务器歌单。
     @State private var playlistPendingDeletion: Playlist?
     @State private var isManagingPlaylists = false
@@ -1395,7 +1400,7 @@ struct BrowseDetailSheet: View {
         switch destination {
         case let .album(album): album.title
         case let .artist(artist): artist.name
-        case let .playlist(playlist): playlist.name
+        case let .playlist(playlist): currentPlaylist?.name ?? playlist.name
         case .playlists: String(localized: "歌单", bundle: .module)
         case .favorites: String(localized: "收藏", bundle: .module)
         case .mostPlayed: String(localized: "最常听", bundle: .module)
@@ -1417,7 +1422,7 @@ struct BrowseDetailSheet: View {
         switch destination {
         case let .album(album): String(localized: "\(album.artistName) · \(tracks.count) 首", bundle: .module)
         case .artist: String(localized: "\(tracks.count) 首歌曲", bundle: .module)
-        case let .playlist(playlist): playlist.comment ?? String(localized: "\(tracks.count) 首歌曲", bundle: .module)
+        case let .playlist(playlist): (currentPlaylist ?? playlist).comment ?? String(localized: "\(tracks.count) 首歌曲", bundle: .module)
         case .playlists: String(localized: "\(model.catalog.playlists.count) 个歌单", bundle: .module)
         case .favorites: String(localized: "\(tracks.count) 首喜爱的歌曲", bundle: .module)
         case .mostPlayed: String(localized: "按你的播放次数排序", bundle: .module)
@@ -1508,6 +1513,61 @@ struct BrowseDetailSheet: View {
         } message: {
             Text(String(localized: "预计约 \(estimatedSizeMB(tracks.count)) MB，下载到本地后可离线播放。已下载的歌曲会自动跳过。", bundle: .module))
         }
+        .alert(
+            String(localized: "重命名歌单", bundle: .module),
+            isPresented: $isRenamingCurrentPlaylist
+        ) {
+            TextField(String(localized: "歌单名称", bundle: .module), text: $currentPlaylistRenameText)
+            Button(String(localized: "保存", bundle: .module)) {
+                guard let playlist = currentPlaylist else { return }
+                let name = currentPlaylistRenameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { return }
+                Task { _ = await model.renamePlaylist(id: playlist.id, to: name) }
+            }
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
+        } message: {
+            Text(String(localized: "修改将同步到服务器。", bundle: .module))
+        }
+        .alert(
+            String(localized: "保存为歌单", bundle: .module),
+            isPresented: $isSavingCollectionAsPlaylist
+        ) {
+            TextField(String(localized: "歌单名称", bundle: .module), text: $collectionPlaylistName)
+            Button(String(localized: "创建", bundle: .module)) {
+                let name = collectionPlaylistName.trimmingCharacters(in: .whitespacesAndNewlines)
+                let trackIDs = model.uniquedTracks(tracks).map(\.id)
+                guard !name.isEmpty, !trackIDs.isEmpty else { return }
+                Task { _ = await model.createPlaylist(named: name, trackIDs: trackIDs) }
+            }
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
+        } message: {
+            Text(String(localized: "会在当前音乐服务器上创建一个普通歌单，原集合不会被修改。", bundle: .module))
+        }
+        .confirmationDialog(
+            currentPlaylistPendingDeletion.map {
+                String(localized: "删除歌单「\($0.name)」？", bundle: .module)
+            } ?? String(localized: "删除歌单？", bundle: .module),
+            isPresented: Binding(
+                get: { currentPlaylistPendingDeletion != nil },
+                set: { if !$0 { currentPlaylistPendingDeletion = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button(String(localized: "删除", bundle: .module), role: .destructive) {
+                guard let playlist = currentPlaylistPendingDeletion else { return }
+                currentPlaylistPendingDeletion = nil
+                Task {
+                    if await model.deletePlaylist(id: playlist.id) {
+                        dismiss()
+                    }
+                }
+            }
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {
+                currentPlaylistPendingDeletion = nil
+            }
+        } message: {
+            Text(String(localized: "服务器上的歌单也会被删除，此操作不可撤销。", bundle: .module))
+        }
         .confirmationDialog(
             String(localized: "删除选中的 \(selectedPlaylistIDs.count) 个歌单？", bundle: .module),
             isPresented: $confirmsBatchPlaylistDeletion,
@@ -1547,6 +1607,133 @@ struct BrowseDetailSheet: View {
                     }
                 }
             }
+    }
+
+    private var currentPlaylist: Playlist? {
+        guard case let .playlist(routePlaylist) = destination else { return nil }
+        return model.catalog.playlists.first {
+            $0.id == routePlaylist.id && $0.serverID == routePlaylist.serverID
+        } ?? routePlaylist
+    }
+
+    private var supportsCollectionManagement: Bool {
+        switch destination {
+        case .album, .artist, .playlist, .genre, .recommendationCategory:
+            true
+        default:
+            false
+        }
+    }
+
+    @ViewBuilder
+    private var collectionManagementMenu: some View {
+        switch destination {
+        case let .album(album):
+            Button {
+                model.toggleAlbumFavorite(album)
+            } label: {
+                Label(
+                    model.isAlbumFavorite(album)
+                        ? String(localized: "取消收藏专辑", bundle: .module)
+                        : String(localized: "收藏专辑", bundle: .module),
+                    systemImage: model.isAlbumFavorite(album) ? "heart.slash" : "heart"
+                )
+            }
+            Button {
+                model.playShuffledQueue(tracks)
+            } label: {
+                Label(String(localized: "随机播放专辑", bundle: .module), systemImage: "shuffle")
+            }
+            Divider()
+            Button {
+                beginSavingCurrentCollectionAsPlaylist()
+            } label: {
+                Label(String(localized: "保存为歌单", bundle: .module), systemImage: "music.note.list.badge.plus")
+            }
+
+        case let .artist(artist):
+            Button {
+                model.toggleArtistFavorite(artist)
+            } label: {
+                Label(
+                    model.isArtistFavorite(artist)
+                        ? String(localized: "取消收藏艺术家", bundle: .module)
+                        : String(localized: "收藏艺术家", bundle: .module),
+                    systemImage: model.isArtistFavorite(artist) ? "heart.slash" : "heart"
+                )
+            }
+            Button {
+                model.playShuffledQueue(tracks)
+            } label: {
+                Label(String(localized: "随机播放全部", bundle: .module), systemImage: "shuffle")
+            }
+            Divider()
+            Button {
+                beginSavingCurrentCollectionAsPlaylist()
+            } label: {
+                Label(String(localized: "保存为歌单", bundle: .module), systemImage: "music.note.list.badge.plus")
+            }
+
+        case let .playlist(routePlaylist):
+            let playlist = currentPlaylist ?? routePlaylist
+            Button {
+                model.playShuffledQueue(tracks)
+            } label: {
+                Label(String(localized: "随机播放", bundle: .module), systemImage: "shuffle")
+            }
+            Button {
+                Task { _ = await model.duplicatePlaylist(id: playlist.id) }
+            } label: {
+                Label(String(localized: "复制歌单", bundle: .module), systemImage: "plus.square.on.square")
+            }
+
+            if playlist.isReadOnly {
+                Divider()
+                Button {} label: {
+                    Label(String(localized: "只读歌单", bundle: .module), systemImage: "lock")
+                }
+                .disabled(true)
+            } else {
+                Divider()
+                Button {
+                    currentPlaylistRenameText = playlist.name
+                    isRenamingCurrentPlaylist = true
+                } label: {
+                    Label(String(localized: "重命名", bundle: .module), systemImage: "pencil")
+                }
+                Button {
+                    Task { await model.removeDuplicateSongs(from: playlist.id) }
+                } label: {
+                    Label(String(localized: "去重歌曲", bundle: .module), systemImage: "sparkles")
+                }
+                Divider()
+                Button(role: .destructive) {
+                    currentPlaylistPendingDeletion = playlist
+                } label: {
+                    Label(String(localized: "删除歌单", bundle: .module), systemImage: "trash")
+                }
+            }
+
+        case .genre, .recommendationCategory:
+            Button {
+                model.playShuffledQueue(tracks)
+            } label: {
+                Label(String(localized: "随机播放", bundle: .module), systemImage: "shuffle")
+            }
+            Button {
+                beginSavingCurrentCollectionAsPlaylist()
+            } label: {
+                Label(String(localized: "保存为歌单", bundle: .module), systemImage: "music.note.list.badge.plus")
+            }
+
+        default:
+            EmptyView()
+        }
+    }
+
+    private func beginSavingCurrentCollectionAsPlaylist() {
+        collectionPlaylistName = title
+        isSavingCollectionAsPlaylist = true
     }
 
     private func estimatedSizeMB(_ count: Int) -> Int {
@@ -1742,6 +1929,19 @@ struct BrowseDetailSheet: View {
                             }
                             .buttonStyle(HapticBorderedButtonStyle())
                             .disabled(tracks.isEmpty)
+
+                            if supportsCollectionManagement {
+                                Menu {
+                                    collectionManagementMenu
+                                } label: {
+                                    Image(systemName: "ellipsis.circle")
+                                        .font(.title3.weight(.semibold))
+                                        .frame(minWidth: 36, minHeight: 34)
+                                        .contentShape(Rectangle())
+                                }
+                                .accessibilityLabel(String(localized: "管理", bundle: .module))
+                                .disabled(tracks.isEmpty && currentPlaylist == nil)
+                            }
                         }
                     }
                     Spacer(minLength: 0)
@@ -2021,10 +2221,6 @@ private struct PlaylistTracksView: View {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Button {
-                        renameText = playlist.name
-                        isRenaming = true
-                    } label: { Label(String(localized: "重命名", bundle: .module), systemImage: "pencil") }
-                    Button {
                         isDuplicating = true
                         Task {
                             _ = await model.duplicatePlaylist(id: playlist.id)
@@ -2032,12 +2228,27 @@ private struct PlaylistTracksView: View {
                         }
                     } label: { Label(isDuplicating ? String(localized: "复制中…", bundle: .module) : String(localized: "复制歌单", bundle: .module), systemImage: "plus.square.on.square") }
                     .disabled(isDuplicating)
-                    Button {
-                        Task { await model.removeDuplicateSongs(from: playlist.id) }
-                    } label: { Label(String(localized: "去重歌曲", bundle: .module), systemImage: "sparkles") }
-                    Button(role: .destructive) {
-                        isDeleting = true
-                    } label: { Label(String(localized: "删除歌单", bundle: .module), systemImage: "trash") }
+
+                    if playlist.isReadOnly {
+                        Divider()
+                        Button {} label: {
+                            Label(String(localized: "只读歌单", bundle: .module), systemImage: "lock")
+                        }
+                        .disabled(true)
+                    } else {
+                        Divider()
+                        Button {
+                            renameText = playlist.name
+                            isRenaming = true
+                        } label: { Label(String(localized: "重命名", bundle: .module), systemImage: "pencil") }
+                        Button {
+                            Task { await model.removeDuplicateSongs(from: playlist.id) }
+                        } label: { Label(String(localized: "去重歌曲", bundle: .module), systemImage: "sparkles") }
+                        Divider()
+                        Button(role: .destructive) {
+                            isDeleting = true
+                        } label: { Label(String(localized: "删除歌单", bundle: .module), systemImage: "trash") }
+                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
