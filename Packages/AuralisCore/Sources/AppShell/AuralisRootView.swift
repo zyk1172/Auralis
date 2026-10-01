@@ -35,7 +35,8 @@ struct BottomDockProgressReducer: Sendable {
 /// Dock 本体、页面预留空间和 AI 输入框共用同一套固定节奏。
 /// 动画只在手势结束、目标状态确定后启动，用户拖动速度不会改变它。
 enum BottomDockMotion {
-    static let duration: TimeInterval = 0.56
+    // Dock 只做节奏微调：保留原有几何、淡入区间与交互结构，仅缩短完成时间。
+    static let duration: TimeInterval = 0.50
 
     static func animation(reduceMotion: Bool) -> Animation {
         reduceMotion
@@ -400,12 +401,15 @@ private struct IOSMusicShell: View {
     @ObservedObject var themeStore: ThemeStore
     let homeChromeState: HomeChromeState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var browseTransitionNamespace
+    @Namespace private var nowPlayingTransitionNamespace
 
     var body: some View {
         NavigationStack {
             DockReservedSectionContent(
                 model: model,
-                themeStore: themeStore
+                themeStore: themeStore,
+                browseTransitionNamespace: browseTransitionNamespace
             )
                 // Destination 必须注册在 NavigationStack 的内容树内。此前把 modifier
                 // 挂在 NavigationStack 外层，状态虽已写入，但 SwiftUI 不会执行导航，
@@ -417,6 +421,11 @@ private struct IOSMusicShell: View {
                         theme: themeStore.current,
                         showsCloseButton: false
                     )
+                    .auralisZoomNavigationTransition(
+                        sourceID: IOSBrowseTransitionID(destination),
+                        in: browseTransitionNamespace,
+                        reduceMotion: reduceMotion
+                    )
                 }
                 .navigationTitle(model.selectedSection.title)
                 // 顶部标题用系统大标题：字体大、与正文内容有明显区分（Apple Music 风格）。
@@ -426,6 +435,8 @@ private struct IOSMusicShell: View {
         }
         // Dock 切换的是应用一级分区；若当前停在设置/资料库的二级 NavigationLink，
         // 必须丢弃旧路径并回到新分区根页，不能让二级页面“悬在”新的根内容之上。
+        .transition(.opacity)
+        .animation(AuralisMotion.crossFade(reduceMotion: reduceMotion), value: model.selectedSection)
         .id(model.selectedSection)
         // Dock 作为 overlay 固定在根容器上；Home / Library / BrowseDetail 的实际
         // ScrollView/List 通过 reportsBottomDockScroll 自己持有动态 clearance，
@@ -436,6 +447,11 @@ private struct IOSMusicShell: View {
         }
         .sheet(isPresented: nowPlayingBinding) {
             NowPlayingView(model: model, theme: themeStore.current)
+                .auralisZoomNavigationTransition(
+                    sourceID: IOSNowPlayingTransitionID.player,
+                    in: nowPlayingTransitionNamespace,
+                    reduceMotion: reduceMotion
+                )
                 .presentationDragIndicator(.visible)
                 .presentationDetents([.large])
         }
@@ -494,6 +510,7 @@ private struct IOSMusicShell: View {
             theme: themeStore.current,
             accessory: collapsedDockAccessory,
             coordinator: homeChromeState,
+            nowPlayingTransitionNamespace: nowPlayingTransitionNamespace,
             onExpand: { setDockPresentation(.expanded) },
             onAssistant: {
                 selectTopLevelSection(.assistant)
@@ -570,9 +587,15 @@ private struct BottomDockScrollClearanceHost: View {
 private struct DockReservedSectionContent: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
+    let browseTransitionNamespace: Namespace.ID
 
     var body: some View {
-        SectionContent(section: model.selectedSection, model: model, themeStore: themeStore)
+        SectionContent(
+            section: model.selectedSection,
+            model: model,
+            themeStore: themeStore,
+            browseTransitionNamespace: browseTransitionNamespace
+        )
     }
 }
 
@@ -660,6 +683,7 @@ private struct MorphingBottomDockProgressHost: View {
     let theme: BuiltInTheme
     let accessory: CollapsedDockAccessory?
     @ObservedObject var coordinator: BottomDockScrollCoordinator
+    let nowPlayingTransitionNamespace: Namespace.ID
     let onExpand: () -> Void
     let onAssistant: () -> Void
     let onSelect: (AppSection) -> Void
@@ -672,6 +696,7 @@ private struct MorphingBottomDockProgressHost: View {
                     model: model,
                     theme: theme,
                     accessory: accessory,
+                    nowPlayingTransitionNamespace: nowPlayingTransitionNamespace,
                     onHome: onExpand,
                     onAssistant: onAssistant
                 )
@@ -689,6 +714,7 @@ private struct MorphingBottomDockProgressHost: View {
                     theme: theme,
                     accessory: accessory,
                     progress: progress,
+                    nowPlayingTransitionNamespace: nowPlayingTransitionNamespace,
                     onExpand: onExpand,
                     onAssistant: onAssistant,
                     onSelect: onSelect
@@ -717,6 +743,7 @@ private struct MorphingBottomDock: View {
     let theme: BuiltInTheme
     let accessory: CollapsedDockAccessory?
     let progress: CGFloat
+    let nowPlayingTransitionNamespace: Namespace.ID
     let onExpand: () -> Void
     let onAssistant: () -> Void
     let onSelect: (AppSection) -> Void
@@ -780,6 +807,10 @@ private struct MorphingBottomDock: View {
                         // 不能成为播放页的透明命中区域。
                         .frame(width: playerWidth, height: bottomBarHeight)
                         .position(x: playerCenterX, y: playerCenterY)
+                        .auralisMatchedTransitionSource(
+                            id: IOSNowPlayingTransitionID.player,
+                            in: nowPlayingTransitionNamespace
+                        )
                         .contentShape(Capsule(style: .continuous))
                         .onTapGesture { model.isNowPlayingPresented = true }
                         .accessibilityElement(children: .contain)
@@ -971,6 +1002,7 @@ private struct CollapsedDock: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     let accessory: CollapsedDockAccessory
+    let nowPlayingTransitionNamespace: Namespace.ID
     let onHome: () -> Void
     let onAssistant: () -> Void
 
@@ -989,6 +1021,10 @@ private struct CollapsedDock: View {
                     BottomGlassBarShell {
                         CompactMiniPlayerContent(model: model, theme: theme)
                     }
+                    .auralisMatchedTransitionSource(
+                        id: IOSNowPlayingTransitionID.player,
+                        in: nowPlayingTransitionNamespace
+                    )
                     .contentShape(Capsule())
                     .onTapGesture {
                         model.isNowPlayingPresented = true
@@ -1256,6 +1292,8 @@ private struct SectionContent: View {
     let section: AppSection
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
+    let browseTransitionNamespace: Namespace.ID
+
     var body: some View {
         page
     }
@@ -1264,9 +1302,17 @@ private struct SectionContent: View {
     private var page: some View {
         switch section {
         case .home:
-            HomeView(model: model, theme: themeStore.current)
+            HomeView(
+                model: model,
+                theme: themeStore.current,
+                browseTransitionNamespace: browseTransitionNamespace
+            )
         case .library:
-            LibraryView(model: model, theme: themeStore.current)
+            LibraryView(
+                model: model,
+                theme: themeStore.current,
+                browseTransitionNamespace: browseTransitionNamespace
+            )
         case .assistant:
             AssistantView(model: model, theme: themeStore.current)
         case .search:
