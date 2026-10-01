@@ -23,6 +23,8 @@ struct SearchView: View {
 
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var browseTransitionNamespace
     @State private var query = ""
     /// 防抖后的查询词：输入停顿约 150ms 后才真正过滤，避免大资料库逐键全量扫描。
     @State private var debouncedQuery = ""
@@ -74,6 +76,11 @@ struct SearchView: View {
                 model: model,
                 theme: theme,
                 showsCloseButton: false
+            )
+            .auralisZoomNavigationTransition(
+                sourceID: IOSBrowseTransitionID(destination),
+                in: browseTransitionNamespace,
+                reduceMotion: reduceMotion
             )
         }
         .task(id: query) {
@@ -253,6 +260,10 @@ struct SearchView: View {
                             }
                         }
                         .buttonStyle(HapticPlainButtonStyle())
+                        .auralisMatchedTransitionSource(
+                            id: IOSBrowseTransitionID.album(album),
+                            in: browseTransitionNamespace
+                        )
                     }
                 }
             }
@@ -275,6 +286,10 @@ struct SearchView: View {
                             }
                         }
                         .buttonStyle(HapticPlainButtonStyle())
+                        .auralisMatchedTransitionSource(
+                            id: IOSBrowseTransitionID.artist(artist),
+                            in: browseTransitionNamespace
+                        )
                     }
                 }
             }
@@ -296,6 +311,10 @@ struct SearchView: View {
                             }
                         }
                         .buttonStyle(HapticPlainButtonStyle())
+                        .auralisMatchedTransitionSource(
+                            id: IOSBrowseTransitionID.playlist(playlist),
+                            in: browseTransitionNamespace
+                        )
                     }
                 }
             }
