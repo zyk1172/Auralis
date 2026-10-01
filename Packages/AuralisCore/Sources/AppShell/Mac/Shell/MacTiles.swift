@@ -377,8 +377,8 @@ struct MacPlaylistTile: View {
                 }
                 .buttonStyle(.plain)
                 .focused($focusedControl, equals: .primary)
-                .help(String(localized: "打开播放列表", bundle: .module))
-                .accessibilityLabel(String(localized: "打开播放列表", bundle: .module))
+                .help(String(localized: "打开歌单", bundle: .module))
+                .accessibilityLabel(String(localized: "打开歌单", bundle: .module))
                 .accessibilityAction(named: Text(String(localized: "播放", bundle: .module))) { onPlay?() }
 
                 if showsActions {
@@ -444,8 +444,8 @@ struct MacPlaylistTile: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(String(localized: "打开播放列表", bundle: .module))
-            .accessibilityLabel(String(localized: "打开播放列表", bundle: .module))
+            .help(String(localized: "打开歌单", bundle: .module))
+            .accessibilityLabel(String(localized: "打开歌单", bundle: .module))
         }
         .frame(width: size, alignment: .leading)
         .onHover { isHovering = $0 }
