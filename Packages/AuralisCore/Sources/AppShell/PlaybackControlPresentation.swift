@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+import DesignSystem
 import Domain
 import SwiftUI
 
@@ -45,12 +46,14 @@ struct PlaybackControlIndicator: View {
     let presentation: PlaybackControlPresentation
     let color: Color
     let fontSize: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
             Image(systemName: presentation.systemImage)
                 .font(.system(size: fontSize, weight: .semibold))
                 .opacity(presentation.isLoading ? 0.35 : 1)
+                .contentTransition(.symbolEffect(.replace))
             if presentation.isLoading {
                 ProgressView()
                     .controlSize(.small)
@@ -58,5 +61,6 @@ struct PlaybackControlIndicator: View {
             }
         }
         .foregroundStyle(color)
+        .animation(AuralisMotion.micro(reduceMotion: reduceMotion), value: presentation)
     }
 }
