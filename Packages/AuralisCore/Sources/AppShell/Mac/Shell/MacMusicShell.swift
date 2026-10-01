@@ -450,7 +450,7 @@ public struct MacMusicShell: View {
             switch route {
             case let .album(id): return resolveAlbum(id)?.title ?? String(localized: "专辑", bundle: .module)
             case let .artist(id): return resolveArtist(id)?.name ?? String(localized: "艺术家", bundle: .module)
-            case let .playlist(id): return resolvePlaylist(id)?.name ?? String(localized: "播放列表", bundle: .module)
+            case let .playlist(id): return resolvePlaylist(id)?.name ?? String(localized: "歌单", bundle: .module)
             case let .genre(name): return name
             case let .recommendationCategory(category): return category.macCategoryTitle
             }
@@ -534,8 +534,8 @@ public struct MacMusicShell: View {
             } message: {
                 Text(model.playbackError?.localizedDescription ?? String(localized: "未知错误", bundle: .module))
             }
-            .alert(String(localized: "新建播放列表", bundle: .module), isPresented: $isCreatingPlaylist) {
-                TextField(String(localized: "播放列表名称", bundle: .module), text: $newPlaylistName)
+            .alert(String(localized: "新建歌单", bundle: .module), isPresented: $isCreatingPlaylist) {
+                TextField(String(localized: "歌单名称", bundle: .module), text: $newPlaylistName)
                 Button(String(localized: "创建", bundle: .module)) {
                     let name = newPlaylistName.trimmingCharacters(in: .whitespacesAndNewlines)
                     newPlaylistName = ""
@@ -546,7 +546,7 @@ public struct MacMusicShell: View {
                     newPlaylistName = ""
                 }
             } message: {
-                Text(String(localized: "创建一个新的播放列表。", bundle: .module))
+                Text(String(localized: "创建一个新的歌单。", bundle: .module))
             }
     }
 
