@@ -1058,23 +1058,36 @@ public enum AgentCompletionEvaluator {
                 : "推荐索引仍有待处理歌曲；专用 Runtime 会继续处理并核验。"
         case .appreciationWithEvidence:
             let metadataReady = state.facts["appreciation.metadata"] == "available"
-            let lyricsResolved = state.facts["appreciation.lyrics"] != nil
-            let communityResolved = state.facts["appreciation.community"] != nil
-            let requiredSections = ["【已核验事实】", "【模型分析】", "【我的私人数据】", "【大众评价】"]
-            let hasRequiredSections = requiredSections.allSatisfy(answer.contains)
+            let hasVerifiedFactsSection = answer.contains("【已核验事实】")
+            let hasModelAnalysisSection = answer.contains("【模型分析】")
+                || answer.contains("【专业听感】")
             let hasCommunityEvidence = state.facts["appreciation.community"] == "available"
-            let communityBoundarySatisfied = hasCommunityEvidence
-                || answer.contains("暂无可核验的大众评价数据。")
             let unsupportedCommunityClaim = !hasCommunityEvidence && [
                 "大众普遍认为", "广受好评", "听众一致认为",
             ].contains(where: answer.contains)
-            satisfied = metadataReady
-                && lyricsResolved
-                && communityResolved
-                && hasRequiredSections
-                && communityBoundarySatisfied
+
+            // 歌词、私人播放数据和 Community Evidence 都是增强项，不是
+            // “能否鉴赏”的硬前置条件。music_appreciate 成功时要求把已核验
+            // 元数据与模型分析分开；工具/外部证据暂不可用时，模型仍可给出
+            // 明确标注的专业分析，但不得伪造【已核验事实】或大众共识。
+            let factualBoundarySatisfied = metadataReady
+                ? hasVerifiedFactsSection
+                : !hasVerifiedFactsSection
+            satisfied = hasModelAnalysisSection
+                && factualBoundarySatisfied
                 && !unsupportedCommunityClaim
-            continuation = "歌曲鉴赏必须先调用 music_appreciate，并以【已核验事实】【模型分析】【我的私人数据】【大众评价】分层回答。没有 Community Evidence 时，大众评价段必须写“暂无可核验的大众评价数据。”"
+
+            if unsupportedCommunityClaim {
+                continuation = "没有可核验的大众评价数据时，不要把模型印象写成大众共识；可以继续给出【模型分析】或【专业听感】。"
+            } else if !hasModelAnalysisSection {
+                continuation = "歌曲鉴赏不必等待歌词、私人数据或大众评价；请继续给出明确标注的【模型分析】或【专业听感】。"
+            } else if metadataReady && !hasVerifiedFactsSection {
+                continuation = "已经取得可核验曲目信息，请把真实资料放在【已核验事实】中，并与模型分析分开。"
+            } else if !metadataReady && hasVerifiedFactsSection {
+                continuation = "当前没有可核验曲目信息，请移除【已核验事实】声明，保留明确标注的模型分析即可。"
+            } else {
+                continuation = "请保持事实与模型分析边界清晰；缺失的歌词、私人数据或大众评价可以直接省略，不要因此停止鉴赏。"
+            }
         }
 
         if satisfied {
@@ -1088,7 +1101,7 @@ public enum AgentCompletionEvaluator {
         state.completionState = .insufficientEvidence
         state.status = .insufficient
         state.errorState = continuation
-        return .fail("任务没有满足确定性完成条件：\(continuation)")
+        return .fail(continuation)
     }
 }
 
