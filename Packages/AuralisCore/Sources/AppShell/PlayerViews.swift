@@ -551,9 +551,7 @@ struct NowPlayingView: View {
 
     private var favoriteButton: some View {
         Button {
-            withAnimation(AuralisMotion.micro(reduceMotion: reduceMotion)) {
-                model.toggleFavorite(model.currentTrack)
-            }
+            model.toggleFavorite(model.currentTrack)
         } label: {
             Image(systemName: model.currentTrack.isFavorite ? "heart.fill" : "heart")
                 .font(.title3)
@@ -561,6 +559,8 @@ struct NowPlayingView: View {
                 .contentTransition(.symbolEffect(.replace))
         }
         .buttonStyle(HapticPlainButtonStyle())
+        // 收藏落库/服务器同步通过异步 Task 更新状态，不能只依赖点击时的 withAnimation。
+        .animation(AuralisMotion.micro(reduceMotion: reduceMotion), value: model.currentTrack.isFavorite)
         .frame(width: 44, height: 44)
         .contentShape(Rectangle())
         .accessibilityLabel(model.currentTrack.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
@@ -571,9 +571,7 @@ struct NowPlayingView: View {
     private var dislikeButton: some View {
         let isDisliked = model.isDisliked(model.currentTrack)
         return Button {
-            withAnimation(AuralisMotion.micro(reduceMotion: reduceMotion)) {
-                model.toggleDisliked(model.currentTrack)
-            }
+            model.toggleDisliked(model.currentTrack)
         } label: {
             Image(systemName: isDisliked ? "heart.slash.fill" : "heart.slash")
                 .font(.title3)
@@ -581,6 +579,7 @@ struct NowPlayingView: View {
                 .contentTransition(.symbolEffect(.replace))
         }
         .buttonStyle(HapticPlainButtonStyle())
+        .animation(AuralisMotion.micro(reduceMotion: reduceMotion), value: isDisliked)
         .frame(width: 44, height: 44)
         .contentShape(Rectangle())
         .accessibilityLabel(isDisliked ? String(localized: "取消不喜欢", bundle: .module) : String(localized: "不喜欢", bundle: .module))
