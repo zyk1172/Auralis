@@ -9665,38 +9665,6 @@
         }
       }
     },
-    "歌单" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Playlists"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "播放清單"
-          }
-        }
-      }
-    },
-    "歌单名称" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Playlist Name"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "播放清單名稱"
-          }
-        }
-      }
-    },
     "播放失败" : {
       "localizations" : {
         "en" : {
@@ -10795,22 +10763,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "暫無可核驗的大眾評價資料。"
-          }
-        }
-      }
-    },
-    "暂无歌单" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No Playlists"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "暫無播放清單"
           }
         }
       }
