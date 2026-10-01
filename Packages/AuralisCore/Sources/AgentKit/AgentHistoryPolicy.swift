@@ -161,6 +161,26 @@ public enum AgentHistoryPolicy {
         ].contains(normalized) {
             return true
         }
+
+        // A short strategy correction belongs to the task that immediately
+        // precedes it.  In particular, recommendation workflows often need a
+        // second user turn such as “采用撞库的方式来推荐” after the model
+        // hesitates.  Treat that as a continuation so the original playlist /
+        // target-count / mutation semantics remain available.  Keep this
+        // deliberately narrow: an entity-bearing command or a new mutation is
+        // still a fresh request and must compile its own lineage.
+        let collisionStrategyFollowUp = normalized.count <= 48
+            && normalized.contains("撞库")
+            && ["采用", "改用", "换用", "按照", "按", "就用", "用"].contains(where: normalized.contains)
+            && ["推荐", "筛选", "选歌", "找歌"].contains(where: normalized.contains)
+            && ![
+                "创建", "新建", "删除", "加入", "添加", "播放", "队列", "歌单", "播放列表",
+                "服务器", "下载", "收藏", "评分",
+            ].contains(where: normalized.contains)
+        if collisionStrategyFollowUp {
+            return true
+        }
+
         return false
     }
 
