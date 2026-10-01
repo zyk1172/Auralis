@@ -1871,7 +1871,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "歌曲、专辑、艺术家或播放列表"
+            "value" : "歌曲、专辑、艺术家或歌单"
           }
         }
       }
@@ -2081,7 +2081,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "生成播放列表时长"
+            "value" : "生成歌单时长"
           }
         }
       }
@@ -2349,7 +2349,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "让 AI 助手播放音乐、管理播放列表、推荐歌曲或回答音乐库问题"
+            "value" : "让 AI 助手播放音乐、管理歌单、推荐歌曲或回答音乐库问题"
           }
         }
       }
