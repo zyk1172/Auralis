@@ -5,7 +5,7 @@ import SwiftUI
 import ThemeEngine
 
 /// 侧边栏（REFERENCE_A）：顶部 搜索/主页；资料库（可编辑显示/隐藏+排序）；
-/// 播放列表 = 收藏歌曲 + 所有播放列表（不再把每个用户歌单铺进 Sidebar）；Auralis 扩展区。
+/// 歌单 = 收藏歌曲 + 所有歌单（不再把每个用户歌单铺进 Sidebar）；Auralis 扩展区。
 struct MacSidebar: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var prefs: MacSidebarPreferences
@@ -30,7 +30,7 @@ struct MacSidebar: View {
                 } header: {
                     libraryHeader
                 }
-                Section(String(localized: "播放列表", bundle: .module)) {
+                Section(String(localized: "歌单", bundle: .module)) {
                     sidebarRow(.favorites)
                     sidebarRow(.playlists)
                 }
