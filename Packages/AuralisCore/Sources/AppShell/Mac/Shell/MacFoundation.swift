@@ -87,7 +87,7 @@ enum MacSidebarDestination: String, Hashable, CaseIterable, Identifiable {
         case .favorites: String(localized: "收藏歌曲", bundle: .module)
         case .disliked: String(localized: "不喜欢", bundle: .module)
         case .downloads: String(localized: "下载", bundle: .module)
-        case .playlists: String(localized: "播放列表", bundle: .module)
+        case .playlists: String(localized: "歌单", bundle: .module)
         case .categories: String(localized: "分类", bundle: .module)
         case .assistant: String(localized: "AI 助手", bundle: .module)
         }
