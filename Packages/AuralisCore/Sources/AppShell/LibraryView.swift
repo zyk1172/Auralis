@@ -25,13 +25,9 @@ struct LibraryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker(String(localized: "资料类型", bundle: .module), selection: $scope) {
-                ForEach(LibraryScope.allCases) { item in Text(item.title).tag(item) }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, AuralisSpacing.large)
-            .padding(.vertical, AuralisSpacing.small)
-            .onChange(of: scope) { _, _ in Haptics.selection() }
+            libraryScopeNavigation
+                .padding(.horizontal, AuralisSpacing.large)
+                .padding(.vertical, AuralisSpacing.small)
             Divider()
             scopeContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -98,6 +94,88 @@ struct LibraryView: View {
         } message: {
             Text(String(localized: "服务器上的歌单也会被删除，此操作不可撤销。", bundle: .module))
         }
+    }
+
+    private var libraryScopeNavigation: some View {
+        HStack(spacing: 2) {
+            ForEach(LibraryScope.primaryCases) { item in
+                Button {
+                    selectScope(item)
+                } label: {
+                    Text(item.title)
+                        .font(.subheadline.weight(scope == item ? .semibold : .regular))
+                        .foregroundStyle(scope == item ? theme.colorTokens.accent.color : theme.colorTokens.primaryText.color)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                        .background {
+                            if scope == item {
+                                Capsule(style: .continuous)
+                                    .fill(theme.colorTokens.surface.color)
+                                    .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("auralis.library.scope.\(item.rawValue)")
+            }
+
+            Menu {
+                Button {
+                    selectScope(.genres)
+                } label: {
+                    Label(
+                        String(localized: "流派", bundle: .module),
+                        systemImage: scope == .genres ? "checkmark" : "music.quarternote.3"
+                    )
+                }
+                Button {
+                    selectScope(.categories)
+                } label: {
+                    Label(
+                        String(localized: "分类", bundle: .module),
+                        systemImage: scope == .categories ? "checkmark" : "square.grid.2x2"
+                    )
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Text(String(localized: "更多", bundle: .module))
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.semibold))
+                }
+                .font(.subheadline.weight(isMoreScopeSelected ? .semibold : .regular))
+                .foregroundStyle(isMoreScopeSelected ? theme.colorTokens.accent.color : theme.colorTokens.primaryText.color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(maxWidth: .infinity, minHeight: 32)
+                .background {
+                    if isMoreScopeSelected {
+                        Capsule(style: .continuous)
+                            .fill(theme.colorTokens.surface.color)
+                            .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .accessibilityLabel(
+                isMoreScopeSelected
+                    ? String(localized: "更多", bundle: .module) + " · " + scope.title
+                    : String(localized: "更多", bundle: .module)
+            )
+            .accessibilityIdentifier("auralis.library.scope.more")
+        }
+        .padding(3)
+        .background(Color.primary.opacity(0.06), in: Capsule(style: .continuous))
+    }
+
+    private var isMoreScopeSelected: Bool {
+        scope == .genres || scope == .categories
+    }
+
+    private func selectScope(_ newScope: LibraryScope) {
+        guard scope != newScope else { return }
+        scope = newScope
+        Haptics.selection()
     }
 
     @ViewBuilder
@@ -619,6 +697,9 @@ struct LibraryView: View {
 
 enum LibraryScope: String, CaseIterable, Identifiable {
     case albums, tracks, artists, playlists, favorites, genres, categories
+
+    static let primaryCases: [LibraryScope] = [.albums, .tracks, .artists, .playlists, .favorites]
+
     var id: String { rawValue }
     var title: String {
         switch self {

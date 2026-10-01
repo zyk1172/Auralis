@@ -101,7 +101,7 @@ struct MacSearchView: View {
                             .foregroundStyle(.secondary)
                         Text(String(localized: "搜索你的资料库", bundle: .module))
                             .font(.title3.weight(.semibold))
-                        Text(String(localized: "查找歌曲、专辑、艺术家和播放列表。", bundle: .module))
+                        Text(String(localized: "查找歌曲、专辑、艺术家和歌单。", bundle: .module))
                             .font(.body)
                             .foregroundStyle(.secondary)
                     }

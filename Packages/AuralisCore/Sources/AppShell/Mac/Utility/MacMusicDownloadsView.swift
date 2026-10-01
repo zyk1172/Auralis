@@ -94,7 +94,7 @@ struct MacMusicDownloadsView: View {
                 ContentUnavailableView(
                     String(localized: "暂无下载", bundle: .module),
                     systemImage: "arrow.down.circle",
-                    description: Text(String(localized: "在歌曲、专辑或播放列表菜单中选择“下载”，即可离线播放。", bundle: .module))
+                    description: Text(String(localized: "在歌曲、专辑或歌单菜单中选择“下载”，即可离线播放。", bundle: .module))
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if tracks.isEmpty {

@@ -5,7 +5,7 @@ import LocalCatalog
 import SwiftUI
 import ThemeEngine
 
-/// 播放列表总览：真实 mosaic 封面 + 本地搜索「在播放列表中查找」。
+/// 歌单总览：真实 mosaic 封面 + 本地搜索「在歌单中查找」。
 struct MacPlaylistListView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
@@ -38,16 +38,16 @@ struct MacPlaylistListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            MacPageSearchHeader(text: $localSearch, prompt: String(localized: "在播放列表中查找", bundle: .module))
+            MacPageSearchHeader(text: $localSearch, prompt: String(localized: "在歌单中查找", bundle: .module))
             Divider()
             GeometryReader { geo in
                 if visiblePlaylists.isEmpty {
                     ContentUnavailableView {
-                        Label(String(localized: "暂无播放列表", bundle: .module), systemImage: "music.note.list")
+                        Label(String(localized: "暂无歌单", bundle: .module), systemImage: "music.note.list")
                     } description: {
-                        Text(String(localized: "你可以创建播放列表，也可以使用音乐服务器中已经存在的播放列表。", bundle: .module))
+                        Text(String(localized: "你可以创建歌单，也可以使用音乐服务器中已经存在的歌单。", bundle: .module))
                     } actions: {
-                        Button(String(localized: "新建播放列表", bundle: .module)) {
+                        Button(String(localized: "新建歌单", bundle: .module)) {
                             NotificationCenter.default.post(name: MacCommand.newPlaylist, object: nil)
                         }
                         .buttonStyle(.borderedProminent)
@@ -76,7 +76,7 @@ struct MacPlaylistListView: View {
                 }
             }
         }
-        .navigationTitle(String(localized: "播放列表", bundle: .module))
+        .navigationTitle(String(localized: "歌单", bundle: .module))
         .task(id: derivationKey) {
             rebuildVisiblePlaylists()
         }

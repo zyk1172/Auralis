@@ -228,7 +228,7 @@
         }
       }
     },
-    "新建播放列表" : {
+    "新建歌单" : {
       "extractionState" : "stale",
       "localizations" : {
         "en" : {
@@ -348,7 +348,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "让 AI 助手播放音乐、管理播放列表、推荐歌曲或回答音乐库问题"
+            "value" : "让 AI 助手播放音乐、管理歌单、推荐歌曲或回答音乐库问题"
           }
         }
       }
