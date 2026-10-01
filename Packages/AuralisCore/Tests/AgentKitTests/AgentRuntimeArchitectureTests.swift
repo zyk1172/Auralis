@@ -670,14 +670,22 @@ struct AgentRuntimeArchitectureTests {
         #expect(state.completionState == .satisfied)
     }
 
-    @Test func appreciationRequiresResolvedEvidenceBoundaries() {
+    @Test func appreciationTreatsLyricsPrivateAndCommunityDataAsOptionalEnhancements() {
         var state = AgentTaskState(intent: .musicAppreciation, goal: "appreciate")
         let policy = AgentTaskPolicy.policy(for: .musicAppreciation)
         state.facts["appreciation.metadata"] = "available"
-        let incomplete = AgentCompletionEvaluator.evaluateModelAnswer("answer", state: &state, policy: policy, repairAttempts: 0)
+
+        let incomplete = AgentCompletionEvaluator.evaluateModelAnswer(
+            "【已核验事实】metadata",
+            state: &state,
+            policy: policy,
+            repairAttempts: 0
+        )
         #expect(incomplete != .accept)
-        state.facts["appreciation.lyrics"] = "unavailable"
-        state.facts["appreciation.community"] = "unavailable"
+
+        // No lyrics/private/community facts are required to finish.  Once
+        // verified metadata and model analysis are clearly separated, the
+        // appreciation can complete without empty placeholder sections.
         let complete = AgentCompletionEvaluator.evaluateModelAnswer(
             """
             ## 《Song》鉴赏
@@ -685,16 +693,26 @@ struct AgentRuntimeArchitectureTests {
             metadata
             ### 【模型分析】
             listening analysis
-            ### 【我的私人数据】
-            1 play
-            ### 【大众评价】
-            暂无可核验的大众评价数据。
             """,
             state: &state,
             policy: policy,
             repairAttempts: 0
         )
         #expect(complete == .accept)
+    }
+
+    @Test func appreciationCanFallBackToClearlyLabeledModelAnalysisWithoutVerifiedMetadata() {
+        var state = AgentTaskState(intent: .musicAppreciation, goal: "appreciate")
+        let policy = AgentTaskPolicy.policy(for: .musicAppreciation)
+
+        let decision = AgentCompletionEvaluator.evaluateModelAnswer(
+            "【模型分析】这段旋律的张力主要来自节奏与和声推进。",
+            state: &state,
+            policy: policy,
+            repairAttempts: 0
+        )
+
+        #expect(decision == .accept)
     }
 
     @Test func appreciationRejectsUnsupportedCommunityConsensus() {
