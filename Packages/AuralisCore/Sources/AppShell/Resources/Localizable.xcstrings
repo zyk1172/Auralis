@@ -743,7 +743,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 个播放列表"
+            "value" : "%lld 个歌单"
           }
         }
       }
@@ -1426,7 +1426,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Auralis 只在本机保存音乐库元数据（歌曲、专辑、艺人、流派、播放列表、收藏与听歌记录）。封面和歌词按需加载；已下载歌曲会占用音频缓存空间。"
+            "value" : "Auralis 只在本机保存音乐库元数据（歌曲、专辑、艺人、流派、歌单、收藏与听歌记录）。封面和歌词按需加载；已下载歌曲会占用音频缓存空间。"
           }
         }
       }
@@ -2607,7 +2607,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "下载播放列表"
+            "value" : "下载歌单"
           }
         }
       }
@@ -3124,7 +3124,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只会删除本机的登录信息、音乐库数据和缓存；服务器上的音乐、播放列表与收藏不会被删除。"
+            "value" : "只会删除本机的登录信息、音乐库数据和缓存；服务器上的音乐、歌单与收藏不会被删除。"
           }
         }
       }
@@ -3397,7 +3397,7 @@
         }
       }
     },
-    "你可以创建播放列表，也可以使用音乐服务器中已经存在的播放列表。" : {
+    "你可以创建歌单，也可以使用音乐服务器中已经存在的歌单。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -4715,7 +4715,7 @@
         }
       }
     },
-    "创建一个新的播放列表。" : {
+    "创建一个新的歌单。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -4990,7 +4990,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "删除播放列表"
+            "value" : "删除歌单"
           }
         }
       }
@@ -5012,7 +5012,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "删除播放列表？"
+            "value" : "删除歌单？"
           }
         }
       }
@@ -5034,7 +5034,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "删除播放列表「%@」？"
+            "value" : "删除歌单「%@」？"
           }
         }
       }
@@ -5088,7 +5088,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "删除选中的 %lld 个播放列表？"
+            "value" : "删除选中的 %lld 个歌单？"
           }
         }
       }
@@ -5715,7 +5715,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只会删除播放列表本身，不会删除其中的歌曲。"
+            "value" : "只会删除歌单本身，不会删除其中的歌曲。"
           }
         }
       }
@@ -6156,7 +6156,7 @@
         }
       }
     },
-    "在播放列表中查找" : {
+    "在歌单中查找" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -6167,7 +6167,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在播放列表中尋找"
+            "value" : "在歌单中尋找"
           }
         }
       }
@@ -6211,7 +6211,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "创建或同步播放列表后，这里会列出可添加歌曲的播放列表。"
+            "value" : "创建或同步歌单后，这里会列出可添加歌曲的歌单。"
           }
         }
       }
@@ -6233,12 +6233,12 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "创建或同步播放列表后，它们会显示在这里。"
+            "value" : "创建或同步歌单后，它们会显示在这里。"
           }
         }
       }
     },
-    "在歌曲、专辑或播放列表菜单中选择“下载”，即可离线播放。" : {
+    "在歌曲、专辑或歌单菜单中选择“下载”，即可离线播放。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -6271,7 +6271,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在歌曲、专辑或播放列表菜单中选择“下载到设备”，即可离线播放。"
+            "value" : "在歌曲、专辑或歌单菜单中选择“下载到设备”，即可离线播放。"
           }
         }
       }
@@ -6519,7 +6519,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "备份内容：App 设置、音乐服务器（含登录凭据）、AI 模型接口、音乐下载插件（含 Token）。不包含本地数据库、歌曲、专辑、播放列表、收藏、播放记录、缓存或下载文件。备份文件使用密码加密，请妥善保管密码。"
+            "value" : "备份内容：App 设置、音乐服务器（含登录凭据）、AI 模型接口、音乐下载插件（含 Token）。不包含本地数据库、歌曲、专辑、歌单、收藏、播放记录、缓存或下载文件。备份文件使用密码加密，请妥善保管密码。"
           }
         }
       }
@@ -6685,7 +6685,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "复制播放列表"
+            "value" : "复制歌单"
           }
         }
       }
@@ -7259,7 +7259,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "将删除本机保存的登录凭据、离线目录与缓存；服务器上的音乐、播放列表与收藏不会被删除。"
+            "value" : "将删除本机保存的登录凭据、离线目录与缓存；服务器上的音乐、歌单与收藏不会被删除。"
           }
         }
       }
@@ -7325,7 +7325,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "将恢复：App 设置、音乐服务器、AI 模型与音乐下载配置。不会覆盖或删除本地数据库、歌曲、播放列表、收藏、播放记录、缓存或下载文件。"
+            "value" : "将恢复：App 设置、音乐服务器、AI 模型与音乐下载配置。不会覆盖或删除本地数据库、歌曲、歌单、收藏、播放记录、缓存或下载文件。"
           }
         }
       }
@@ -7347,7 +7347,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "将恢复：服务器信息、AI 模型配置与其他设置。不会覆盖或删除歌曲、播放列表、收藏与播放记录。"
+            "value" : "将恢复：服务器信息、AI 模型配置与其他设置。不会覆盖或删除歌曲、歌单、收藏与播放记录。"
           }
         }
       }
@@ -8037,7 +8037,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "常用播放列表"
+            "value" : "常用歌单"
           }
         }
       }
@@ -8946,7 +8946,7 @@
         }
       }
     },
-    "打开播放列表" : {
+    "打开歌单" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -9665,7 +9665,7 @@
         }
       }
     },
-    "播放列表" : {
+    "歌单" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -9681,7 +9681,7 @@
         }
       }
     },
-    "播放列表名称" : {
+    "歌单名称" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -10305,7 +10305,7 @@
         }
       }
     },
-    "新建播放列表" : {
+    "新建歌单" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -10456,7 +10456,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "无法删除播放列表"
+            "value" : "无法删除歌单"
           }
         }
       }
@@ -10494,7 +10494,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "无法定位播放列表所属服务器。"
+            "value" : "无法定位歌单所属服务器。"
           }
         }
       }
@@ -10799,7 +10799,7 @@
         }
       }
     },
-    "暂无播放列表" : {
+    "暂无歌单" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -10848,7 +10848,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "暂无播放列表"
+            "value" : "暂无歌单"
           }
         }
       }
@@ -11174,7 +11174,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "服务器上的播放列表也会被删除，此操作不可撤销。"
+            "value" : "服务器上的歌单也会被删除，此操作不可撤销。"
           }
         }
       }
@@ -11196,7 +11196,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "服务器上这个播放列表里还没有添加歌曲。"
+            "value" : "服务器上这个歌单里还没有添加歌曲。"
           }
         }
       }
@@ -11434,7 +11434,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "服务器未确认删除。请检查网络与播放列表权限后重试。"
+            "value" : "服务器未确认删除。请检查网络与歌单权限后重试。"
           }
         }
       }
@@ -11830,7 +11830,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本地音乐库中没有同时匹配歌曲、专辑、艺人或播放列表的内容。可以尝试在线搜索音乐服务器。"
+            "value" : "本地音乐库中没有同时匹配歌曲、专辑、艺人或歌单的内容。可以尝试在线搜索音乐服务器。"
           }
         }
       }
@@ -12019,7 +12019,7 @@
         }
       }
     },
-    "查找歌曲、专辑、艺术家和播放列表。" : {
+    "查找歌曲、专辑、艺术家和歌单。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -12375,7 +12375,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "播放列表"
+            "value" : "歌单"
           }
         }
       }
@@ -12397,7 +12397,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "播放列表 · %lld 首"
+            "value" : "歌单 · %lld 首"
           }
         }
       }
@@ -12419,7 +12419,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "播放列表（%lld）"
+            "value" : "歌单（%lld）"
           }
         }
       }
@@ -12441,7 +12441,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "播放列表《%@》"
+            "value" : "歌单《%@》"
           }
         }
       }
@@ -12463,7 +12463,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "播放列表不可用"
+            "value" : "歌单不可用"
           }
         }
       }
@@ -12485,7 +12485,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "播放列表为空"
+            "value" : "歌单为空"
           }
         }
       }
@@ -12507,7 +12507,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "播放列表名称"
+            "value" : "歌单名称"
           }
         }
       }
@@ -12529,7 +12529,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "播放列表操作"
+            "value" : "歌单操作"
           }
         }
       }
@@ -12551,7 +12551,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "播放列表暂无歌曲"
+            "value" : "歌单暂无歌曲"
           }
         }
       }
@@ -12573,7 +12573,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "播放列表管理与排序"
+            "value" : "歌单管理与排序"
           }
         }
       }
@@ -12611,7 +12611,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "歌曲、专辑、艺术家或播放列表"
+            "value" : "歌曲、专辑、艺术家或歌单"
           }
         }
       }
@@ -12809,7 +12809,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在加载播放列表…"
+            "value" : "正在加载歌单…"
           }
         }
       }
@@ -13411,7 +13411,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "添加到播放列表"
+            "value" : "添加到歌单"
           }
         }
       }
@@ -13433,7 +13433,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "添加到播放列表《%@》"
+            "value" : "添加到歌单《%@》"
           }
         }
       }
@@ -15485,7 +15485,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "该播放列表为只读播放列表，无法删除。"
+            "value" : "该歌单为只读歌单，无法删除。"
           }
         }
       }
@@ -15507,7 +15507,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "该播放列表会同时从音乐服务器和本地目录删除，歌曲文件不会被删除。"
+            "value" : "该歌单会同时从音乐服务器和本地目录删除，歌曲文件不会被删除。"
           }
         }
       }
@@ -16058,7 +16058,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "输入歌曲、专辑、艺人或播放列表名称，Auralis 会在本地音乐库中匹配（离线可用）。"
+            "value" : "输入歌曲、专辑、艺人或歌单名称，Auralis 会在本地音乐库中匹配（离线可用）。"
           }
         }
       }
@@ -16208,7 +16208,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "还没有播放列表"
+            "value" : "还没有歌单"
           }
         }
       }
@@ -16310,7 +16310,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这个播放列表不在当前音乐库中。"
+            "value" : "这个歌单不在当前音乐库中。"
           }
         }
       }
@@ -16332,7 +16332,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这个播放列表还没有歌曲。"
+            "value" : "这个歌单还没有歌曲。"
           }
         }
       }
@@ -16748,7 +16748,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "选中的播放列表会同时从音乐服务器和本地目录删除，歌曲文件不会被删除。"
+            "value" : "选中的歌单会同时从音乐服务器和本地目录删除，歌曲文件不会被删除。"
           }
         }
       }
@@ -17064,7 +17064,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "重命名播放列表"
+            "value" : "重命名歌单"
           }
         }
       }
