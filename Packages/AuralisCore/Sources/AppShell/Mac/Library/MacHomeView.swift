@@ -11,7 +11,7 @@ private struct MacHomeTrackItem: Identifiable {
 }
 
 /// 首页：只展示真实有数据的货架（全部为网格卡片）。
-/// 最近播放/最近添加按 Album 投影去重；收藏歌曲/播放列表等资料库入口由侧边栏负责。
+/// 最近播放/最近添加按 Album 投影去重；收藏歌曲/歌单等资料库入口由侧边栏负责。
 struct MacHomeView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
@@ -36,13 +36,13 @@ struct MacHomeView: View {
         // 顶部不留按钮：编辑首页入口已移到「设置 → 通用」。
     }
 
-    /// 首页货架标题（有序）。资料库入口（歌曲/专辑/艺术家/流派/下载/不喜欢/播放列表/收藏）
+    /// 首页货架标题（有序）。资料库入口（歌曲/专辑/艺术家/流派/下载/不喜欢/歌单/收藏）
     /// 由侧边栏负责，首页只保留“适合首页”的音乐内容卡片货架。供测试校验栏目切割。
     static let shelfTitles: [String] = HomeModuleRegistry.modules(in: .content).map(\.title)
 
-    /// 首页不得包含这些（已由侧边栏资料库/播放列表区承担）。
+    /// 首页不得包含这些（已由侧边栏资料库/歌单区承担）。
     static let sidebarOnlyTitles: Set<String> = [
-        "歌曲", "专辑", "艺术家", "流派", "下载", "不喜欢", "播放列表", "收藏",
+        "歌曲", "专辑", "艺术家", "流派", "下载", "不喜欢", "歌单", "收藏",
     ]
 
     /// 按用户持久化的顺序和显示开关驱动 Mac 首页；无数据的模块不占空白。
