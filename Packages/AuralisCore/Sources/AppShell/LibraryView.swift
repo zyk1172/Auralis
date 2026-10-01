@@ -116,7 +116,7 @@ struct LibraryView: View {
                             }
                         }
                 }
-                .buttonStyle(HapticPlainButtonStyle())
+                .buttonStyle(.plain)
                 .accessibilityIdentifier("auralis.library.scope.\(item.rawValue)")
             }
 
