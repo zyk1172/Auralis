@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import Domain
+import LocalCatalog
 import SwiftUI
 
 /// Stable spatial identities for iOS library transitions.
