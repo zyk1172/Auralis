@@ -8,6 +8,8 @@ import ThemeEngine
 struct LibraryView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
+    let browseTransitionNamespace: Namespace.ID?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var scope = LibraryScope.albums
     @State private var playlistTarget: Track?
     @State private var playlistToRename: Playlist?
@@ -17,9 +19,15 @@ struct LibraryView: View {
     @State private var isLoadingRecommendationCategories = false
     @State private var recommendationCategoryError: String?
 
-    init(model: AuralisAppModel, theme: BuiltInTheme, initialScope: LibraryScope = .albums) {
+    init(
+        model: AuralisAppModel,
+        theme: BuiltInTheme,
+        initialScope: LibraryScope = .albums,
+        browseTransitionNamespace: Namespace.ID? = nil
+    ) {
         self.model = model
         self.theme = theme
+        self.browseTransitionNamespace = browseTransitionNamespace
         _scope = State(initialValue: initialScope)
     }
 
@@ -30,6 +38,8 @@ struct LibraryView: View {
                 .padding(.vertical, AuralisSpacing.small)
             Divider()
             scopeContent
+                .id(scope)
+                .transition(.opacity)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(theme.colorTokens.background.color)
@@ -174,7 +184,9 @@ struct LibraryView: View {
 
     private func selectScope(_ newScope: LibraryScope) {
         guard scope != newScope else { return }
-        scope = newScope
+        withAnimation(AuralisMotion.crossFade(reduceMotion: reduceMotion)) {
+            scope = newScope
+        }
         Haptics.selection()
     }
 
@@ -268,7 +280,11 @@ struct LibraryView: View {
                                 .foregroundStyle(theme.colorTokens.primaryText.color)
                                 .contentShape(Rectangle())
                             }
-                            .buttonStyle(HapticPlainButtonStyle())
+                            .buttonStyle(HapticCardButtonStyle())
+                            .auralisMatchedTransitionSource(
+                                id: IOSBrowseTransitionID.album(album),
+                                in: browseTransitionNamespace
+                            )
                             .accessibilityLabel(String(localized: "专辑《\(album.title)》，艺术家 \(album.artistName)", bundle: .module))
                             .contextMenu {
                                 Button(String(localized: "播放全部", bundle: .module)) {
@@ -318,6 +334,10 @@ struct LibraryView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(HapticPlainButtonStyle())
+                    .auralisMatchedTransitionSource(
+                        id: IOSBrowseTransitionID.artist(artist),
+                        in: browseTransitionNamespace
+                    )
                     .accessibilityLabel(String(localized: "艺术家 \(artist.name)，\(artist.albumCount) 张专辑", bundle: .module))
                     .contextMenu {
                         Button(String(localized: "播放全部", bundle: .module)) {
@@ -380,7 +400,7 @@ struct LibraryView: View {
                                 .background(theme.colorTokens.surface.color)
                                 .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
                             }
-                            .buttonStyle(HapticPlainButtonStyle())
+                            .buttonStyle(HapticCardButtonStyle())
                         }
                     }
                     .padding(AuralisSpacing.medium)
@@ -455,7 +475,7 @@ struct LibraryView: View {
                                 .background(theme.colorTokens.surface.color)
                                 .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
                             }
-                            .buttonStyle(HapticPlainButtonStyle())
+                            .buttonStyle(HapticCardButtonStyle())
                         }
                     }
                     .padding(.horizontal, AuralisSpacing.medium)
@@ -598,7 +618,11 @@ struct LibraryView: View {
                                 .foregroundStyle(theme.colorTokens.primaryText.color)
                                 .contentShape(Rectangle())
                             }
-                            .buttonStyle(HapticPlainButtonStyle())
+                            .buttonStyle(HapticCardButtonStyle())
+                            .auralisMatchedTransitionSource(
+                                id: IOSBrowseTransitionID.playlist(playlist),
+                                in: browseTransitionNamespace
+                            )
                             .accessibilityLabel(String(localized: "歌单《\(playlist.name)》", bundle: .module))
                             .contextMenu {
                                 playlistManagementMenu(playlist)
