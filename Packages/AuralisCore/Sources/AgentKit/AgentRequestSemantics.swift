@@ -532,7 +532,25 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             return Self(domain: .musicLibrary, operation: executableIndexBuild ? .mutate : .read, isMusicContext: true, isContinuation: continuation, isRecommendationIndex: true, isRecommendationIndexBuild: executableIndexBuild, requestedOperations: requested, suggestedToolNamespaces: ["catalog"])
         }
         if playlistActionTarget {
-            return Self(domain: .playlist, operation: requested.isEmpty ? .read : .mutate, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["playlist", "catalog"], directReadCapability: directReadCapability)
+            // Playlist creation can simultaneously be a recommendation task
+            // (for example “创建一个适合学习的 50 首歌单”).  Keep playlist as
+            // the primary mutation domain, but preserve recommendation as a
+            // capability facet so the ToolSelector can expose semantic
+            // collision / mood / constraint reads before the fixed Skill
+            // performs playlist_create + playlist_add_songs.
+            let namespaces: Set<String> = recommendationRequest
+                ? ["playlist", "catalog", "recommendation"]
+                : ["playlist", "catalog"]
+            return Self(
+                domain: .playlist,
+                operation: requested.isEmpty ? .read : .mutate,
+                isMusicContext: true,
+                isContinuation: continuation,
+                isMusicAppreciation: musicAppreciation,
+                requestedOperations: requested,
+                suggestedToolNamespaces: namespaces,
+                directReadCapability: directReadCapability
+            )
         }
         if serverContext {
             return Self(domain: .server, operation: serverMutation ? .mutate : .read, isMusicContext: isMusicContext, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["server"], directReadCapability: directReadCapability)

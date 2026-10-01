@@ -362,6 +362,7 @@ public struct ToolLoop {
             .filter { descriptor in
                 descriptor.name != "recommendation_ground_candidates"
                     || requestSemantics.domain == .recommendation
+                    || requestSemantics.suggestedToolNamespaces.contains("recommendation")
                     || resolvedIntent == .musicDiscovery
             }
         let workflowRoute = WorkflowEngine.route(
@@ -787,6 +788,7 @@ public struct ToolLoop {
                     .filter { descriptor in
                         descriptor.name != "recommendation_ground_candidates"
                             || plan.semantics.domain == .recommendation
+                            || plan.semantics.suggestedToolNamespaces.contains("recommendation")
                             || plan.intent == .musicDiscovery
                     }
                 loadedCustomToolRevision = customSnapshot.revision
@@ -2059,8 +2061,13 @@ public struct ToolLoop {
                     taskState.errorState = message
                     taskState.updatedAt = .now
                     await state(taskState)
-                    // 失败不倾倒候选池，只显示失败原因。
-                    await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
+                    // Completion 校验失败属于任务结果，不是 UI 级故障。保留
+                    // errorState 给诊断/日志，但聊天窗口用正常 assistant 文本说明
+                    // 哪里未完成，避免把 Runtime 内部校验以红色错误泄漏给用户。
+                    await emit(AgentChatMessage(
+                        role: .assistant,
+                        messages: [.text("这次任务没有完整执行完成：\(message)")]
+                    ))
                     return
                 }
             }

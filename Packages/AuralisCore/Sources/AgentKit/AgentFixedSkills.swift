@@ -363,6 +363,10 @@ public struct BuiltInPlaylistBuildSkill: AgentStatefulSkill {
         当前任务由固定 Skill「创建歌单并加入歌曲」编排：你只负责在音乐库中找到用户想要的歌曲并调用 \
         result_present_tracks(trackIDs=[最终歌曲]) 提交最终候选。歌单创建、加歌与验证由系统确定性执行；\
         不要自己调用 playlist_create / playlist_add_songs / playlist_delete。
+        如果用户是按学习、通勤、氛围、场景等开放语义来选歌，优先根据音乐知识生成目标数量约 3-5 倍的 \
+        title+artist 候选，再调用 recommendation_ground_candidates 一次性与真实本地曲库撞库；命中不足时再用 \
+        Recommendation Index / recommend_by_mood / recommend_by_constraints 等本地路径补足。只有真实命中的 TrackID \
+        才能提交给 result_present_tracks。用户已经明确给出具体歌曲时不要额外做开放世界撞库。
         """
     public var privateToolNames: Set<String> { PlaylistBuildSkill.ownedMutationTools }
     public var requiredOperations: Set<ToolAuthorizationOperation> { PlaylistBuildSkill.requiredOperations }

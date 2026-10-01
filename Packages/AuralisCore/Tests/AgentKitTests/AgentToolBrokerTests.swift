@@ -182,6 +182,41 @@ struct AgentToolBrokerTests {
         #expect(names.contains("recommend_by_mood"), "仍应保留本地情绪推荐作为降级")
     }
 
+    @Test("创建场景歌单保留推荐 facet，并直接暴露撞库与本地降级")
+    func playlistBuildKeepsRecommendationToolsReachable() {
+        let plan = makePlan("创建一个适合学习时的歌单，里面歌要有 50 首左右。")
+        #expect(plan.semantics.domain == .playlist)
+        #expect(plan.semantics.suggestedToolNamespaces.contains("recommendation"))
+        #expect(plan.allowedOperations.contains(.playlistCreate))
+        #expect(plan.allowedOperations.contains(.playlistAdd))
+
+        let names = Set(ToolSelector.select(plan: plan, all: AgentToolRegistry.all).map(\.name))
+        #expect(names.contains("recommendation_ground_candidates"), "复合 playlist + recommendation 不得把撞库工具过滤掉")
+        #expect(names.contains("recommend_by_mood"), "学习场景应保留本地情绪推荐作为降级")
+        #expect(names.contains("result_present_tracks"), "固定歌单 Skill 需要 final selection 提交入口")
+    }
+
+    @Test("撞库策略短跟进继承上一轮创建歌单任务")
+    func collisionStrategyFollowUpKeepsPlaylistTaskContext() {
+        let initial = "创建一个适合学习时的歌单，里面歌要有 50 首左右。"
+        let history = [
+            AgentChatMessage(role: .user, messages: [.text(initial)]),
+        ]
+        let plan = AgentRequestPlan.build(
+            userText: "采用撞库的方式来推荐。",
+            history: history
+        )
+
+        #expect(plan.semantics.isContinuation)
+        #expect(plan.semantics.domain == .playlist)
+        #expect(plan.semantics.suggestedToolNamespaces.contains("recommendation"))
+        #expect(plan.allowedOperations.contains(.playlistCreate))
+        #expect(plan.allowedOperations.contains(.playlistAdd))
+
+        let names = Set(ToolSelector.select(plan: plan, all: AgentToolRegistry.all).map(\.name))
+        #expect(names.contains("recommendation_ground_candidates"))
+    }
+
     @Test("Broker 「找20首中文摇滚」→ library_select_tracks 优先")
     func brokerMultiTrackShortlist() {
         let plan = makePlan("推荐20首中文摇滚歌曲")

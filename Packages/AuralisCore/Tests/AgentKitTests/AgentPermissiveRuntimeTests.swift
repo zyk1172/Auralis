@@ -1537,9 +1537,11 @@ struct AgentPermissiveRuntimeTests {
             confirm: { _ in true },
             emit: { await collector.record($0) }
         )
-        // 失败只显示失败原因，绝不倾倒 30 首候选。
+        // Completion 未满足是任务结果而不是 UI 级故障：用普通 assistant
+        // 文本说明，仍然绝不倾倒 30 首候选。
         #expect(await collector.containsAnyTrackCards() == false)
-        #expect(await collector.containsError("没有满足确定性完成条件"))
+        #expect(await collector.containsError("歌单修改") == false)
+        #expect(await collector.containsText("这次任务没有完整执行完成"))
     }
 
     @Test("TEST26 无公开 Evidence 时任务不允许编造大众共识")
@@ -1564,8 +1566,10 @@ struct AgentPermissiveRuntimeTests {
             confirm: { _ in true },
             emit: { await collector.record($0) }
         )
-        // 无证据的“大众共识”不能作为成功回答输出。
-        #expect(await collector.containsError("没有满足确定性完成条件"))
+        // 无证据的“大众共识”不能作为成功回答输出；完成校验失败
+        // 也不应以红色 Runtime 错误暴露给用户。
+        #expect(await collector.containsError("大众评价") == false)
+        #expect(await collector.containsText("这次任务没有完整执行完成"))
         #expect(await collector.containsText("广受好评") == false)
     }
 
