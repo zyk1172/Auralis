@@ -159,7 +159,7 @@ struct LibraryView: View {
             .frame(maxWidth: .infinity)
             .accessibilityLabel(
                 isMoreScopeSelected
-                    ? String(localized: "更多，当前为\(scope.title)", bundle: .module)
+                    ? String(localized: "更多", bundle: .module) + " · " + scope.title
                     : String(localized: "更多", bundle: .module)
             )
             .accessibilityIdentifier("auralis.library.scope.more")
