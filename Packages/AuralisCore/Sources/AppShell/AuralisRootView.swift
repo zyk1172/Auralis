@@ -435,9 +435,9 @@ private struct IOSMusicShell: View {
         }
         // Dock 切换的是应用一级分区；若当前停在设置/资料库的二级 NavigationLink，
         // 必须丢弃旧路径并回到新分区根页，不能让二级页面“悬在”新的根内容之上。
+        .id(model.selectedSection)
         .transition(.opacity)
         .animation(AuralisMotion.crossFade(reduceMotion: reduceMotion), value: model.selectedSection)
-        .id(model.selectedSection)
         // Dock 作为 overlay 固定在根容器上；Home / Library / BrowseDetail 的实际
         // ScrollView/List 通过 reportsBottomDockScroll 自己持有动态 clearance，
         // AssistantView 则由输入栏自己的 safeAreaInset 持有。根层不再重复避让内容。
