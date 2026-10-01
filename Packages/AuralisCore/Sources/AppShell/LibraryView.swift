@@ -10,6 +10,9 @@ struct LibraryView: View {
     let theme: BuiltInTheme
     @State private var scope = LibraryScope.albums
     @State private var playlistTarget: Track?
+    @State private var playlistToRename: Playlist?
+    @State private var playlistRenameText = ""
+    @State private var playlistToDelete: Playlist?
     @State private var recommendationCategories: [RecommendationIndexCategory] = []
     @State private var isLoadingRecommendationCategories = false
     @State private var recommendationCategoryError: String?
@@ -52,6 +55,48 @@ struct LibraryView: View {
 #endif
         .sheet(item: $playlistTarget) { track in
             AddToPlaylistSheet(model: model, theme: theme, track: track)
+        }
+        .alert(
+            String(localized: "重命名歌单", bundle: .module),
+            isPresented: Binding(
+                get: { playlistToRename != nil },
+                set: { if !$0 { playlistToRename = nil } }
+            )
+        ) {
+            TextField(String(localized: "歌单名称", bundle: .module), text: $playlistRenameText)
+            Button(String(localized: "保存", bundle: .module)) {
+                guard let playlist = playlistToRename else { return }
+                let name = playlistRenameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                playlistToRename = nil
+                guard !name.isEmpty else { return }
+                Task { _ = await model.renamePlaylist(id: playlist.id, to: name) }
+            }
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {
+                playlistToRename = nil
+            }
+        } message: {
+            Text(String(localized: "修改将同步到服务器。", bundle: .module))
+        }
+        .confirmationDialog(
+            playlistToDelete.map {
+                String(localized: "删除歌单「\($0.name)」？", bundle: .module)
+            } ?? String(localized: "删除歌单？", bundle: .module),
+            isPresented: Binding(
+                get: { playlistToDelete != nil },
+                set: { if !$0 { playlistToDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button(String(localized: "删除", bundle: .module), role: .destructive) {
+                guard let playlist = playlistToDelete else { return }
+                playlistToDelete = nil
+                Task { _ = await model.deletePlaylist(id: playlist.id) }
+            }
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {
+                playlistToDelete = nil
+            }
+        } message: {
+            Text(String(localized: "服务器上的歌单也会被删除，此操作不可撤销。", bundle: .module))
         }
     }
 
@@ -477,11 +522,58 @@ struct LibraryView: View {
                             }
                             .buttonStyle(HapticPlainButtonStyle())
                             .accessibilityLabel(String(localized: "歌单《\(playlist.name)》", bundle: .module))
+                            .contextMenu {
+                                playlistManagementMenu(playlist)
+                            }
                         }
                     }
                     .padding()
                 }
                 .reportsBottomDockScroll(source: .library)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func playlistManagementMenu(_ playlist: Playlist) -> some View {
+        Button {
+            model.browseDestination = .playlist(playlist)
+        } label: {
+            Label(String(localized: "打开歌单", bundle: .module), systemImage: "rectangle.portrait.and.arrow.right")
+        }
+
+        Button {
+            Task { _ = await model.duplicatePlaylist(id: playlist.id) }
+        } label: {
+            Label(String(localized: "复制歌单", bundle: .module), systemImage: "plus.square.on.square")
+        }
+
+        if playlist.isReadOnly {
+            Divider()
+            Button {} label: {
+                Label(String(localized: "只读歌单", bundle: .module), systemImage: "lock")
+            }
+            .disabled(true)
+        } else {
+            Divider()
+            Button {
+                playlistRenameText = playlist.name
+                playlistToRename = playlist
+            } label: {
+                Label(String(localized: "重命名", bundle: .module), systemImage: "pencil")
+            }
+
+            Button {
+                Task { await model.removeDuplicateSongs(from: playlist.id) }
+            } label: {
+                Label(String(localized: "去重歌曲", bundle: .module), systemImage: "sparkles")
+            }
+
+            Divider()
+            Button(role: .destructive) {
+                playlistToDelete = playlist
+            } label: {
+                Label(String(localized: "删除歌单", bundle: .module), systemImage: "trash")
             }
         }
     }
