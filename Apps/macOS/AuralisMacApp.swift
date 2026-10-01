@@ -31,7 +31,7 @@ struct AuralisMacApp: App {
         .defaultSize(width: 1280, height: 820)
         .commands {
             CommandGroup(after: .newItem) {
-                Button(String(localized: "新建播放列表")) { post(MacCommand.newPlaylist) }
+                Button(String(localized: "新建歌单")) { post(MacCommand.newPlaylist) }
                     .keyboardShortcut("n", modifiers: .command)
             }
             CommandMenu(String(localized: "播放")) {
