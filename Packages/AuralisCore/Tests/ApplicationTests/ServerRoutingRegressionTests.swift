@@ -281,13 +281,7 @@ struct ServerRoutingRegressionTests {
         )
         #expect(updated)
 
-        // 更新动作后台解析真实端点；等待外网探测完成并提交到 clients[a]。
-        for _ in 0..<100 {
-            if RoutingURLProtocol.hosts.contains("a.external.test") { break }
-            try await Task.sleep(for: .milliseconds(20))
-        }
-        try await Task.sleep(for: .milliseconds(100))
-
+        // 保存返回成功时 live client 就应已经与新配置一致，不能要求调用方再等待后台竞态收敛。
         let streamURL = await connector.refreshStreamURL(serverID: a, trackID: "track")
         #expect(streamURL?.host == "a.external.test")
     }
