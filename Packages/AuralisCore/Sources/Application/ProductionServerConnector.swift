@@ -749,7 +749,7 @@ public actor ProductionServerConnector: ServerConnecting {
                 // 设置保存成功前完成一次真实端点选择，避免调用方立即播放时仍命中旧 client。
                 if clients[serverID] != nil {
                     if account.externalBaseURL != nil {
-                        if !await resolveAndCommitEndpoint(for: account) {
+                        if !(await resolveAndCommitEndpoint(for: account)) {
                             clients[serverID] = restoreClient(for: account)
                         }
                     } else {
