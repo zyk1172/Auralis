@@ -362,25 +362,23 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
     /// 开始下载：trackID → url（带认证的 download 地址）；serverID 用于落盘时按服务器隔离。
     public func start(trackID: TrackID, url: URL, codec: String?, serverID: ServerID) {
         let id = DownloadTaskID(serverID: serverID, trackID: trackID)
-        metadataStore.removeFailure(id: id)
-        lock.lock()
-        guard taskIdentifiers[id] == nil else {
-            lock.unlock()
-            return
-        }
-        infos[id] = DownloadTaskInfo(trackID: trackID, status: .queued)
-        codecs[id] = codec
-        lock.unlock()
-
         let task = session.downloadTask(with: url)
         let metadata = DownloadTaskMetadata(trackID: trackID, serverID: serverID, codec: codec)
         task.taskDescription = metadata.taskDescription
         lock.lock()
+        guard taskIdentifiers[id] == nil else {
+            lock.unlock()
+            task.cancel()
+            return
+        }
+        metadataStore.removeFailure(id: id)
+        infos[id] = DownloadTaskInfo(trackID: trackID, status: .queued)
+        codecs[id] = codec
         tasks[id] = task
         taskIdentifiers[id] = task.taskIdentifier
-        lock.unlock()
-        // 必须在 resume 前写入兜底映射，避免任务刚启动进程就被系统终止的竞态。
+        // Keep identity persistence inside the reservation; cancellation cannot race it.
         metadataStore.save(metadata, for: task.taskIdentifier)
+        lock.unlock()
         notify(id)
         resumeNextTasks()
     }
@@ -438,6 +436,7 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
             ? Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
             : 0
         lock.lock()
+        guard taskIdentifiers[id] == downloadTask.taskIdentifier else { lock.unlock(); return }
         infos[id]?.progress = min(max(progress, 0), 1)
         infos[id]?.byteCount = totalBytesWritten
         infos[id]?.expectedByteCount = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : nil
@@ -454,6 +453,7 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         guard let id = taskID(for: downloadTask) else { return }
         lock.lock()
         let isAlreadyRecovering = recoveringTaskIdentifiers.contains(downloadTask.taskIdentifier)
+            || taskIdentifiers[id] != downloadTask.taskIdentifier
         lock.unlock()
         guard !isAlreadyRecovering else { return }
         if let failure = Self.responseFailure(for: downloadTask) {
@@ -487,9 +487,14 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         let codec: String?
         let taskIdentifier: Int
         lock.lock()
+        guard taskIdentifiers[id] == downloadTask.taskIdentifier else {
+            lock.unlock()
+            try? FileManager.default.removeItem(at: stagedLocation)
+            return
+        }
         codec = codecs[id]
         tasks[id] = nil
-        taskIdentifier = taskIdentifiers[id] ?? downloadTask.taskIdentifier
+        taskIdentifier = downloadTask.taskIdentifier
         infos[id]?.byteCount = downloadedBytes
         infos[id]?.progress = 1
         pendingCacheMoves += 1
@@ -500,11 +505,12 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         let cacheID = TrackCacheStore.TrackCacheID(serverID: id.serverID, trackID: id.trackID)
         Task { [store, cacheID, codec, stagedLocation, self] in
             do {
-                _ = try await store.moveDownloadedFile(at: stagedLocation, for: cacheID, codec: codec)
+                let installed = try await store.moveDownloadedFile(
+                    at: stagedLocation, for: cacheID, codec: codec,
+                    shouldInstall: { self.ownsAttempt(id: id, taskIdentifier: taskIdentifier) }
+                )
                 let accepted = self.finishSuccess(id: id, taskIdentifier: taskIdentifier)
-                if !accepted {
-                    try? await store.remove(for: cacheID)
-                }
+                if !accepted { try? await store.remove(for: cacheID, ifMatching: installed) }
             } catch {
                 self.finishFailure(
                     id: id,
@@ -518,9 +524,15 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
 
     /// 同步辅助：完成状态更新（从异步上下文调用，锁在同步方法内执行）。
     @discardableResult
-    private func finishSuccess(id: DownloadTaskID, taskIdentifier: Int) -> Bool {
+    func finishSuccess(id: DownloadTaskID, taskIdentifier: Int) -> Bool {
         lock.lock()
         let wasCancelled = cancelledTaskIdentifiers.remove(taskIdentifier) != nil
+        guard taskIdentifiers[id] == taskIdentifier else {
+            recoveringTaskIdentifiers.remove(taskIdentifier)
+            lock.unlock()
+            metadataStore.remove(taskIdentifier: taskIdentifier)
+            return false
+        }
         var info = infos[id] ?? DownloadTaskInfo(trackID: id.trackID)
         info.status = wasCancelled ? .notDownloaded : .downloaded
         info.progress = wasCancelled ? 0 : 1
@@ -530,14 +542,14 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         taskIdentifiers[id] = nil
         tasks[id] = nil
         recoveringTaskIdentifiers.remove(taskIdentifier)
+        metadataStore.removeFailure(id: id)
         lock.unlock()
         metadataStore.remove(taskIdentifier: taskIdentifier)
-        metadataStore.removeFailure(id: id)
         if !wasCancelled { notify(id) }
         return !wasCancelled
     }
 
-    private func finishFailure(
+    func finishFailure(
         id: DownloadTaskID,
         taskIdentifier: Int,
         failure: DownloadFailureInfo
@@ -545,6 +557,12 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         let codec: String?
         lock.lock()
         let wasCancelled = cancelledTaskIdentifiers.remove(taskIdentifier) != nil
+        guard taskIdentifiers[id] == taskIdentifier else {
+            recoveringTaskIdentifiers.remove(taskIdentifier)
+            lock.unlock()
+            metadataStore.remove(taskIdentifier: taskIdentifier)
+            return
+        }
         var info = infos[id] ?? DownloadTaskInfo(trackID: id.trackID)
         info.status = wasCancelled ? .notDownloaded : .failed
         info.failure = wasCancelled ? nil : failure
@@ -554,22 +572,19 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         taskIdentifiers[id] = nil
         tasks[id] = nil
         recoveringTaskIdentifiers.remove(taskIdentifier)
+        if wasCancelled { metadataStore.removeFailure(id: id) }
+        else { metadataStore.saveFailure(id: id, info: info, codec: codec) }
         lock.unlock()
         metadataStore.remove(taskIdentifier: taskIdentifier)
-        if wasCancelled {
-            metadataStore.removeFailure(id: id)
-        } else {
-            metadataStore.saveFailure(id: id, info: info, codec: codec)
-            notify(id)
-        }
+        if !wasCancelled { notify(id) }
     }
 
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard let id = taskID(for: task), error != nil else { return }
         lock.lock()
-        let wasActive = tasks[id] != nil
-        tasks[id] = nil
-        let taskIdentifier = taskIdentifiers.removeValue(forKey: id) ?? task.taskIdentifier
+        let wasActive = tasks[id]?.taskIdentifier == task.taskIdentifier
+            && taskIdentifiers[id] == task.taskIdentifier
+        let taskIdentifier = task.taskIdentifier
         lock.unlock()
         guard wasActive else { return }
         finishFailure(
@@ -667,7 +682,9 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
             }
 
             lock.lock()
-            guard recoveringTaskIdentifiers.insert(taskIdentifier).inserted else {
+            guard (taskIdentifiers[id] == nil || taskIdentifiers[id] == taskIdentifier),
+                  !cancelledTaskIdentifiers.contains(taskIdentifier),
+                  recoveringTaskIdentifiers.insert(taskIdentifier).inserted else {
                 lock.unlock()
                 continue
             }
@@ -686,9 +703,12 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
             let cacheID = TrackCacheStore.TrackCacheID(serverID: id.serverID, trackID: id.trackID)
             Task { [store, cacheID, file, self] in
                 do {
-                    _ = try await store.moveDownloadedFile(at: file, for: cacheID, codec: metadata.codec)
+                    let installed = try await store.moveDownloadedFile(
+                        at: file, for: cacheID, codec: metadata.codec,
+                        shouldInstall: { self.ownsAttempt(id: id, taskIdentifier: taskIdentifier) }
+                    )
                     let accepted = self.finishSuccess(id: id, taskIdentifier: taskIdentifier)
-                    if !accepted { try? await store.remove(for: cacheID) }
+                    if !accepted { try? await store.remove(for: cacheID, ifMatching: installed) }
                 } catch {
                     self.finishFailure(
                         id: id,
@@ -783,9 +803,7 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         }
         // 同一服务器的同一首歌只允许一个系统任务；不同服务器的相同 TrackID 可并存。
         if let existingIdentifier = taskIdentifiers[id],
-           existingIdentifier != task.taskIdentifier,
-           let existingTask = tasks[id],
-           existingTask !== task {
+           existingIdentifier != task.taskIdentifier {
             lock.unlock()
             task.taskDescription = nil
             metadataStore.remove(taskIdentifier: task.taskIdentifier)
@@ -940,6 +958,12 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         backgroundCompletion = nil
         backgroundSessionEventsFinished = false
         return completion
+    }
+
+    private func ownsAttempt(id: DownloadTaskID, taskIdentifier: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return taskIdentifiers[id] == taskIdentifier && !cancelledTaskIdentifiers.contains(taskIdentifier)
     }
 
     // 测试入口：验证真实恢复算法，而不是只测独立的 JSON helper。

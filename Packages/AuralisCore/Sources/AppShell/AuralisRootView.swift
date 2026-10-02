@@ -1408,7 +1408,7 @@ struct BrowseDetailSheet: View {
             return model.catalog.tracks.filter { $0.artistID == artist.id }
         case let .playlist(playlist):
             // 优先使用从服务器拉取的完整曲目
-            if let loaded = model.playlistTracks[playlist.id], !loaded.isEmpty {
+            if let loaded = model.playlistTracks[GlobalID(serverID: playlist.serverID, remoteID: playlist.id.rawValue)], !loaded.isEmpty {
                 return loaded
             }
             return playlist.trackIDs.compactMap { id in model.catalog.tracks.first { $0.id == id } }
@@ -2209,14 +2209,14 @@ private struct PlaylistTracksView: View {
 
     private var tracks: [Track] {
         // 优先使用从服务器拉取的完整曲目；回退到 catalog 中已缓存的匹配
-        if let loaded = model.playlistTracks[playlist.id], !loaded.isEmpty {
+        if let loaded = model.playlistTracks[GlobalID(serverID: playlist.serverID, remoteID: playlist.id.rawValue)], !loaded.isEmpty {
             return loaded
         }
         return playlist.trackIDs.compactMap { id in model.catalog.tracks.first { $0.id == id } }
     }
 
     private var isLoading: Bool {
-        model.loadingPlaylistIDs.contains(playlist.id)
+        model.loadingPlaylistIDs.contains(GlobalID(serverID: playlist.serverID, remoteID: playlist.id.rawValue))
     }
 
     @State private var isRenaming = false

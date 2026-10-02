@@ -179,8 +179,8 @@ final class LibraryStore: ObservableObject {
     private(set) var albumsByArtist: [GlobalID: [Album]] = [:]
     /// 专辑 GlobalID → 曲目。索引只在 catalog 变更时重建一次；同 GlobalID 合并。
     private(set) var tracksByAlbum: [GlobalID: [Track]] = [:]
-    @Published var playlistTracks: [PlaylistID: [Track]] = [:]
-    @Published var loadingPlaylistIDs: Set<PlaylistID> = []
+    @Published var playlistTracks: [GlobalID: [Track]] = [:]
+    @Published var loadingPlaylistIDs: Set<GlobalID> = []
     @Published var playlistDeletionError: String?
     @Published var genreTracks: [Track]?
     @Published var loadingGenre: Genre?

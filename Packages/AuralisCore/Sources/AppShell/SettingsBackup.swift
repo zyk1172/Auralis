@@ -320,27 +320,7 @@ struct SettingsBackupSection: View {
         themeStore: ThemeStore,
         vault: KeychainCredentialVault
     ) async throws {
-        SettingsBackupService.writePreferences(backup.preferences, defaults: .standard)
-        let defaults = UserDefaults.standard
-        defaults.set(backup.ai.baseURL, forKey: AIConnectionSettings.Keys.baseURL)
-        defaults.set(backup.ai.apiPath, forKey: AIConnectionSettings.Keys.apiPath)
-        defaults.set(backup.ai.model, forKey: AIConnectionSettings.Keys.model)
-        defaults.set(
-            backup.ai.endpointMode ?? AIEndpointMode.infer(from: backup.ai.apiPath).rawValue,
-            forKey: AIConnectionSettings.Keys.endpointMode
-        )
-
-        // 关键凭据写入失败必须抛出，禁止「恢复完成」但重启后密码/API Key 全没（P2-4）。
-        if let apiKey = backup.ai.apiKey, !apiKey.isEmpty {
-            try await vault.store(apiKey, for: AIConnectionSettings.credentialID)
-        }
-        if let download = backup.musicDownload {
-            defaults.set(download.baseURL, forKey: MoviePilotSettings.baseURLKey)
-            defaults.set(download.externalBaseURL, forKey: MoviePilotSettings.externalBaseURLKey)
-            if let token = download.token, !token.isEmpty {
-                try await vault.store(token, for: MoviePilotSettings.tokenCredentialID)
-            }
-        }
+        try await BackupConnectionRestorer.restore(backup, defaults: .standard, vault: vault)
         if let themeID = backup.preferences["auralis.selected-theme"] {
             await MainActor.run { themeStore.select(id: themeID) }
         }
