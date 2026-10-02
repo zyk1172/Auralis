@@ -216,4 +216,79 @@ struct ServerRoutingRegressionTests {
         try await Task.sleep(for: .milliseconds(100))
         #expect(await connector.activeServerID == b)
     }
+
+    @Test("播放失败强制刷新会从失效内网切到外网")
+    func forcedStreamRefreshReResolvesExternalEndpoint() async throws {
+        let persistence = InMemoryPersistence()
+        let vault = InMemoryCredentialVault()
+        let (a, _) = try await seedAccounts(
+            persistence: persistence,
+            vault: vault,
+            serverAExternal: URL(string: "https://a.external.test")!
+        )
+
+        // 先让恢复阶段稳定选择内网，模拟用户在家启动 App。
+        RoutingURLProtocol.reset(rules: [
+            .init(hostSuffix: "a.internal.test", data: Self.emptyOK, errorCode: nil),
+            .init(hostSuffix: "a.external.test", data: Data(), errorCode: .cannotConnectToHost),
+        ])
+        let connector = makeConnector(persistence: persistence, vault: vault, session: routingSession())
+        _ = try await connector.restoreConnection(serverID: a)
+
+        for _ in 0..<50 {
+            if RoutingURLProtocol.hosts.contains("a.internal.test") { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try await Task.sleep(for: .milliseconds(100))
+
+        let initialURL = await connector.refreshStreamURL(serverID: a, trackID: "track")
+        #expect(initialURL?.host == "a.internal.test")
+
+        // 离开局域网后，旧内网 client 不再可达，而公网入口正常。
+        RoutingURLProtocol.reset(rules: [
+            .init(hostSuffix: "a.internal.test", data: Data(), errorCode: .cannotConnectToHost),
+            .init(hostSuffix: "a.external.test", data: Self.emptyOK, errorCode: nil),
+        ])
+        let refreshedURL = await connector.refreshStreamURL(
+            serverID: a,
+            trackID: "track",
+            forceEndpointResolution: true
+        )
+
+        #expect(refreshedURL?.host == "a.external.test")
+        let hosts = RoutingURLProtocol.hosts
+        #expect(hosts.contains("a.internal.test"))
+        #expect(hosts.contains("a.external.test"))
+    }
+
+    @Test("保存外网地址后运行时 client 会重新解析而不是继续粘在内网")
+    func updatingExternalURLRefreshesRuntimeClient() async throws {
+        let persistence = InMemoryPersistence()
+        let vault = InMemoryCredentialVault()
+        let (a, _) = try await seedAccounts(persistence: persistence, vault: vault)
+        let connector = makeConnector(persistence: persistence, vault: vault, session: routingSession())
+
+        // 单地址恢复不会联网，运行时 client 此时明确指向内网。
+        _ = try await connector.restoreConnection(serverID: a)
+
+        RoutingURLProtocol.reset(rules: [
+            .init(hostSuffix: "a.internal.test", data: Data(), errorCode: .cannotConnectToHost),
+            .init(hostSuffix: "a.external.test", data: Self.emptyOK, errorCode: nil),
+        ])
+        let updated = await connector.updateServerExternalBaseURL(
+            serverID: a,
+            externalBaseURL: URL(string: "https://a.external.test")
+        )
+        #expect(updated)
+
+        // 更新动作后台解析真实端点；等待外网探测完成并提交到 clients[a]。
+        for _ in 0..<100 {
+            if RoutingURLProtocol.hosts.contains("a.external.test") { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try await Task.sleep(for: .milliseconds(100))
+
+        let streamURL = await connector.refreshStreamURL(serverID: a, trackID: "track")
+        #expect(streamURL?.host == "a.external.test")
+    }
 }
