@@ -115,7 +115,7 @@ final class ArtworkPaletteStore: @unchecked Sendable {
 /// 设计约束：
 /// - 只复用 ArtworkStore 已缓存的低分辨率封面，不重新加载高清封面；
 /// - Glow 画布明显大于封面本体（约 1.5×），给模糊扩散留出外围空间；
-/// - 播放时缓慢呼吸（3.6s 周期），暂停保持弱静态光，Reduce Motion 完全静止；
+/// - 播放时只做极弱的慢速呼吸（6s 周期），暂停保持弱静态光，Reduce Motion 完全静止；
 /// - 不进行每帧图片分析，调色板只在封面变化时计算并缓存。
 struct NowPlayingArtworkGlowView: View {
     /// 可选注入：环境缺失时只保留回退色板光，不读取封面，也不强解包崩溃。
@@ -224,10 +224,10 @@ struct ArtworkAmbientLight: View {
     let animates: Bool
     @State private var breathe = false
 
-    /// 呼吸范围：scale 0.99 ↔ 1.04，opacity 轻微起伏（C5 要求 3~5 秒周期、低速）。
+    /// 呼吸只作为环境层级提示：几乎不改变封面轮廓，避免视觉中心持续“喘动”。
     private var lightFrame: CGFloat { canvasSize * lightScale }
-    private var glowOpacity: Double { animates ? (breathe ? 0.44 : 0.30) : 0.30 }
-    private var glowScale: CGFloat { animates ? (breathe ? 1.04 : 0.99) : 1.0 }
+    private var glowOpacity: Double { animates ? (breathe ? 0.34 : 0.28) : 0.28 }
+    private var glowScale: CGFloat { animates ? (breathe ? 1.015 : 0.997) : 1.0 }
 
     var body: some View {
         ZStack {
@@ -284,11 +284,11 @@ struct ArtworkAmbientLight: View {
 
     private func update(animates: Bool) {
         if animates {
-            withAnimation(.easeInOut(duration: 3.6).repeatForever(autoreverses: true)) {
+            withAnimation(.easeInOut(duration: 6.0).repeatForever(autoreverses: true)) {
                 breathe = true
             }
         } else {
-            withAnimation(.easeOut(duration: 0.8)) {
+            withAnimation(.easeOut(duration: 0.6)) {
                 breathe = false
             }
         }

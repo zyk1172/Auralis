@@ -195,6 +195,25 @@ public struct HapticPlainButtonStyle: ButtonStyle, Sendable {
     }
 }
 
+/// 卡片按钮：保留轻触反馈，并只在按住时做极轻的 0.985 缩放。
+/// 仅用于大封面/卡片，不应用到歌曲列表行、系统 Menu 或工具栏按钮。
+public struct HapticCardButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    public init() {}
+
+    public func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
+            .animation(AuralisMotion.micro(reduceMotion: reduceMotion), value: configuration.isPressed)
+            .onChange(of: configuration.isPressed) { _, pressed in
+                if pressed {
+                    Haptics.impact(.light)
+                }
+            }
+    }
+}
+
 /// 无边框按钮（轻）：只附加触感，不向复合控件子树传播 ButtonStyle。
 public struct HapticBorderlessButtonStyle: ButtonStyle, Sendable {
     public init() {}

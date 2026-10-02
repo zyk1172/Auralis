@@ -550,13 +550,17 @@ struct NowPlayingView: View {
     }
 
     private var favoriteButton: some View {
-        Button { model.toggleFavorite(model.currentTrack) } label: {
+        Button {
+            model.toggleFavorite(model.currentTrack)
+        } label: {
             Image(systemName: model.currentTrack.isFavorite ? "heart.fill" : "heart")
                 .font(.title3)
                 .foregroundStyle(model.currentTrack.isFavorite ? theme.colorTokens.accent.color : theme.colorTokens.secondaryText.color)
                 .contentTransition(.symbolEffect(.replace))
         }
         .buttonStyle(HapticPlainButtonStyle())
+        // 收藏落库/服务器同步通过异步 Task 更新状态，不能只依赖点击时的 withAnimation。
+        .animation(AuralisMotion.micro(reduceMotion: reduceMotion), value: model.currentTrack.isFavorite)
         .frame(width: 44, height: 44)
         .contentShape(Rectangle())
         .accessibilityLabel(model.currentTrack.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
@@ -575,6 +579,7 @@ struct NowPlayingView: View {
                 .contentTransition(.symbolEffect(.replace))
         }
         .buttonStyle(HapticPlainButtonStyle())
+        .animation(AuralisMotion.micro(reduceMotion: reduceMotion), value: isDisliked)
         .frame(width: 44, height: 44)
         .contentShape(Rectangle())
         .accessibilityLabel(isDisliked ? String(localized: "取消不喜欢", bundle: .module) : String(localized: "不喜欢", bundle: .module))
@@ -587,13 +592,14 @@ struct NowPlayingView: View {
             // 播放模式：单个按钮循环切换顺序、随机、列表循环和单曲循环。
             transportItem {
                 Button {
-                    // 只保留很短的状态过渡，避免默认符号替换动画显得迟缓。
-                    withAnimation(.linear(duration: 0.12)) { model.cyclePlayMode() }
+                    withAnimation(AuralisMotion.micro(reduceMotion: reduceMotion)) {
+                        model.cyclePlayMode()
+                    }
                 } label: {
                     Image(systemName: model.playMode.symbol)
                         .font(.title3)
                         .foregroundStyle(model.playMode == .list ? theme.colorTokens.secondaryText.color : theme.colorTokens.accent.color)
-                        .contentTransition(.identity)
+                        .contentTransition(.symbolEffect(.replace))
                         .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
                 }
@@ -615,12 +621,14 @@ struct NowPlayingView: View {
                 Button(action: model.togglePlayback) {
                     Image(systemName: model.playbackState == .playing ? "pause.fill" : "play.fill")
                         .font(.system(size: playButtonSize * 0.4, weight: .bold))
+                        .contentTransition(.symbolEffect(.replace))
                         .frame(width: playButtonSize, height: playButtonSize)
                         .background(theme.colorTokens.accent.color)
                         .foregroundStyle(theme.colorTokens.background.color)
                         .clipShape(Circle())
                 }
                 .buttonStyle(HapticPlainButtonStyle())
+                .animation(AuralisMotion.micro(reduceMotion: reduceMotion), value: model.playbackState)
                 .accessibilityLabel(model.playbackState == .playing ? String(localized: "暂停", bundle: .module) : String(localized: "播放", bundle: .module))
             }
             transportItem {
@@ -665,7 +673,9 @@ struct NowPlayingView: View {
     private var bottomInfo: some View {
         HStack(spacing: AuralisSpacing.medium) {
             Button {
-                withAnimation(.easeInOut(duration: 0.12)) { showsAudioTechnicalInfo.toggle() }
+                withAnimation(AuralisMotion.quick(reduceMotion: reduceMotion)) {
+                    showsAudioTechnicalInfo.toggle()
+                }
             } label: {
                 Label(audioTechnicalLabel, systemImage: "waveform")
                     .font(.caption)

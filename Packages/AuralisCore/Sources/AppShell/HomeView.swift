@@ -20,6 +20,17 @@ private enum HomeCardMetrics {
 struct HomeView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
+    let browseTransitionNamespace: Namespace.ID?
+
+    init(
+        model: AuralisAppModel,
+        theme: BuiltInTheme,
+        browseTransitionNamespace: Namespace.ID? = nil
+    ) {
+        self.model = model
+        self.theme = theme
+        self.browseTransitionNamespace = browseTransitionNamespace
+    }
 
     private var colors: ThemeColors { theme.colorTokens }
 
@@ -121,7 +132,7 @@ struct HomeView: View {
             .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
             .contentShape(Rectangle())
         }
-        .buttonStyle(HapticPlainButtonStyle())
+        .buttonStyle(HapticCardButtonStyle())
         .accessibilityLabel(String(localized: "\(module.title)，\(quickEntryCount(module)) 项", bundle: .module))
     }
 
@@ -180,7 +191,7 @@ struct HomeView: View {
                                     .frame(width: HomeCardMetrics.width, alignment: .leading)
                                     .contentShape(Rectangle())
                             }
-                            .buttonStyle(HapticPlainButtonStyle())
+                            .buttonStyle(HapticCardButtonStyle())
                         }
                     }
                     .padding(.trailing, AuralisSpacing.large)
@@ -209,7 +220,11 @@ struct HomeView: View {
                                 .frame(width: HomeCardMetrics.width, alignment: .leading)
                                 .contentShape(Rectangle())
                             }
-                            .buttonStyle(HapticPlainButtonStyle())
+                            .buttonStyle(HapticCardButtonStyle())
+                            .auralisMatchedTransitionSource(
+                                id: IOSBrowseTransitionID.artist(artist),
+                                in: browseTransitionNamespace
+                            )
                         }
                     }
                     .padding(.trailing, AuralisSpacing.large)
@@ -238,7 +253,11 @@ struct HomeView: View {
                                 .frame(width: HomeCardMetrics.width, alignment: .leading)
                                 .contentShape(Rectangle())
                             }
-                            .buttonStyle(HapticPlainButtonStyle())
+                            .buttonStyle(HapticCardButtonStyle())
+                            .auralisMatchedTransitionSource(
+                                id: IOSBrowseTransitionID.album(album),
+                                in: browseTransitionNamespace
+                            )
                         }
                     }
                     .padding(.trailing, AuralisSpacing.large)
