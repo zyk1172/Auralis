@@ -168,7 +168,11 @@ final class HomeStore: ObservableObject {
 @MainActor
 final class LibraryStore: ObservableObject {
     @Published var catalog: LibraryCatalog {
-        didSet { scheduleDerivedIndexRebuild() }
+        didSet {
+            if oldValue.tracks != catalog.tracks || oldValue.albums != catalog.albums {
+                scheduleDerivedIndexRebuild()
+            }
+        }
     }
     /// 浏览页、歌单和上下文菜单均以 GlobalID 解析歌曲，避免 M×N 扫描与跨服务器同 ID 串库。
     private(set) var trackByGlobalID: [GlobalID: Track] = [:]
@@ -179,15 +183,16 @@ final class LibraryStore: ObservableObject {
     private(set) var albumsByArtist: [GlobalID: [Album]] = [:]
     /// 专辑 GlobalID → 曲目。索引只在 catalog 变更时重建一次；同 GlobalID 合并。
     private(set) var tracksByAlbum: [GlobalID: [Track]] = [:]
-    @Published var playlistTracks: [PlaylistID: [Track]] = [:]
-    @Published var loadingPlaylistIDs: Set<PlaylistID> = []
+    @Published var playlistTracks: [GlobalID: [Track]] = [:]
+    @Published var loadingPlaylistIDs: Set<GlobalID> = []
     @Published var playlistDeletionError: String?
     @Published var genreTracks: [Track]?
     @Published var loadingGenre: Genre?
 
     /// catalog 每次变更递增；后台索引构建完成后用它校验结果是否已过期。
-    private var catalogRevision: UInt64 = 0
+    private(set) var catalogRevision: UInt64 = 0
     private var indexBuildTask: Task<Void, Never>?
+    private var indexWorkerTask: Task<DerivedIndexes, Never>?
     /// 小目录同步刷新，避免目录替换后 UI 在一个 run loop 内读到旧索引；大目录
     /// 继续走后台构建，避免把数万首曲目的 O(N) 索引工作压在 MainActor。
     private let synchronousIndexEntryLimit = 1_000
@@ -226,17 +231,22 @@ final class LibraryStore: ObservableObject {
         let revision = catalogRevision
         let snapshot = catalog
         indexBuildTask?.cancel()
+        indexWorkerTask?.cancel()
+        indexWorkerTask = nil
         if snapshot.tracks.count + snapshot.albums.count <= synchronousIndexEntryLimit {
             apply(Self.buildIndexes(catalog: snapshot))
             indexBuildTask = nil
             return
         }
+        let worker = Task.detached(priority: .userInitiated) {
+            Self.buildIndexes(catalog: snapshot, cancellable: true)
+        }
+        indexWorkerTask = worker
         indexBuildTask = Task { [weak self] in
-            let indexes = await Task.detached(priority: .userInitiated) {
-                Self.buildIndexes(catalog: snapshot)
-            }.value
-            guard let self, !Task.isCancelled, self.catalogRevision == revision else { return }
+            let indexes = await worker.value
+            guard let self, !Task.isCancelled, !worker.isCancelled, self.catalogRevision == revision else { return }
             self.apply(indexes)
+            self.indexWorkerTask = nil
         }
     }
 
@@ -259,10 +269,11 @@ final class LibraryStore: ObservableObject {
     /// tracksByAlbum），避免对 25,000 首曲目做三趟全量遍历；专辑再单独一趟。
     /// 同 GlobalID 重复条目合并（保留首次出现），避免 ForEach 重复身份崩溃。
     /// - Note: `nonisolated` 纯函数，可在后台任务中执行，不占用 MainActor。
-    private nonisolated static func buildIndexes(catalog: LibraryCatalog) -> DerivedIndexes {
+    private nonisolated static func buildIndexes(catalog: LibraryCatalog, cancellable: Bool = false) -> DerivedIndexes {
         var result = DerivedIndexes()
         var seenTrack = Set<GlobalID>()
         for track in catalog.tracks {
+            if cancellable && Task.isCancelled { return result }
             let trackGID = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
             guard seenTrack.insert(trackGID).inserted else { continue }
             result.trackByGlobalID[trackGID] = track
@@ -274,6 +285,7 @@ final class LibraryStore: ObservableObject {
 
         var seenAlbum = Set<GlobalID>()
         for album in catalog.albums {
+            if cancellable && Task.isCancelled { return result }
             let albumGID = GlobalID(serverID: album.serverID, remoteID: album.id.rawValue)
             guard seenAlbum.insert(albumGID).inserted else { continue }
             let artistGID = GlobalID(serverID: album.serverID, remoteID: album.artistID.rawValue)

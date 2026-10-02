@@ -95,7 +95,8 @@ struct AVFoundationPlaybackEngineBoundaryTests {
 
         try await engine.play(track: track("timing", url: url))
         let received = await waitUntil(timeout: .seconds(4)) {
-            updates.value.filter { !$0.isStateTransition }.count >= 2
+            let positions = updates.value.filter { !$0.isStateTransition }.compactMap(\.position)
+            return positions.count >= 2 && (positions.last ?? 0) > (positions.first ?? 0)
         }
         #expect(received)
         let positions = updates.value

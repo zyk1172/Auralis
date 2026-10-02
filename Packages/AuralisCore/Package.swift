@@ -14,8 +14,13 @@ let package = Package(
         .library(name: "Domain", targets: ["Domain"]),
         .library(name: "LocalCatalog", targets: ["LocalCatalog"]),
         .library(name: "MusicHaptics", targets: ["MusicHaptics"]),
+        .executable(name: "AVPlaybackBoundaryProbe", targets: ["AVPlaybackBoundaryProbe"]),
     ],
     targets: [
+        .executableTarget(
+            name: "AVPlaybackBoundaryProbe", dependencies: ["PlaybackEngine", "Domain"],
+            path: "Integration/AVPlaybackBoundaryProbe"
+        ),
         .target(name: "Domain", resources: [.process("Resources")]),
         .target(name: "DesignSystem"),
         .target(name: "ThemeEngine", dependencies: ["DesignSystem"], resources: [.process("Resources")]),

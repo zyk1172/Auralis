@@ -103,7 +103,13 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         preparedMusicHapticsPreparation != nil
     }
 
-    public func setVolume(_ volume: Float) {
+    public func setVolume(_ volume: Float) { setVolumeImpl(volume) }
+
+    // Explicit async witness prevents the protocol's default implementation
+    // from shadowing the synchronous MainActor API in async call sites.
+    public func setVolume(_ volume: Float) async { setVolumeImpl(volume) }
+
+    private func setVolumeImpl(_ volume: Float) {
         self.volume = min(max(volume, 0), 1)
         applyOutputVolume()
     }
@@ -114,7 +120,13 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     private var playbackRate: Float = 1.0
 
     /// 播放速度：保存夹取值，并在正在播放时直接驱动 AVPlayer.rate。
-    public func setRate(_ rate: Float) {
+    public func setRate(_ rate: Float) { setRateImpl(rate) }
+
+    // Explicit async witness prevents the protocol's default implementation
+    // from shadowing the synchronous MainActor API in async call sites.
+    public func setRate(_ rate: Float) async { setRateImpl(rate) }
+
+    private func setRateImpl(_ rate: Float) {
         let clamped = min(max(rate, 0.5), 2.0)
         playbackRate = clamped
         if playbackState == .playing || playbackState == .buffering || playbackState == .stalled {
@@ -122,20 +134,44 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         }
     }
 
-    public func setTrackEndedHandler(_ handler: (@Sendable () -> Void)?) {
+    public func setTrackEndedHandler(_ handler: (@Sendable () -> Void)?) { setTrackEndedHandlerImpl(handler) }
+
+    // Explicit async witness prevents the protocol's default implementation
+    // from shadowing the synchronous MainActor API in async call sites.
+    public func setTrackEndedHandler(_ handler: (@Sendable () -> Void)?) async { setTrackEndedHandlerImpl(handler) }
+
+    private func setTrackEndedHandlerImpl(_ handler: (@Sendable () -> Void)?) {
         trackEndedHandler = handler
     }
 
     /// 注册播放中途失败回调（AVPlayerItem failed / FailedToPlayToEndTime / stalled 超时）。
-    public func setPlaybackFailureHandler(_ handler: (@Sendable () -> Void)?) {
+    public func setPlaybackFailureHandler(_ handler: (@Sendable () -> Void)?) { setPlaybackFailureHandlerImpl(handler) }
+
+    // Explicit async witness prevents the protocol's default implementation
+    // from shadowing the synchronous MainActor API in async call sites.
+    public func setPlaybackFailureHandler(_ handler: (@Sendable () -> Void)?) async { setPlaybackFailureHandlerImpl(handler) }
+
+    private func setPlaybackFailureHandlerImpl(_ handler: (@Sendable () -> Void)?) {
         playbackFailureHandler = handler
     }
 
-    public func setPlaybackTimingHandler(_ handler: (@Sendable (PlaybackTimingUpdate) -> Void)?) {
+    public func setPlaybackTimingHandler(_ handler: (@Sendable (PlaybackTimingUpdate) -> Void)?) { setPlaybackTimingHandlerImpl(handler) }
+
+    // Explicit async witness prevents the protocol's default implementation
+    // from shadowing the synchronous MainActor API in async call sites.
+    public func setPlaybackTimingHandler(_ handler: (@Sendable (PlaybackTimingUpdate) -> Void)?) async { setPlaybackTimingHandlerImpl(handler) }
+
+    private func setPlaybackTimingHandlerImpl(_ handler: (@Sendable (PlaybackTimingUpdate) -> Void)?) {
         playbackTimingHandler = handler
     }
 
-    public func setPreparedTrackStartedHandler(_ handler: (@Sendable (Track) -> Void)?) {
+    public func setPreparedTrackStartedHandler(_ handler: (@Sendable (Track) -> Void)?) { setPreparedTrackStartedHandlerImpl(handler) }
+
+    // Explicit async witness prevents the protocol's default implementation
+    // from shadowing the synchronous MainActor API in async call sites.
+    public func setPreparedTrackStartedHandler(_ handler: (@Sendable (Track) -> Void)?) async { setPreparedTrackStartedHandlerImpl(handler) }
+
+    private func setPreparedTrackStartedHandlerImpl(_ handler: (@Sendable (Track) -> Void)?) {
         preparedTrackStartedHandler = handler
     }
 
@@ -272,7 +308,13 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         finishPreparedMusicHaptics(reason: .preparationReplaced)
     }
 
-    public func configureReplayGain(_ settings: ReplayGainSettings) {
+    public func configureReplayGain(_ settings: ReplayGainSettings) { configureReplayGainImpl(settings) }
+
+    // Explicit async witness prevents the protocol's default implementation
+    // from shadowing the synchronous MainActor API in async call sites.
+    public func configureReplayGain(_ settings: ReplayGainSettings) async { configureReplayGainImpl(settings) }
+
+    private func configureReplayGainImpl(_ settings: ReplayGainSettings) {
         replayGainSettings = settings
         updateReplayGain(for: currentTrack)
     }
@@ -453,7 +495,13 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     /// the current item plays and advances without a second player teardown.
     /// This is true preloading, but remote HTTP/codec behaviour remains
     /// best-effort seamless rather than a sample-perfect guarantee.
-    public func prepareNext(track: Track?) {
+    public func prepareNext(track: Track?) { prepareNextImpl(track: track) }
+
+    // Explicit async witness prevents the protocol's default implementation
+    // from shadowing the synchronous MainActor API in async call sites.
+    public func prepareNext(track: Track?) async { prepareNextImpl(track: track) }
+
+    private func prepareNextImpl(track: Track?) {
         prepareNext(track: track, musicHapticsPreparation: nil)
     }
 
@@ -580,7 +628,13 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     }
 
     /// AVPlayer 的真实播放位置（秒）。
-    public func currentPosition() -> TimeInterval? {
+    public func currentPosition() -> TimeInterval? { return currentPositionImpl() }
+
+    // Explicit async witness prevents the protocol's default implementation
+    // from shadowing the synchronous MainActor API in async call sites.
+    public func currentPosition() async -> TimeInterval? { return currentPositionImpl() }
+
+    private func currentPositionImpl() -> TimeInterval? {
         guard let seconds = avPlayer?.currentTime().seconds, seconds.isFinite, seconds >= 0 else { return nil }
         return seconds
     }

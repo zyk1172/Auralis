@@ -34,7 +34,6 @@ struct SettingsBackupSection: View {
     @State private var restoreMessage: String?
     @State private var restoreError: String?
 
-    private let service = SettingsBackupService()
     private let credentialVault = KeychainCredentialVault()
 
     var body: some View {
@@ -171,11 +170,10 @@ struct SettingsBackupSection: View {
         do {
             let servers = try await model.catalogCoordinator.store.listServers()
             let backup = try await Self.makeBackupPayload(servers: servers)
-            let data = try service.encrypt(backup, password: exportPassword)
             let filename = String(localized: "Auralis设置备份-\(Self.dateStamp()).auralisbackup", bundle: .module)
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent(filename)
-            try data.write(to: url, options: .atomic)
+            try await SettingsBackupFileIO.shared.write(backup, password: exportPassword, to: url)
             generatedBackupURL = url
         } catch {
             exportError = error.localizedDescription
@@ -252,8 +250,7 @@ struct SettingsBackupSection: View {
             defer {
                 if accessing { url.stopAccessingSecurityScopedResource() }
             }
-            let data = try Data(contentsOf: url)
-            let backup = try service.decrypt(data, password: importPassword)
+            let backup = try await SettingsBackupFileIO.shared.read(from: url, password: importPassword)
             try await Self.applyBackup(backup, model: model, themeStore: themeStore, vault: credentialVault)
         restoreMessage = String(localized: "恢复完成。服务器不会自动同步，请在「服务器」中手动连接。", bundle: .module)
         } catch {
@@ -320,27 +317,7 @@ struct SettingsBackupSection: View {
         themeStore: ThemeStore,
         vault: KeychainCredentialVault
     ) async throws {
-        SettingsBackupService.writePreferences(backup.preferences, defaults: .standard)
-        let defaults = UserDefaults.standard
-        defaults.set(backup.ai.baseURL, forKey: AIConnectionSettings.Keys.baseURL)
-        defaults.set(backup.ai.apiPath, forKey: AIConnectionSettings.Keys.apiPath)
-        defaults.set(backup.ai.model, forKey: AIConnectionSettings.Keys.model)
-        defaults.set(
-            backup.ai.endpointMode ?? AIEndpointMode.infer(from: backup.ai.apiPath).rawValue,
-            forKey: AIConnectionSettings.Keys.endpointMode
-        )
-
-        // 关键凭据写入失败必须抛出，禁止「恢复完成」但重启后密码/API Key 全没（P2-4）。
-        if let apiKey = backup.ai.apiKey, !apiKey.isEmpty {
-            try await vault.store(apiKey, for: AIConnectionSettings.credentialID)
-        }
-        if let download = backup.musicDownload {
-            defaults.set(download.baseURL, forKey: MoviePilotSettings.baseURLKey)
-            defaults.set(download.externalBaseURL, forKey: MoviePilotSettings.externalBaseURLKey)
-            if let token = download.token, !token.isEmpty {
-                try await vault.store(token, for: MoviePilotSettings.tokenCredentialID)
-            }
-        }
+        try await BackupConnectionRestorer.restore(backup, defaults: .standard, vault: vault)
         if let themeID = backup.preferences["auralis.selected-theme"] {
             await MainActor.run { themeStore.select(id: themeID) }
         }
@@ -370,7 +347,6 @@ struct BackupExportPage: View {
     @State private var isGenerating = false
     @State private var exportError: String?
 
-    private let service = SettingsBackupService()
 
     var body: some View {
         Form {
@@ -422,11 +398,10 @@ struct BackupExportPage: View {
         do {
             let servers = try await model.catalogCoordinator.store.listServers()
             let backup = try await SettingsBackupSection.makeBackupPayload(servers: servers)
-            let data = try service.encrypt(backup, password: exportPassword)
             let filename = String(localized: "Auralis设置备份-\(SettingsBackupSection.dateStamp()).auralisbackup", bundle: .module)
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent(filename)
-            try data.write(to: url, options: .atomic)
+            try await SettingsBackupFileIO.shared.write(backup, password: exportPassword, to: url)
             generatedBackupURL = url
         } catch {
             exportError = error.localizedDescription
@@ -449,7 +424,6 @@ struct BackupImportPage: View {
     @State private var restoreMessage: String?
     @State private var restoreError: String?
 
-    private let service = SettingsBackupService()
     private let credentialVault = KeychainCredentialVault()
 
     var body: some View {
@@ -530,8 +504,7 @@ struct BackupImportPage: View {
             defer {
                 if accessing { url.stopAccessingSecurityScopedResource() }
             }
-            let data = try Data(contentsOf: url)
-            let backup = try service.decrypt(data, password: importPassword)
+            let backup = try await SettingsBackupFileIO.shared.read(from: url, password: importPassword)
             try await SettingsBackupSection.applyBackup(backup, model: model, themeStore: themeStore, vault: credentialVault)
         restoreMessage = String(localized: "恢复完成。服务器不会自动同步，请在「服务器」中手动连接。", bundle: .module)
         } catch {

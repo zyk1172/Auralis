@@ -178,7 +178,16 @@ public actor TrackCacheStore {
         return url
     }
 
-    public func moveDownloadedFile(at sourceURL: URL, for id: TrackCacheID, codec: String?) throws -> URL {
+    public func moveDownloadedFile(
+        at sourceURL: URL, for id: TrackCacheID, codec: String?,
+        shouldInstall: @Sendable () -> Bool = { true }
+    ) throws -> URL {
+        // Actor serialization makes this ownership check and file installation one
+        // synchronous operation. A newer attempt cannot install in between.
+        guard shouldInstall() else {
+            try? FileManager.default.removeItem(at: sourceURL)
+            throw CancellationError()
+        }
         let sourceSize = (try? sourceURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         guard sourceSize > 0 else { throw TrackCacheError.emptyFile }
         try ensureDirectory()
@@ -245,6 +254,13 @@ public actor TrackCacheStore {
             }
         }
         return destination
+    }
+
+    /// A rejected attempt may remove only the file it installed, never its replacement.
+    public func remove(for id: TrackCacheID, ifMatching expectedURL: URL) throws {
+        guard let location = index[id.description],
+              fileURL(forStoredLocation: location).standardizedFileURL == expectedURL.standardizedFileURL else { return }
+        try remove(for: id)
     }
 
     public func remove(for id: TrackCacheID) throws {
