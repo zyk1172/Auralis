@@ -4130,8 +4130,10 @@ public final class AuralisAppModel: ObservableObject {
     /// 队列保留，用户可随时继续播放；系统信息只在此时清空（符合「仅用户主动停止才清空」）。
     public func stopPlayback() {
         invalidatePlaybackIntent()
+        let generation = playbackIntentGeneration
         guard currentTrack.id.rawValue != "placeholder" else { return }
         lastStopReason = .userStopped
+        playbackState = .idle
         hapticsToggleTask?.cancel()
         hapticsToggleTask = nil
         hapticsEffectiveStateTask?.cancel()
@@ -4150,9 +4152,13 @@ public final class AuralisAppModel: ObservableObject {
         handoffActivity?.invalidate()
         schedulePlaybackSessionPersistence()
         Task { @MainActor in
+            guard self.playbackIntentGeneration == generation else { return }
             await self.engine.stop()
+            guard self.playbackIntentGeneration == generation else { return }
             self.musicHaptics.stop()
-            self.playbackState = await self.engine.state()
+            let state = await self.engine.state()
+            guard self.playbackIntentGeneration == generation else { return }
+            self.playbackState = state
             self.syncProgressTimer()
             self.mediaIntegration.stop()
         }
@@ -5618,6 +5624,8 @@ public final class AuralisAppModel: ObservableObject {
     /// 1. 刷新流地址并重试（最多 Self.maxStreamRetryAttempts 次，不无限重试）；
     /// 2. 重试耗尽后，若队列有下一首则自动切下一首，否则保留失败状态并提示用户。
     private func handleStreamFailure() {
+        // A failure event already queued before stop/pause is no longer a play request.
+        guard playbackState != .idle, playbackState != .paused else { return }
         let track = currentTrack
         guard track.id.rawValue != "placeholder" else { return }
         // 重试预算按 GlobalID 隔离：切换服务器后即使远端 TrackID 相同也不会串扰。

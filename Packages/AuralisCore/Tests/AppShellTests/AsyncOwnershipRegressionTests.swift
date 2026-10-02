@@ -228,6 +228,7 @@ struct AsyncOwnershipRegressionTests {
         let engine = AuditEngine()
         let model = model(connector, playlists: [], engine: engine)
         model.currentTrack = track("1")
+        model.playbackState = .playing
         await engine.handlerReady.wait()
         await engine.fail()
         await connector.entered.wait()
