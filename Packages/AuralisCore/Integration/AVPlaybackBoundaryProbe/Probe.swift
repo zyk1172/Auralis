@@ -78,9 +78,11 @@ struct AVPlaybackBoundaryProbe {
                 if !update.isStateTransition, let position = update.position { events.position(position) }
             }
             try await engine.play(track: track("timing", seconds: 2))
-            try require(await wait({ events.positions.count >= 2 }, seconds: 4), "periodic timing never arrived")
-            let positions = events.positions
-            try require((positions.last ?? 0) > (positions.first ?? 0), "timing position did not advance")
+            let advanced = await wait({
+                let positions = events.positions
+                return positions.count >= 2 && (positions.last ?? 0) > (positions.first ?? 0)
+            }, seconds: 4)
+            try require(advanced, "periodic timing did not advance")
             await engine.stop()
         }
         do {
