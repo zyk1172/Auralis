@@ -2319,7 +2319,11 @@ public final class AuralisAppModel: ObservableObject {
 
                 // 尝试 1：刷新流地址后重播。
                 if self.catalog.activeServerID != nil,
-                   let freshURL = await self.connector.refreshStreamURL(serverID: track.serverID, trackID: track.id) {
+                   let freshURL = await self.connector.refreshStreamURL(
+                    serverID: track.serverID,
+                    trackID: track.id,
+                    forceEndpointResolution: true
+                   ) {
                     playable.streamURL = freshURL
                     do {
                         hapticsPreparation = try await self.playWithMusicHaptics(
@@ -3065,7 +3069,11 @@ public final class AuralisAppModel: ObservableObject {
             return track.streamURL == nil ? nil : track
         }
         if catalog.activeServerID != nil,
-           let refreshedURL = await connector.refreshStreamURL(serverID: track.serverID, trackID: track.id) {
+           let refreshedURL = await connector.refreshStreamURL(
+            serverID: track.serverID,
+            trackID: track.id,
+            forceEndpointResolution: forceRefresh
+           ) {
             var playable = track
             playable.streamURL = refreshedURL
             return playable
