@@ -181,9 +181,15 @@ public protocol ServerConnecting: Sendable {
     /// Navidrome 等服务器 getGenres 常为空，但按流派列专辑可用，
     /// 因此即便本地没有流派标签，进入某个流派也能拉到真实歌曲。失败时抛出。
     func tracks(byGenre name: String, serverID: ServerID) async throws -> [Track]
-    /// 重新获取单曲的带认证播放地址（流地址过期 / 播放失败后刷新）。
+    /// 重新获取单曲的带认证播放地址。
+    /// 正常解析复用当前已选端点；播放失败时可要求重新探测内/外网端点后再生成 URL。
     /// 返回的 URL 只用于 AVPlayer 内部播放，不得发送给大模型。
     func refreshStreamURL(serverID: ServerID, trackID: TrackID) async -> URL?
+    func refreshStreamURL(
+        serverID: ServerID,
+        trackID: TrackID,
+        forceEndpointResolution: Bool
+    ) async -> URL?
     /// 在服务器上在线搜索歌曲（本地无结果时使用）；失败时抛出（与“无结果”区分）。
     func serverSearch(query: String, limit: Int, serverID: ServerID) async throws -> [Track]
     /// 按 ID 从服务器拉取单曲（getSong）并补流地址；本地目录未同步时用于在线流播。
@@ -279,6 +285,14 @@ public extension ServerConnecting {
     func refreshAuxiliaryData(serverID: ServerID) async -> AuxiliaryLibraryData? { nil }
     func tracks(byGenre name: String, serverID: ServerID) async throws -> [Track] { [] }
     func refreshStreamURL(serverID: ServerID, trackID: TrackID) async -> URL? { nil }
+    func refreshStreamURL(
+        serverID: ServerID,
+        trackID: TrackID,
+        forceEndpointResolution: Bool
+    ) async -> URL? {
+        _ = forceEndpointResolution
+        return await refreshStreamURL(serverID: serverID, trackID: trackID)
+    }
     func serverSearch(query: String, limit: Int, serverID: ServerID) async throws -> [Track] { [] }
     func serverTrack(serverID: ServerID, trackID: TrackID) async throws -> Track? { nil }
     func librarySongCount(serverID: ServerID) async -> Int? { nil }
