@@ -304,9 +304,10 @@ final class LocalMusicLibraryStore: ObservableObject {
             options: [.skipsHiddenFiles]
         )
 
-        let packages = children.filter { url in
-            (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
-                && !Self.isManagedDownloadPackage(url)
+        let packages = try children.filter { url in
+            // An unreadable child is an incomplete traversal, not proof of deletion.
+            let values = try url.resourceValues(forKeys: [.isDirectoryKey])
+            return values.isDirectory == true && !Self.isManagedDownloadPackage(url)
         }
         .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
 

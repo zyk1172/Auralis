@@ -64,64 +64,64 @@ struct AVPlaybackBoundaryProbe {
         do {
             let engine = AVFoundationPlaybackEngine()
             let events = Events()
-            engine.setTrackEndedHandler { events.end() }
+            await engine.setTrackEndedHandler { events.end() }
             try await engine.play(track: track("natural", seconds: 0.3))
             try require(await wait { events.ended == 1 }, "natural end never arrived")
             try await Task.sleep(for: .milliseconds(150))
             try require(events.ended == 1, "natural end fired more than once")
-            engine.stop()
+            await engine.stop()
         }
         do {
             let engine = AVFoundationPlaybackEngine()
             let events = Events()
-            engine.setPlaybackTimingHandler { update in
+            await engine.setPlaybackTimingHandler { update in
                 if !update.isStateTransition, let position = update.position { events.position(position) }
             }
             try await engine.play(track: track("timing", seconds: 2))
             try require(await wait({ events.positions.count >= 2 }, seconds: 4), "periodic timing never arrived")
             let positions = events.positions
             try require((positions.last ?? 0) > (positions.first ?? 0), "timing position did not advance")
-            engine.stop()
+            await engine.stop()
         }
         do {
             let engine = AVFoundationPlaybackEngine()
             let events = Events()
-            engine.setTrackEndedHandler { events.end() }
-            engine.setPreparedTrackStartedHandler { events.start($0.id.rawValue) }
+            await engine.setTrackEndedHandler { events.end() }
+            await engine.setPreparedTrackStartedHandler { events.start($0.id.rawValue) }
             try await engine.play(track: track("prepared-a", seconds: 0.3))
-            engine.prepareNext(track: try track("prepared-b", seconds: 1))
+            await engine.prepareNext(track: try track("prepared-b", seconds: 1))
             try require(await wait { events.started.contains("prepared-b") }, "prepared item did not start")
             try require(events.started.filter { $0 == "prepared-b" }.count == 1 && events.ended == 0,
                         "prepared transition violated exactly-once semantics")
-            engine.stop()
+            await engine.stop()
         }
         do {
             let engine = AVFoundationPlaybackEngine()
             let events = Events()
-            engine.setTrackEndedHandler { events.end() }
-            engine.setPreparedTrackStartedHandler { events.start($0.id.rawValue) }
+            await engine.setTrackEndedHandler { events.end() }
+            await engine.setPreparedTrackStartedHandler { events.start($0.id.rawValue) }
             try await engine.play(track: track("abc-a", seconds: 0.3))
-            engine.prepareNext(track: try track("abc-b", seconds: 0.6))
+            await engine.prepareNext(track: try track("abc-b", seconds: 0.6))
             try require(await wait { events.started.contains("abc-b") }, "A to B did not advance")
-            engine.prepareNext(track: try track("abc-c", seconds: 1))
+            await engine.prepareNext(track: try track("abc-c", seconds: 1))
             try require(await wait { events.started.contains("abc-c") }, "B to C did not advance")
             try require(events.ended == 0, "prepared chain emitted a natural-end event")
-            engine.stop()
+            await engine.stop()
         }
         do {
             let engine = AVFoundationPlaybackEngine()
             let events = Events()
-            engine.setTrackEndedHandler { events.end() }
-            engine.setPreparedTrackStartedHandler { events.start($0.id.rawValue) }
+            await engine.setTrackEndedHandler { events.end() }
+            await engine.setPreparedTrackStartedHandler { events.start($0.id.rawValue) }
             try await engine.play(track: track("failed-a", seconds: 0.6))
             var invalid = try track("failed-b", seconds: 1)
             try FileManager.default.removeItem(at: invalid.streamURL!)
             invalid.streamURL = directory.appendingPathComponent("missing.wav")
-            engine.prepareNext(track: invalid)
+            await engine.prepareNext(track: invalid)
             try require(await wait { events.ended == 1 }, "failed prepared item suppressed natural end")
             try await Task.sleep(for: .milliseconds(150))
             try require(events.ended == 1 && events.started.isEmpty, "failed prepared item started or duplicated end")
-            engine.stop()
+            await engine.stop()
         }
     }
 }
