@@ -3,6 +3,8 @@
 
 package com.auralis.core.ai
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.Json
@@ -149,6 +151,8 @@ class AgentToolLoop(
     private val provider: AiProvider,
     private val registry: AgentToolRegistry,
     private val maxRounds: Int = 8,
+    private val roundTimeoutMillis: Long = 360_000,
+    private val toolTimeoutMillis: Long = 360_000,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -174,24 +178,38 @@ class AgentToolLoop(
         val writeOps = ArrayList<AiToolCall>()
         var rounds = 0
         var lastModel = model
+        val indeterminateWrites = HashSet<String>()
 
         while (rounds < maxRounds) {
             rounds += 1
-            val response = provider.complete(
-                AiCompletionRequest(
-                    model = model,
-                    messages = messages.toList(),
-                    tools = registry.descriptors().map { d ->
-                        AiToolDefinition(d.name, d.description, d.parametersJson)
-                    }.takeIf { provider.supportsToolCalling },
-                    toolChoice = if (provider.capabilities.supportsToolChoice) {
-                        AiToolChoice.Auto
-                    } else {
-                        null
-                    },
-                    reasoning = reasoning,
-                ),
-            )
+            suspend fun requestRound(): AiCompletionResponse? = withTimeoutOrNull(roundTimeoutMillis) {
+                provider.complete(
+                    AiCompletionRequest(
+                        model = model,
+                        messages = messages.toList(),
+                        tools = registry.descriptors().map { d ->
+                            AiToolDefinition(d.name, d.description, d.parametersJson)
+                        }.takeIf { provider.supportsToolCalling },
+                        toolChoice = if (provider.capabilities.supportsToolChoice) {
+                            AiToolChoice.Auto
+                        } else {
+                            null
+                        },
+                        reasoning = reasoning,
+                    ),
+                )
+            }
+            val response = requestRound() ?: run {
+                onEvent(AgentRunEvent.Reasoning("模型响应已达到等待上限，正在尝试更短的路径继续。"))
+                messages += AiMessage(
+                    role = AiMessage.Role.User,
+                    content = "上一轮模型请求超时。请改用更短规划或已有本地查询完成原请求，不要重复同一路径。",
+                )
+                requestRound()
+            } ?: return AgentRunResult(
+                finalAnswer = "模型响应超时，换路径后仍未取得结果。本次任务未完成，可以稍后继续。",
+                rounds = rounds, model = lastModel, writeOperations = writeOps,
+            ).also { onEvent(AgentRunEvent.Finished) }
             lastModel = response.model
             val calls = response.toolCalls.orEmpty()
             if (calls.isEmpty()) {
@@ -218,9 +236,22 @@ class AgentToolLoop(
                 onEvent(AgentRunEvent.ToolInvoked(call))
                 val arguments = call.argumentObject ?: emptyMap()
                 try {
-                    val result = registry.execute(call.name, arguments, authorization, confirm)
-                    if (registry.descriptor(call.name)?.sideEffect == ToolSideEffect.Write) {
-                        writeOps += call
+                    val isWrite = registry.descriptor(call.name)?.sideEffect == ToolSideEffect.Write
+                    val signature = call.name + ":" + arguments.toSortedMap().entries.joinToString { "${it.key}=${it.value}" }
+                    val result = if (signature in indeterminateWrites) {
+                        "tool_timeout: 上一次相同写操作结果未知，请先查询核验，不要重复执行。"
+                    } else {
+                        val completed = withTimeoutOrNull(toolTimeoutMillis) {
+                            registry.execute(call.name, arguments, authorization, confirm)
+                        }
+                        if (completed == null) {
+                            if (isWrite) indeterminateWrites += signature
+                            if (isWrite) "tool_timeout: 操作超时，结果可能未知。请先查询核验，再选择其它路径。"
+                            else "tool_timeout: 查询超时，请换用其它可用查询路径继续原请求。"
+                        } else {
+                            if (isWrite) writeOps += call
+                            completed
+                        }
                     }
                     onEvent(AgentRunEvent.ToolCompleted(call, result))
                     messages += AiMessage(
@@ -253,6 +284,8 @@ class AgentToolLoop(
                         toolCallId = call.id,
                         name = call.name,
                     )
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
                 } catch (e: Exception) {
                     onEvent(AgentRunEvent.ToolDenied(call, e.message ?: "执行失败"))
                     messages += AiMessage(

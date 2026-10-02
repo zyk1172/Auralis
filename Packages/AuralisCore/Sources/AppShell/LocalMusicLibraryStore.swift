@@ -47,6 +47,8 @@ final class LocalMusicLibraryStore: ObservableObject {
     private let sourcesURL: URL
     private let managedRootURL: URL?
     private var accessedRoots: [LocalLibraryID: URL] = [:]
+    private var scanGenerations: [LocalLibraryID: UInt64] = [:]
+    private var activeScans = 0
 
     private static let supportedExtensions: Set<String> = [
         "mp3", "m4a", "aac", "alac", "flac", "wav", "aiff", "aif", "ogg", "opus"
@@ -187,6 +189,7 @@ final class LocalMusicLibraryStore: ObservableObject {
         if let root = accessedRoots.removeValue(forKey: source.id) {
             root.stopAccessingSecurityScopedResource()
         }
+        scanGenerations[source.id, default: 0] &+= 1
         sources.removeAll { $0.id == source.id }
         let removedIDs = Set(tracks.filter { Self.belongs($0, to: source.id) }.map(\.id))
         tracks.removeAll { Self.belongs($0, to: source.id) }
@@ -223,12 +226,14 @@ final class LocalMusicLibraryStore: ObservableObject {
 
     @discardableResult
     func scan(source: LocalMusicSource, manageState: Bool = true) async -> LocalLibraryScanSnapshot {
-        if manageState {
-            isScanning = true
-            lastError = nil
-        }
+        activeScans += 1
+        isScanning = true
+        if manageState { lastError = nil }
+        scanGenerations[source.id, default: 0] &+= 1
+        let generation = scanGenerations[source.id]
         defer {
-            if manageState { isScanning = false }
+            activeScans -= 1
+            isScanning = activeScans > 0
         }
         guard let root = resolveRoot(source) else {
             lastError = "本地音乐文件夹授权已失效，请重新添加"
@@ -236,19 +241,34 @@ final class LocalMusicLibraryStore: ObservableObject {
         }
 
         let result: (items: [ScannedTrack], discovered: Int, failed: Int)
-        if source.id == Self.managedSourceID {
-            result = await scanManagedPackages(root: root, source: source)
-        } else {
-            result = await scanLegacyTree(root: root, source: source)
+        do {
+            if source.id == Self.managedSourceID {
+                result = try await scanManagedPackages(root: root, source: source)
+            } else {
+                result = try await scanLegacyTree(root: root, source: source)
+            }
+        } catch {
+            lastError = "无法完整读取本地音乐来源，已保留上次扫描结果"
+            return LocalLibraryScanSnapshot(failedFiles: 1)
+        }
+        guard !Task.isCancelled, scanGenerations[source.id] == generation,
+              sources.contains(where: { $0.id == source.id }) else {
+            return LocalLibraryScanSnapshot()
         }
 
         let oldIDs = Set(tracks.filter { Self.belongs($0, to: source.id) }.map(\.id))
-        let newTracks = result.items.map(\.track)
+        var newTracks = result.items.map(\.track)
+        let scannedIDs = Set(newTracks.map(\.id))
+        // A partial scan can update known-good files, but cannot prove that
+        // missing entries were deleted. Preserve them until a complete scan.
+        if result.failed > 0 {
+            newTracks += tracks.filter { Self.belongs($0, to: source.id) && !scannedIDs.contains($0.id) }
+        }
         let newIDs = Set(newTracks.map(\.id))
 
         tracks.removeAll { Self.belongs($0, to: source.id) }
         tracks.append(contentsOf: newTracks)
-        for trackID in oldIDs {
+        for trackID in oldIDs where result.failed == 0 || scannedIDs.contains(trackID) {
             lyrics[trackID] = nil
         }
         for item in result.items {
@@ -275,14 +295,14 @@ final class LocalMusicLibraryStore: ObservableObject {
     private func scanManagedPackages(
         root: URL,
         source: LocalMusicSource
-    ) async -> (items: [ScannedTrack], discovered: Int, failed: Int) {
+    ) async throws -> (items: [ScannedTrack], discovered: Int, failed: Int) {
         Self.ensureManagedRoot(at: root)
         let manager = FileManager.default
-        let children = (try? manager.contentsOfDirectory(
+        let children = try manager.contentsOfDirectory(
             at: root,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
-        )) ?? []
+        )
 
         let packages = children.filter { url in
             (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
@@ -305,18 +325,22 @@ final class LocalMusicLibraryStore: ObservableObject {
     private func scanLegacyTree(
         root: URL,
         source: LocalMusicSource
-    ) async -> (items: [ScannedTrack], discovered: Int, failed: Int) {
+    ) async throws -> (items: [ScannedTrack], discovered: Int, failed: Int) {
         let manager = FileManager.default
         let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
-        let enumerator = manager.enumerator(
+        // Preflight and record traversal errors instead of treating them as an empty library.
+        _ = try manager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+        let traversal = LocalScanTraversalStatus()
+        guard let enumerator = manager.enumerator(
             at: root,
             includingPropertiesForKeys: keys,
-            options: [.skipsHiddenFiles]
-        )
+            options: [.skipsHiddenFiles],
+            errorHandler: { _, _ in traversal.markFailed(); return false }
+        ) else { throw CocoaError(.fileReadUnknown) }
         var imported: [ScannedTrack] = []
         var failed = 0
         var discovered = 0
-        while let file = enumerator?.nextObject() as? URL {
+        while let file = enumerator.nextObject() as? URL {
             guard Self.supportedExtensions.contains(file.pathExtension.lowercased()) else { continue }
             discovered += 1
             let relative = file.path.replacingOccurrences(of: root.path, with: "")
@@ -331,6 +355,7 @@ final class LocalMusicLibraryStore: ObservableObject {
                 failed += 1
             }
         }
+        guard !traversal.failed else { throw CocoaError(.fileReadUnknown) }
         return (imported, discovered, failed)
     }
 
@@ -713,4 +738,12 @@ private extension String {
     var trimmedNonEmpty: String? {
         trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
     }
+}
+
+/// FileManager may call its error handler outside the actor; keep that signal synchronized.
+private final class LocalScanTraversalStatus: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didFail = false
+    var failed: Bool { lock.withLock { didFail } }
+    func markFailed() { lock.withLock { didFail = true } }
 }

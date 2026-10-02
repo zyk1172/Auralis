@@ -8,10 +8,9 @@ import Testing
 /// 真实 AVFoundation（AVQueuePlayer）边界集成测试：本地生成极短无声 WAV，
 /// 验证自然结束、prepared 无缝推进、prepared 失败兜底与 exactly-once 语义。
 /// 这些测试在 macOS 上运行（AVFoundation 可用），不依赖网络。
-/// 真实 AVFoundation 测试需要测试进程能驱动 AVPlayer 的 run loop；swift test 默认
-/// 不进入会推进 AVQueuePlayer 的 run loop 模式（独立可执行 probe 已验证引擎的
-/// AVQueuePlayer 用法能正常播完并触发 DidPlayToEnd）。因此在默认 CI 中跳过，
-/// 通过 `AURALIS_RUN_AV_TESTS=1 swift test` 手动运行；最终真机/本机验收见
+/// 真实 AVFoundation 测试需要推进 main run loop；等待器显式驱动该模式。
+/// 普通单元测试仍 opt-in；独立 CI job 通过 AURALIS_RUN_AV_TESTS=1 执行全部边界。
+/// 最终真机/本机验收见
 /// Docs/ManualValidation.md（MANUAL-VERIFY）。
 @Suite("AVFoundationPlaybackEngine boundary", .serialized,
        .enabled(if: ProcessInfo.processInfo.environment["AURALIS_RUN_AV_TESTS"] == "1"))
@@ -52,16 +51,24 @@ struct AVFoundationPlaybackEngineBoundaryTests {
         )
     }
 
+    @MainActor
     private func waitUntil(
         timeout: Duration = .seconds(8),
         _ condition: @escaping @MainActor () -> Bool
     ) async -> Bool {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
-            if await condition() { return true }
-            try? await Task.sleep(for: .milliseconds(40))
+            if condition() { return true }
+            drivePlayerRunLoop()
+            try? await Task.sleep(for: .milliseconds(10))
         }
-        return await condition()
+        return condition()
+    }
+
+    /// Keep Foundation's synchronous run-loop API out of the async method itself.
+    @MainActor
+    private func drivePlayerRunLoop() {
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
     }
 
     @Test("无预载项自然结束只触发一次 trackEndedHandler")

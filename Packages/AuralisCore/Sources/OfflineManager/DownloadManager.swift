@@ -396,12 +396,12 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         }
         infos[id] = DownloadTaskInfo(trackID: id.trackID, status: .notDownloaded)
         codecs[id] = nil
+        metadataStore.removeFailure(id: id)
         lock.unlock()
         task?.taskDescription = nil
         if let taskIdentifier {
             metadataStore.remove(taskIdentifier: taskIdentifier)
         }
-        metadataStore.removeFailure(id: id)
         task?.cancel()
         notify(id)
         resumeNextTasks()

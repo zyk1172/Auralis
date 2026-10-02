@@ -3,6 +3,7 @@
 import Application
 import Domain
 import Foundation
+import LocalCatalog
 import SecurityKit
 import Testing
 

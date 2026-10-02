@@ -19,7 +19,12 @@ actor ArtworkPipeline {
     private let diskCache: ArtworkDiskCache
     private let decoder: ArtworkImageDecoder
     private let limiter: ArtworkRequestLimiter
-    private var inFlight: [String: Task<ArtworkPipelinePayload?, Never>] = [:]
+    private struct Flight {
+        let id: UUID
+        let task: Task<ArtworkPipelinePayload?, Never>
+        var consumers: Set<UUID>
+    }
+    private var inFlight: [String: Flight] = [:]
 
     init(
         connector: any ServerConnecting,
@@ -40,28 +45,61 @@ actor ArtworkPipeline {
         fallbackCacheKey: String?,
         targetPixelSize: Int
     ) async -> ArtworkPipelinePayload? {
-        if let existing = inFlight[cacheKey] {
-            return await existing.value
-        }
+        guard !Task.isCancelled else { return nil }
+        let consumer = UUID()
+        let flight: Flight
+        if var existing = inFlight[cacheKey] {
+            existing.consumers.insert(consumer)
+            inFlight[cacheKey] = existing
+            flight = existing
+        } else {
+            let task = Task<ArtworkPipelinePayload?, Never> {
+                if let data = await diskCache.data(for: cacheKey),
+                   let decoded = await decoder.decode(data, maxPixelSize: targetPixelSize) {
+                    return ArtworkPipelinePayload(decoded: decoded, encodedData: data)
+                }
 
-        let task = Task<ArtworkPipelinePayload?, Never> {
-            if let data = await diskCache.data(for: cacheKey),
-               let decoded = await decoder.decode(data, maxPixelSize: targetPixelSize) {
-                return ArtworkPipelinePayload(decoded: decoded, encodedData: data)
-            }
+                if let fallbackCacheKey,
+                   fallbackCacheKey != cacheKey,
+                   let data = await diskCache.data(for: fallbackCacheKey),
+                   let decoded = await decoder.decode(data, maxPixelSize: targetPixelSize) {
+                    return ArtworkPipelinePayload(decoded: decoded, encodedData: data)
+                }
 
-            if let fallbackCacheKey,
-               fallbackCacheKey != cacheKey,
-               let data = await diskCache.data(for: fallbackCacheKey),
-               let decoded = await decoder.decode(data, maxPixelSize: targetPixelSize) {
-                return ArtworkPipelinePayload(decoded: decoded, encodedData: data)
-            }
+                if serverID == LocalCatalogOverlay.localServerID,
+                   let fileURL = LocalArtworkKey.fileURL(from: remoteKey),
+                   !Task.isCancelled,
+                   let data = try? Data(contentsOf: fileURL),
+                   let decoded = await decoder.decode(data, maxPixelSize: targetPixelSize) {
+                    let payload = ArtworkPipelinePayload(decoded: decoded, encodedData: data)
+                    Task(priority: .utility) { [diskCache] in
+                        await diskCache.store(data, for: cacheKey)
+                    }
+                    return payload
+                }
 
-            if serverID == LocalCatalogOverlay.localServerID,
-               let fileURL = LocalArtworkKey.fileURL(from: remoteKey),
-               !Task.isCancelled,
-               let data = try? Data(contentsOf: fileURL),
-               let decoded = await decoder.decode(data, maxPixelSize: targetPixelSize) {
+                guard await limiter.acquire() else {
+                    // 排队期间被取消（封面已滚出屏幕）——直接让路。
+                    return nil
+                }
+                guard !Task.isCancelled else {
+                    await limiter.release()
+                    return nil
+                }
+                // R01：封面按 serverID 路由，封面 key 跨服务器互不串扰。
+                let data = await connector.artworkData(
+                    serverID: serverID,
+                    key: remoteKey,
+                    targetPixelSize: max(1, targetPixelSize)
+                )
+                await limiter.release()
+
+                guard !Task.isCancelled,
+                      let data,
+                      let decoded = await decoder.decode(data, maxPixelSize: targetPixelSize)
+                else { return nil }
+
+                // 磁盘写入不阻塞首屏显示：先让用户看到图片，再慢慢落盘。
                 let payload = ArtworkPipelinePayload(decoded: decoded, encodedData: data)
                 Task(priority: .utility) { [diskCache] in
                     await diskCache.store(data, for: cacheKey)
@@ -69,45 +107,35 @@ actor ArtworkPipeline {
                 return payload
             }
 
-            guard await limiter.acquire() else {
-                // 排队期间被取消（封面已滚出屏幕）——直接让路。
-                return nil
-            }
-            guard !Task.isCancelled else {
-                await limiter.release()
-                return nil
-            }
-            // R01：封面按 serverID 路由，封面 key 跨服务器互不串扰。
-            let data = await connector.artworkData(
-                serverID: serverID,
-                key: remoteKey,
-                targetPixelSize: max(1, targetPixelSize)
-            )
-            await limiter.release()
-
-            guard !Task.isCancelled,
-                  let data,
-                  let decoded = await decoder.decode(data, maxPixelSize: targetPixelSize)
-            else { return nil }
-
-            // 磁盘写入不阻塞首屏显示：先让用户看到图片，再慢慢落盘。
-            let payload = ArtworkPipelinePayload(decoded: decoded, encodedData: data)
-            Task(priority: .utility) { [diskCache] in
-                await diskCache.store(data, for: cacheKey)
-            }
-            return payload
+            flight = Flight(id: UUID(), task: task, consumers: [consumer])
+            inFlight[cacheKey] = flight
         }
+        return await withTaskCancellationHandler {
+            let result = await flight.task.value
+            releaseConsumer(consumer, key: cacheKey, flightID: flight.id)
+            return Task.isCancelled ? nil : result
+        } onCancel: {
+            Task { await self.releaseConsumer(consumer, key: cacheKey, flightID: flight.id) }
+        }
+    }
 
-        inFlight[cacheKey] = task
-        let result = await task.value
-        inFlight[cacheKey] = nil
-        return result
+    private func releaseConsumer(_ consumer: UUID, key: String, flightID: UUID) {
+        guard var flight = inFlight[key], flight.id == flightID else { return }
+        flight.consumers.remove(consumer)
+        if flight.consumers.isEmpty {
+            flight.task.cancel()
+            inFlight[key] = nil
+        } else {
+            inFlight[key] = flight
+        }
     }
 
     func cancelAll() {
-        for task in inFlight.values { task.cancel() }
+        for flight in inFlight.values { flight.task.cancel() }
         inFlight.removeAll(keepingCapacity: true)
     }
+
+    func activeConsumerCount(for key: String) -> Int { inFlight[key]?.consumers.count ?? 0 }
 }
 
 /// 无轮询的协作式并发门，避免服务器离线时堆出几十个封面请求。

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import Domain
 import Foundation
+import LocalCatalog
 
 /// Serializes a playlist's reads, writes and persistence across MainActor suspension.
 /// Callers revalidate the browsing session after acquiring and after remote awaits.

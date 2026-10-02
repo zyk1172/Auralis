@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.auralis.core.ai
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -21,9 +23,11 @@ class AgentToolLoopTest {
         override val supportsToolCalling: Boolean = true
         val requests = ArrayList<AiCompletionRequest>()
         private var index = 0
+        var delayNextRequest = false
 
         override suspend fun complete(request: AiCompletionRequest): AiCompletionResponse {
             requests += request
+            if (delayNextRequest) { delayNextRequest = false; delay(5_000) }
             val r = queue[index.coerceAtMost(queue.size - 1)]
             if (index < queue.size - 1) index++
             return r
@@ -179,4 +183,68 @@ class AgentToolLoopTest {
         assertEquals(3, provider.requests.size)
         assertTrue(result.finalAnswer.contains("未收敛"))
     }
+
+    @Test
+    fun `工具取消直接传播而不是回灌成工具失败`() = runBlocking {
+        val provider = FakeLoopProvider(
+            AiCompletionResponse(model = "m", content = "", finishReason = "tool_calls",
+                toolCalls = listOf(toolCall("cancelled"))), final("不应执行"),
+        )
+        val tools = AgentToolRegistry().apply {
+            register(AgentToolDescriptor(name = "cancelled", description = "test")) {
+                throw CancellationException("cancelled")
+            }
+        }
+        var propagated = false
+        val events = ArrayList<AgentRunEvent>()
+        try {
+            AgentToolLoop(provider, tools).run(null, "query", "m", onEvent = { events += it })
+        } catch (_: CancellationException) { propagated = true }
+        assertTrue(propagated)
+        assertEquals(1, provider.requests.size)
+        assertTrue(events.none { it is AgentRunEvent.ToolDenied })
+    }
+
+    @Test
+    fun `只读工具超时回灌并继续模型换路径`() = runBlocking {
+        val provider = FakeLoopProvider(
+            AiCompletionResponse(model = "m", content = "", finishReason = "tool_calls",
+                toolCalls = listOf(toolCall("slow"))), final("改用已有结果"),
+        )
+        val tools = AgentToolRegistry().apply {
+            register(AgentToolDescriptor(name = "slow", description = "test")) { delay(5_000); "late" }
+        }
+        val result = AgentToolLoop(provider, tools, toolTimeoutMillis = 50).run(null, "query", "m")
+        assertEquals("改用已有结果", result.finalAnswer)
+        assertTrue(provider.requests[1].messages.any { it.role == AiMessage.Role.Tool && it.content.contains("tool_timeout") })
+    }
+
+    @Test
+    fun `写工具超时不会再次执行相同未知结果操作`() = runBlocking {
+        val call = toolCall("write")
+        val response = AiCompletionResponse(model = "m", content = "", finishReason = "tool_calls", toolCalls = listOf(call))
+        val provider = FakeLoopProvider(response, response, final("需要核验"))
+        var executions = 0
+        val tools = AgentToolRegistry().apply {
+            register(AgentToolDescriptor(name = "write", description = "test", sideEffect = ToolSideEffect.Write)) {
+                executions += 1
+                delay(5_000)
+                "late"
+            }
+        }
+        val result = AgentToolLoop(provider, tools, toolTimeoutMillis = 50).run(null, "write", "m", authorizeOperations = setOf("write"))
+        assertEquals(1, executions)
+        assertTrue(result.writeOperations.isEmpty())
+        assertTrue(provider.requests[2].messages.any { it.content.contains("先查询核验") })
+    }
+
+    @Test
+    fun `模型响应超时后尝试更短规划并返回结果`() = runBlocking {
+        val provider = FakeLoopProvider(final("恢复成功")).apply { delayNextRequest = true }
+        val result = AgentToolLoop(provider, AgentToolRegistry(), roundTimeoutMillis = 50).run(null, "query", "m")
+        assertEquals("恢复成功", result.finalAnswer)
+        assertEquals(2, provider.requests.size)
+        assertTrue(provider.requests[1].messages.any { it.content.contains("上一轮模型请求超时") })
+    }
+
 }

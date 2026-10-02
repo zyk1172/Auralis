@@ -197,7 +197,7 @@ jobs:
           fi
 
   macOS-av-integration:
-    name: macOS AV test target compilation
+    name: macOS AV playback boundary tests
     runs-on: xcode-27
     timeout-minutes: 30
     steps:
@@ -206,9 +206,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: AVFoundation test target compilation
+      - name: AVFoundation runtime boundaries
         run: |
-          swift test \
+          set -o pipefail
+          AURALIS_RUN_AV_TESTS=1 swift test \
             --jobs 1 \
             --package-path Packages/AuralisCore \
-            --filter AVFoundationPlaybackEngine
+            --filter AVFoundationPlaybackEngineBoundaryTests \
+            | tee "$RUNNER_TEMP/auralis-av-boundary.log"
+          if ! grep -Eq 'Suite.*AVFoundationPlaybackEngine boundary.*passed' "$RUNNER_TEMP/auralis-av-boundary.log"; then
+            echo "::error::AVFoundation boundary suite did not execute and pass."
+            exit 1
+          fi
