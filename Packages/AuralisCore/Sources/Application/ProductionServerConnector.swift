@@ -477,9 +477,7 @@ public actor ProductionServerConnector: ServerConnecting {
         if forceEndpointResolution,
            let account = try? await persistence.account(id: serverID),
            account.externalBaseURL != nil {
-            guard let resolved = await resolvedClient(for: account) else { return nil }
-            endpointResolutionGenerations[serverID] = (endpointResolutionGenerations[serverID] ?? 0) &+ 1
-            clients[serverID] = resolved
+            guard await resolveAndCommitEndpoint(for: account) else { return nil }
         }
         guard let client = clients[serverID] else { return nil }
         return await Self.makeStreamURL(client: client, trackID: trackID.rawValue, quality: streamQuality)
@@ -693,14 +691,14 @@ public actor ProductionServerConnector: ServerConnecting {
                 try await persistence.saveAccount(account)
                 try await catalogStore.upsertServer(account)
             }
-            // 配置层更新必须同步到运行时路由。移除外网时立刻回到新内网 client；
-            // 设置/修改外网时后台重新解析，避免保存成功但播放仍粘在旧 client。
+            // 配置保存返回成功时，运行时路由也必须已经与新配置一致。
+            // 这里不能再 fire-and-forget：否则 UI 已显示保存成功，而下一次播放仍可能命中旧内网 client。
             if clients[serverID] != nil {
                 if account.externalBaseURL == nil {
                     endpointResolutionGenerations[serverID] = (endpointResolutionGenerations[serverID] ?? 0) &+ 1
                     clients[serverID] = restoreClient(for: account)
                 } else {
-                    scheduleEndpointResolution(for: account)
+                    _ = await resolveAndCommitEndpoint(for: account)
                 }
             }
             return true
@@ -748,13 +746,15 @@ public actor ProductionServerConnector: ServerConnecting {
                 try await persistence.saveAccount(account)
                 try await catalogStore.upsertServer(account)
                 // 更新运行时 client，但不能再无条件锁回内网地址。
-                // 先用新配置重建内网 client 作为零等待兜底；若配置了外网入口，
-                // 随后后台重新选择真实可达端点并原子替换。
+                // 设置保存成功前完成一次真实端点选择，避免调用方立即播放时仍命中旧 client。
                 if clients[serverID] != nil {
-                    endpointResolutionGenerations[serverID] = (endpointResolutionGenerations[serverID] ?? 0) &+ 1
-                    clients[serverID] = restoreClient(for: account)
                     if account.externalBaseURL != nil {
-                        scheduleEndpointResolution(for: account)
+                        if !await resolveAndCommitEndpoint(for: account) {
+                            clients[serverID] = restoreClient(for: account)
+                        }
+                    } else {
+                        endpointResolutionGenerations[serverID] = (endpointResolutionGenerations[serverID] ?? 0) &+ 1
+                        clients[serverID] = restoreClient(for: account)
                     }
                 }
                 return account
@@ -1074,6 +1074,19 @@ public actor ProductionServerConnector: ServerConnecting {
             guard self.endpointResolutionGenerations[serverID] == generation else { return }
             self.clients[serverID] = client
         }
+    }
+
+    /// 同步解析并提交运行时端点。先递增代际以使较早的后台探测失效；
+    /// await 返回后再次校验代际，避免配置更新/强制刷新之间互相覆盖。
+    @discardableResult
+    private func resolveAndCommitEndpoint(for account: ServerAccount) async -> Bool {
+        let serverID = account.id
+        let generation = (endpointResolutionGenerations[serverID] ?? 0) &+ 1
+        endpointResolutionGenerations[serverID] = generation
+        guard let client = await resolvedClient(for: account) else { return false }
+        guard endpointResolutionGenerations[serverID] == generation else { return false }
+        clients[serverID] = client
+        return true
     }
 
     /// 已保存账户的实际端点选择。单地址沿用零网络恢复；双地址在这里并行探测，
