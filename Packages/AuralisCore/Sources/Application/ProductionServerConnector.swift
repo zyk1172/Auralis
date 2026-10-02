@@ -34,9 +34,12 @@ public actor ProductionServerConnector: ServerConnecting {
     private var clients: [ServerID: OpenSubsonicClient] = [:]
     /// UI 当前浏览 / 操作的服务器（不影响既有 Track 的请求路由）。
     public private(set) var activeServerID: ServerID?
-    /// 端点探测代际计数：restoreConnection 启动的双地址探测完成后必须校验
-    /// generation 仍匹配，否则丢弃结果，避免旧探测把 activeServerID 改回去。
-    private var endpointResolutionGeneration: UInt64 = 0
+    /// 每台服务器独立的端点解析代际。配置变化或强制重解析会递增对应代际，
+    /// 防止较早的后台探测迟到后把新端点覆盖回旧端点。
+    private var endpointResolutionGenerations: [ServerID: UInt64] = [:]
+    /// 双地址时内网只保留一个短优先窗口；局域网正常时通常毫秒级完成，
+    /// 离开局域网后则无需等待完整的 30 秒请求超时才切到公网入口。
+    private static let internalEndpointProbeTimeout: TimeInterval = 2
     /// 流质量策略（Wi-Fi 原始 / 蜂窝转码、码率限制），构造流地址时生效。
     private let streamQuality: StreamQualityPolicy
 
@@ -239,13 +242,7 @@ public actor ProductionServerConnector: ServerConnecting {
                 activeServerID = account.id
             }
             if account.externalBaseURL != nil {
-                let generation = endpointResolutionGeneration &+ 1
-                endpointResolutionGeneration = generation
-                Task {
-                    guard let client = await self.resolvedClient(for: account) else { return }
-                    guard self.endpointResolutionGeneration == generation else { return }
-                    self.clients[account.id] = client
-                }
+                scheduleEndpointResolution(for: account)
             }
             let snapshot = try await canonicalSnapshot(serverID: account.id, account: account)
             var tracks = snapshot.tracks
@@ -462,9 +459,28 @@ public actor ProductionServerConnector: ServerConnecting {
         return collected
     }
 
-    /// 重新获取单曲的带认证播放地址：调用 OpenSubsonic makeStreamURL 刷新（本地拼串，无网络往返）。
-    /// 流地址过期（服务器重启 / token 失效）后，播放器用新地址重试。
+    /// 重新获取单曲的带认证播放地址。正常路径只复用当前已选端点；
+    /// 播放失败时可强制重新探测内/外网端点，避免拿旧的内网 client 反复生成同一个失效 URL。
     public func refreshStreamURL(serverID: ServerID, trackID: TrackID) async -> URL? {
+        await refreshStreamURL(
+            serverID: serverID,
+            trackID: trackID,
+            forceEndpointResolution: false
+        )
+    }
+
+    public func refreshStreamURL(
+        serverID: ServerID,
+        trackID: TrackID,
+        forceEndpointResolution: Bool
+    ) async -> URL? {
+        if forceEndpointResolution,
+           let account = try? await persistence.account(id: serverID),
+           account.externalBaseURL != nil {
+            guard let resolved = await resolvedClient(for: account) else { return nil }
+            endpointResolutionGenerations[serverID] = (endpointResolutionGenerations[serverID] ?? 0) &+ 1
+            clients[serverID] = resolved
+        }
         guard let client = clients[serverID] else { return nil }
         return await Self.makeStreamURL(client: client, trackID: trackID.rawValue, quality: streamQuality)
     }
@@ -662,6 +678,13 @@ public actor ProductionServerConnector: ServerConnecting {
 
     public func updateServerExternalBaseURL(serverID: ServerID, externalBaseURL: URL?) async -> Bool {
         guard var account = try? await persistence.account(id: serverID) else { return false }
+        if let externalBaseURL {
+            do {
+                try ServerURLPolicy.validate(externalBaseURL)
+            } catch {
+                return false
+            }
+        }
         account.externalBaseURL = externalBaseURL.map(Self.normalizedBaseURL)
         let credentialID = CredentialID(rawValue: account.credentialReference ?? "opensubsonic.\(serverID.rawValue)")
         do {
@@ -669,6 +692,16 @@ public actor ProductionServerConnector: ServerConnecting {
             try await withAccountMutationRollback(serverID: serverID, credentialID: credentialID) {
                 try await persistence.saveAccount(account)
                 try await catalogStore.upsertServer(account)
+            }
+            // 配置层更新必须同步到运行时路由。移除外网时立刻回到新内网 client；
+            // 设置/修改外网时后台重新解析，避免保存成功但播放仍粘在旧 client。
+            if clients[serverID] != nil {
+                if account.externalBaseURL == nil {
+                    endpointResolutionGenerations[serverID] = (endpointResolutionGenerations[serverID] ?? 0) &+ 1
+                    clients[serverID] = restoreClient(for: account)
+                } else {
+                    scheduleEndpointResolution(for: account)
+                }
             }
             return true
         } catch {
@@ -714,15 +747,15 @@ public actor ProductionServerConnector: ServerConnecting {
                 }
                 try await persistence.saveAccount(account)
                 try await catalogStore.upsertServer(account)
-                // 更新该服务器的内存客户端（若已建立），并保持 activeServerID 不变。
+                // 更新运行时 client，但不能再无条件锁回内网地址。
+                // 先用新配置重建内网 client 作为零等待兜底；若配置了外网入口，
+                // 随后后台重新选择真实可达端点并原子替换。
                 if clients[serverID] != nil {
-                    clients[serverID] = makeClient(
-                        baseURL: account.baseURL!,
-                        serverID: serverID,
-                        username: username,
-                        credentialID: credentialID,
-                        vault: credentialVault
-                    )
+                    endpointResolutionGenerations[serverID] = (endpointResolutionGenerations[serverID] ?? 0) &+ 1
+                    clients[serverID] = restoreClient(for: account)
+                    if account.externalBaseURL != nil {
+                        scheduleEndpointResolution(for: account)
+                    }
                 }
                 return account
             }
@@ -936,6 +969,7 @@ public actor ProductionServerConnector: ServerConnecting {
 
     public func disconnect() async {
         clients.removeAll()
+        endpointResolutionGenerations.removeAll()
         activeServerID = nil
     }
 
@@ -1005,6 +1039,7 @@ public actor ProductionServerConnector: ServerConnecting {
         try? await catalogStore.purgeServer(serverID)
         await auxiliaryCache.purge(serverID: serverID)
         clients[serverID] = nil
+        endpointResolutionGenerations[serverID] = nil
         if activeServerID == serverID {
             activeServerID = nil
         }
@@ -1030,6 +1065,17 @@ public actor ProductionServerConnector: ServerConnecting {
         )
     }
 
+    private func scheduleEndpointResolution(for account: ServerAccount) {
+        let serverID = account.id
+        let generation = (endpointResolutionGenerations[serverID] ?? 0) &+ 1
+        endpointResolutionGenerations[serverID] = generation
+        Task {
+            guard let client = await self.resolvedClient(for: account) else { return }
+            guard self.endpointResolutionGenerations[serverID] == generation else { return }
+            self.clients[serverID] = client
+        }
+    }
+
     /// 已保存账户的实际端点选择。单地址沿用零网络恢复；双地址在这里并行探测，
     /// 让随后生成的播放/下载 URL 与当前网络一致。
     private func resolvedClient(for account: ServerAccount) async -> OpenSubsonicClient? {
@@ -1050,8 +1096,9 @@ public actor ProductionServerConnector: ServerConnecting {
         return selection?.0
     }
 
-    /// 内外网端点同时探测。内网在 30 秒窗口内可用就取消外网探测并固定内网；
-    /// 只有内网确认不可达，才采纳外网结果。认证、协议和地址校验失败不会触发降级。
+    /// 内外网端点同时探测。内网保留一个短优先窗口：局域网正常时仍优先内网，
+    /// 离开局域网时不会因为私网地址的完整 30 秒超时而阻塞公网入口。
+    /// 内网明确返回认证/协议错误时仍直接失败，不把配置错误静默掩盖成外网降级。
     private func selectAuthenticatedClient(
         internalURL: URL,
         externalURL: URL?,
@@ -1072,6 +1119,15 @@ public actor ProductionServerConnector: ServerConnecting {
             return (internalClient, try await internalClient.serverInfo())
         }
 
+        // 探测使用短超时 client，但真正被选中的内网 client 仍保留正常 30 秒请求超时。
+        let internalProbeClient = makeClient(
+            baseURL: internalURL,
+            serverID: serverID,
+            username: username,
+            credentialID: credentialID,
+            vault: vault,
+            requestTimeout: Self.internalEndpointProbeTimeout
+        )
         let externalClient = makeClient(
             baseURL: externalURL,
             serverID: serverID,
@@ -1080,7 +1136,7 @@ public actor ProductionServerConnector: ServerConnecting {
             vault: vault
         )
         let externalTask = Task { await Self.probe(externalClient) }
-        let internalResult = await Self.probe(internalClient)
+        let internalResult = await Self.probe(internalProbeClient)
         switch internalResult {
         case let .reachable(info):
             externalTask.cancel()
@@ -1105,14 +1161,15 @@ public actor ProductionServerConnector: ServerConnecting {
         serverID: ServerID,
         username: String,
         credentialID: CredentialID,
-        vault: any CredentialVault
+        vault: any CredentialVault,
+        requestTimeout: TimeInterval = 30
     ) -> OpenSubsonicClient {
         OpenSubsonicClient(
             configuration: OpenSubsonicConfiguration(
                 serverID: serverID,
                 baseURL: baseURL,
                 authentication: .token(username: username, credentialID: credentialID),
-                requestTimeout: 30
+                requestTimeout: requestTimeout
             ),
             credentialVault: vault,
             session: session
