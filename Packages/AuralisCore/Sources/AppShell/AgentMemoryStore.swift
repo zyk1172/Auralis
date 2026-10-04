@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import AgentKit
+import AIKit
 import Foundation
 
 /// 跨会话记忆与简单 skill 的本地存储（App Shell）。
 ///
 /// - 记忆：`<App Support>/Auralis/agent-memory.json`，结构化 `[AgentMemoryEntry]`。
-/// - 技能：`<App Support>/Auralis/skills/<名字>.md`，一段指令一个文件（skill 文件）。
+/// - 技能：`<App Support>/Auralis/skills/<名字>.json`（兼容读取旧 .md），一段指令一个文件（skill 文件）。
 ///
 /// 与 `AgentCoordinator` / `AuralisSystemToolService` 共享同一实例，
 /// 保证会话内注入的记忆与工具写入的记忆缓存一致；文件落盘保证下次会话仍在。
@@ -44,8 +45,16 @@ public final class AgentMemoryStore {
     }
 
     /// 保存 / 覆盖一条记忆（upsert）。key 不能为空或含换行；value 不能为空且限长。
+    /// 覆盖已有 key 时保留原 createdAt（修订记录），source/category/expiresAt 以新值为准。
     @discardableResult
-    public func saveMemory(key: String, value: String) -> Bool {
+    public func saveMemory(
+        key: String,
+        value: String,
+        source: AgentMemorySource = .userAsserted,
+        category: AIPrivacyCategory? = nil,
+        expiresAt: Date? = nil,
+        disclosureCategories: Set<AIPrivacyCategory>? = nil
+    ) -> Bool {
         let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedKey.isEmpty, !trimmedValue.isEmpty,
@@ -55,7 +64,17 @@ public final class AgentMemoryStore {
             return false
         }
         let previous = entries
-        let entry = AgentMemoryEntry(key: trimmedKey, value: trimmedValue, updatedAt: .now)
+        let existingCreatedAt = entries.first(where: { $0.key == trimmedKey })?.createdAt
+        let entry = AgentMemoryEntry(
+            key: trimmedKey,
+            value: trimmedValue,
+            updatedAt: .now,
+            createdAt: existingCreatedAt,
+            source: source,
+            category: category,
+            expiresAt: expiresAt,
+            disclosureCategories: disclosureCategories
+        )
         if let index = entries.firstIndex(where: { $0.key == trimmedKey }) {
             entries[index] = entry
         } else {
@@ -99,46 +118,48 @@ public final class AgentMemoryStore {
 
     // MARK: - 技能
 
-    /// 当前全部技能（按名称排序）。每个技能对应一个 `skills/<名字>.md` 文件。
+    /// 当前全部技能（按名称排序）。新技能对应一个 `skills/<名字>.json` 文件；旧 Markdown 仍可读取。
     public var skills: [AgentSkillEntry] {
         guard let urls = try? FileManager.default.contentsOfDirectory(
             at: skillsDirectory,
             includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles]
         ) else { return [] }
-        return urls.compactMap { url -> AgentSkillEntry? in
-            guard url.pathExtension.lowercased() == "md" else { return nil }
-            let name = url.deletingPathExtension().lastPathComponent
-            guard let data = try? Data(contentsOf: url),
-                  let instructions = String(data: data, encoding: .utf8) else { return nil }
-            let created = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .now
-            return AgentSkillEntry(name: name, instructions: instructions, createdAt: created)
-        }.sorted { $0.name < $1.name }
+        let names = Set(urls.filter { ["md", "json"].contains($0.pathExtension.lowercased()) }
+            .map { $0.deletingPathExtension().lastPathComponent })
+        return names.compactMap { readSkill(name: $0) }.sorted { $0.name < $1.name }
     }
 
-    /// 创建技能（写 `skills/<名字>.md`）。返回落盘后的技能（名字为规范化后的文件名）。
+    /// 创建技能（原子写 `skills/<名字>.json`，含来源元数据）。返回落盘后的技能（名字为规范化后的文件名）。
     @discardableResult
-    public func createSkill(name: String, instructions: String) -> AgentSkillEntry? {
+    public func createSkill(name: String, instructions: String, source: AgentSkillSource = .userCreated, disclosureCategories: Set<AIPrivacyCategory>? = nil) -> AgentSkillEntry? {
         let trimmedName = Self.sanitizedSkillName(name)
         let trimmedInstructions = instructions.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty,
               !trimmedInstructions.isEmpty,
               trimmedInstructions.count <= Self.maxInstructionsLength else { return nil }
-        let url = skillsDirectory.appendingPathComponent(trimmedName + ".md")
-        guard let data = trimmedInstructions.data(using: .utf8) else { return nil }
+        let entry = AgentSkillEntry(name: trimmedName, instructions: trimmedInstructions, source: source, disclosureCategories: disclosureCategories)
+        let url = skillsDirectory.appendingPathComponent(trimmedName + ".json")
         do {
-            try data.write(to: url, options: .atomic)
-        } catch {
-            return nil
-        }
-        let created = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .now
-        return AgentSkillEntry(name: trimmedName, instructions: trimmedInstructions, createdAt: created)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            try encoder.encode(entry).write(to: url, options: .atomic)
+            return entry
+        } catch { return nil }
     }
 
     /// 读取某个技能的完整指令；不存在返回 nil。
     public func readSkill(name: String) -> AgentSkillEntry? {
         let trimmedName = Self.sanitizedSkillName(name)
         guard !trimmedName.isEmpty else { return nil }
+        let jsonURL = skillsDirectory.appendingPathComponent(trimmedName + ".json")
+        if FileManager.default.fileExists(atPath: jsonURL.path) {
+            // Corrupt provenance never falls back to an older untagged file.
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            guard let data = try? Data(contentsOf: jsonURL) else { return nil }
+            return try? decoder.decode(AgentSkillEntry.self, from: data)
+        }
         let url = skillsDirectory.appendingPathComponent(trimmedName + ".md")
         guard let data = try? Data(contentsOf: url),
               let instructions = String(data: data, encoding: .utf8) else { return nil }
@@ -151,14 +172,14 @@ public final class AgentMemoryStore {
     public func deleteSkill(name: String) -> Bool {
         let trimmedName = Self.sanitizedSkillName(name)
         guard !trimmedName.isEmpty else { return false }
-        let url = skillsDirectory.appendingPathComponent(trimmedName + ".md")
-        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        let urls = ["md", "json"].map { skillsDirectory.appendingPathComponent(trimmedName + "." + $0) }
+        let existing = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !existing.isEmpty else { return false }
         do {
-            try FileManager.default.removeItem(at: url)
+            // Remove the legacy file first so a failed delete cannot uncover it.
+            for url in existing { try FileManager.default.removeItem(at: url) }
             return true
-        } catch {
-            return false
-        }
+        } catch { return false }
     }
 
     // MARK: - 内部

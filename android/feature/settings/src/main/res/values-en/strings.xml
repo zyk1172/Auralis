@@ -98,4 +98,14 @@
     <string name="settings_ai_revoke">Revoke</string>
     <string name="settings_ai_about_section">About</string>
     <string name="settings_ai_privacy_note">When you chat on the assistant page, content is sent to the model provider you configured. Read-only queries and playback do not depend on the model; write actions (playback/favorites/ratings/playlists) are described in the conversation before running, and destructive actions ask for your approval every time.</string>
+    <string name="settings_ai_adaptive_thinking">Adaptive thinking (Anthropic)</string>
+    <string name="settings_ai_implicit_end">Allow connection close to indicate completion</string>
+    <string name="settings_ai_implicit_end_note">Enable only if your service uses this convention; interrupted responses may be accepted as complete. Re-enable after changing the endpoint or model.</string>
+    <string name="settings_ai_privacy_section">Content allowed to be sent to the model</string>
+    <string name="settings_ai_privacy_metadata">Library metadata</string>
+    <string name="settings_ai_privacy_lyrics">Lyrics</string>
+    <string name="settings_ai_privacy_history">Playback history</string>
+    <string name="settings_ai_privacy_favorites">Favorites and ratings</string>
+    <string name="settings_ai_privacy_external">External search content</string>
+    <string name="settings_ai_reasoning_enabled">Enable thinking</string>
 </resources>

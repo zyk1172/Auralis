@@ -1116,6 +1116,8 @@ public final class AgentCoordinator: ObservableObject {
     /// their own run identity.
     func finishOwnedRun(_ runID: UUID) {
         guard runSessions[runID] != nil || currentRunID == runID else { return }
+        // 清理本运行的披露登记（runID 不复用，异步清理与后续读取无竞争）。
+        Task { await AgentRunDisclosureRegistry.shared.clear(runID: runID) }
         let sessionID = runSessions[runID]
         // A run that exits while waiting for approval must fail closed and
         // release only its own continuation.  Never leave a confirmation
@@ -1325,6 +1327,21 @@ public final class AgentCoordinator: ObservableObject {
             return
         }
 
+        // AI-04 披露标记：助手消息持久化前，记录本运行到目前为止实际
+        // 披露过的隐私类别。之后撤销某类别时，历史投影只丢弃沾过该类别
+        // 数据的正文，普通解释可以继续重放。用户消息不打标（用户自己的
+        // 话本来就可以回到模型上下文）。
+        if sanitizedMessage.role == .assistant, sanitizedMessage.disclosureCategories == nil {
+            let disclosed = await AgentRunDisclosureRegistry.shared.categories(runID: runID)
+            sanitizedMessage = AgentChatMessage(
+                id: sanitizedMessage.id,
+                role: sanitizedMessage.role,
+                messages: sanitizedMessage.messages,
+                createdAt: sanitizedMessage.createdAt,
+                disclosureCategories: disclosed
+            )
+        }
+
         // 流式增量：累加进该 run 的 in-flight 气泡（只在活动会话上更新 UI）。
         if let delta = Self.streamingDeltaText(from: sanitizedMessage) {
             var state = streamingStates[runID] ?? AgentStreamingState(answerMessageID: nil)
@@ -1474,7 +1491,8 @@ public final class AgentCoordinator: ObservableObject {
             id: message.id,
             role: message.role,
             messages: items,
-            createdAt: message.createdAt
+            createdAt: message.createdAt,
+            disclosureCategories: message.disclosureCategories
         )
     }
 

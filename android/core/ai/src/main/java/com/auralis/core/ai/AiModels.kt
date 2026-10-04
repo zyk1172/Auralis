@@ -12,6 +12,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.Serializable
 
 /**
  * Auralis AI 层的核心模型 —— Swift `AIProvider.swift` 的语义对齐子集。
@@ -57,6 +58,20 @@ data class AiReasoningConfiguration(
     val enabled: Boolean get() = mode == AiReasoningMode.Enabled
 }
 
+/**
+ * 思考参数方言（AI-02）：同一种「开思考」在不同协议/端点代际有不同 wire 形态，
+ * 固定写死 `type:"enabled" + budget_tokens` 会把新型端点拒之门外。
+ *
+ * - [Automatic]：按端点协议选保守默认 —— Anthropic Messages → [Manual]；
+ *   OpenAI 兼容 → 仅在端点声明 supportsReasoningControl 时发 reasoning_effort；
+ * - [Manual]：`thinking{type:"enabled", budget_tokens}`，effort→budget 映射仅在此模式使用；
+ * - [Adaptive]：`thinking{type:"adaptive"}`，无 budget_tokens；
+ * - [Disabled]：不发送任何思考字段（temperature 恢复携带）。
+ *
+ * 端点明确拒绝 thinking 参数时只按参数级别降级本次请求，绝不永久关闭能力。
+ */
+enum class AiReasoningDialect { Automatic, Manual, Adaptive, Disabled }
+
 // ---------------------------------------------------------------------------
 // 工具调用策略
 // ---------------------------------------------------------------------------
@@ -100,6 +115,7 @@ data class ModelCapabilities(
 // 隐私权限（首次外发 consent 的字段来源）
 // ---------------------------------------------------------------------------
 
+@Serializable
 enum class AiPrivacyCategory { Metadata, Lyrics, PlaybackHistory, FavoritesAndRatings, ExternalDiscovery }
 
 /** 外发隐私权限。默认：仅元数据允许，其余关闭。 */
@@ -113,7 +129,7 @@ data class AiPrivacyPermissions(
 ) {
     /** 重放已持久化的助手文本是否安全：仅当所有本地披露类别仍开启。 */
     val allowPersistedAssistantText: Boolean
-        get() = allowsMetadata && allowsPlaybackHistory && allowsFavoritesAndRatings && allowsLyrics
+        get() = allowsMetadata && allowsPlaybackHistory && allowsFavoritesAndRatings && allowsLyrics && allowsExternalDiscovery
 
     fun allows(category: AiPrivacyCategory): Boolean = when (category) {
         AiPrivacyCategory.Metadata -> allowsMetadata
@@ -165,8 +181,52 @@ data class AiMessage(
     val toolCallId: String? = null,
     val toolCalls: List<AiToolCall>? = null,
     val name: String? = null,
+    /** Runtime-only native output; never persisted in session history or displayed as prose. */
+    val continuation: AiProviderContinuation? = null,
+    val disclosureCategories: Set<AiPrivacyCategory> = emptySet(),
 ) {
     enum class Role { System, User, Assistant, Tool }
+}
+
+/** Native assistant output bound to the exact protocol, endpoint and requested model. */
+data class AiProviderContinuation(
+    val vendor: AiProviderToolMode,
+    val scope: String,
+    val items: List<JsonObject>,
+)
+
+enum class AiStreamTerminationKind { Completed, ToolCallsReady, Truncated, Interrupted, Refused, Paused, Failed }
+
+data class AiStreamTermination(val kind: AiStreamTerminationKind, val rawReason: String? = null) {
+    fun requireComplete() {
+        if (kind in setOf(AiStreamTerminationKind.Completed, AiStreamTerminationKind.ToolCallsReady, AiStreamTerminationKind.Refused)) return
+        throw AiProviderException(
+            AiProviderFailureKind.ProviderUnavailable,
+            when (kind) {
+                AiStreamTerminationKind.Truncated -> "模型输出达到长度上限，本轮未完成，未执行工具调用。"
+                else -> "模型响应未正常结束（${rawReason ?: kind.name}），本轮未完成。"
+            },
+            retryable = true,
+        )
+    }
+
+    companion object {
+        fun chat(reason: String?) = AiStreamTermination(when (reason) {
+            "tool_calls", "function_call" -> AiStreamTerminationKind.ToolCallsReady
+            "length" -> AiStreamTerminationKind.Truncated
+            "content_filter" -> AiStreamTerminationKind.Refused
+            null, "stop" -> AiStreamTerminationKind.Completed
+            else -> AiStreamTerminationKind.Failed
+        }, reason)
+        fun anthropic(reason: String?) = AiStreamTermination(when (reason) {
+            "tool_use" -> AiStreamTerminationKind.ToolCallsReady
+            "max_tokens", "model_context_window_exceeded" -> AiStreamTerminationKind.Truncated
+            "pause_turn" -> AiStreamTerminationKind.Paused
+            "refusal" -> AiStreamTerminationKind.Refused
+            null, "end_turn", "stop_sequence" -> AiStreamTerminationKind.Completed
+            else -> AiStreamTerminationKind.Failed
+        }, reason)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -198,6 +258,8 @@ data class AiCompletionResponse(
     /** 模型要求的原生工具调用；非空表示需要执行工具并回灌结果。 */
     val toolCalls: List<AiToolCall>? = null,
     val webCitations: List<AiWebCitation>? = null,
+    val continuation: AiProviderContinuation? = null,
+    val termination: AiStreamTermination = AiStreamTermination.chat(finishReason),
 )
 
 // ---------------------------------------------------------------------------
@@ -255,6 +317,9 @@ sealed interface AiStreamEvent {
     data class WebCitations(val citations: List<AiWebCitation>) : AiStreamEvent
 
     data class Usage(val input: Int, val output: Int) : AiStreamEvent
+
+    data class Continuation(val value: AiProviderContinuation) : AiStreamEvent
+    data class Terminated(val termination: AiStreamTermination) : AiStreamEvent
 
     data object Completed : AiStreamEvent
 }

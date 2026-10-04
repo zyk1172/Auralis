@@ -47,8 +47,17 @@ data class AiProviderConfiguration(
     val supportsStrictSchema: Boolean = false,
     val supportsReasoningMetadata: Boolean = false,
     val supportsReasoningControl: Boolean = false,
+    /** 思考参数方言（AI-02）；默认 [AiReasoningDialect.Automatic] 按协议选保守形态。 */
+    val reasoningDialect: AiReasoningDialect = AiReasoningDialect.Automatic,
+    val assumesImplicitStreamTermination: Boolean = false,
     val hasVerifiedModelAvailability: Boolean = false,
 )
+
+internal fun AiProviderConfiguration.continuationScope(model: String): String =
+    listOf(baseUrl.trimEnd('/'), apiPath.trim('/'), model).joinToString("|")
+
+internal fun AiProviderConfiguration.nativeItems(message: AiMessage, vendor: AiProviderToolMode, model: String): List<kotlinx.serialization.json.JsonObject>? =
+    message.continuation?.takeIf { it.vendor == vendor && it.scope == continuationScope(model) }?.items
 
 /**
  * 测试用 Provider：不联网，返回固定回答。

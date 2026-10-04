@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import AgentKit
+import AIKit
 import Application
 import Domain
 import Foundation
@@ -901,6 +902,33 @@ public final class AuralisSystemToolService: AgentSystemService {
     public func saveMemory(key: String, value: String) async -> Bool {
         guard permitsMutationCommit else { return false }
         return memoryStore.saveMemory(key: key, value: value)
+    }
+
+    public func saveMemory(
+        key: String,
+        value: String,
+        source: AgentMemorySource,
+        category: AIPrivacyCategory?,
+        expiresAt: Date?
+    ) async -> Bool {
+        guard permitsMutationCommit else { return false }
+        return memoryStore.saveMemory(
+            key: key,
+            value: value,
+            source: source,
+            category: category,
+            expiresAt: expiresAt
+        )
+    }
+
+    public func saveMemory(key: String, value: String, source: AgentMemorySource, category: AIPrivacyCategory?, expiresAt: Date?, disclosureCategories: Set<AIPrivacyCategory>) async -> Bool {
+        guard permitsMutationCommit else { return false }
+        return memoryStore.saveMemory(key: key, value: value, source: source, category: category, expiresAt: expiresAt, disclosureCategories: disclosureCategories)
+    }
+
+    public func createSkill(name: String, instructions: String, source: AgentSkillSource, disclosureCategories: Set<AIPrivacyCategory>) async -> AgentSkillEntry? {
+        guard permitsMutationCommit else { return nil }
+        return memoryStore.createSkill(name: name, instructions: instructions, source: source, disclosureCategories: disclosureCategories)
     }
 
     public func deleteMemory(key: String) async -> Bool {

@@ -774,6 +774,18 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
 
         var query = String(value[markerRange.upperBound...])
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        // 对象类型槽位：只有紧邻目标串、在剥离填充词时真正消费掉的类型词
+        // 才能决定 kind。实体名内部出现的「专辑 / 歌手 / album」等词不参选，
+        // 否则「搜索歌曲《我是歌手》」会被误判成 artist。
+        let fillerKinds: [String: String] = [
+            "一首歌曲": "song", "一首歌": "song", "这首歌曲": "song", "这首歌": "song",
+            "歌曲": "song", "单曲": "song", "song": "song", "track": "song",
+            "一张专辑": "album", "这张专辑": "album", "专辑": "album", "album": "album",
+            "艺术家": "artist", "艺人": "artist", "歌手": "artist", "artist": "artist",
+            "歌单": "playlist", "播放列表": "playlist", "playlist": "playlist",
+        ]
+        var prefixKind: String?
+        var suffixKind: String?
         let prefixFillers = [
             "在音乐库里面", "在音乐库里", "在音乐库中", "音乐库里面", "音乐库里", "音乐库中",
             "一首歌曲", "一首歌", "这首歌曲", "这首歌", "歌曲", "单曲",
@@ -788,6 +800,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             query = query.trimmingCharacters(in: .whitespacesAndNewlines)
             for filler in prefixFillers where query.hasPrefix(filler) {
                 query.removeFirst(filler.count)
+                if let kind = fillerKinds[filler] { prefixKind = kind }
                 removedPrefix = true
                 break
             }
@@ -795,7 +808,13 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
 
         let suffixFillers = [
             "这首歌曲", "这首歌", "这张专辑", "这个艺术家", "这个艺人", "这个歌手", "这个歌单",
-            "的歌曲", "的专辑",
+            "的歌曲", "的专辑", "的歌手", "的歌单",
+        ]
+        let suffixFillerKinds: [String: String] = [
+            "这首歌曲": "song", "这首歌": "song", "的歌曲": "song",
+            "这张专辑": "album", "的专辑": "album",
+            "这个艺术家": "artist", "这个艺人": "artist", "这个歌手": "artist", "的歌手": "artist",
+            "这个歌单": "playlist", "的歌单": "playlist",
         ]
         var removedSuffix = true
         while removedSuffix {
@@ -803,11 +822,13 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             query = query.trimmingCharacters(in: .whitespacesAndNewlines)
             for filler in suffixFillers where query.hasSuffix(filler) {
                 query.removeLast(filler.count)
+                if let kind = suffixFillerKinds[filler] { suffixKind = kind }
                 removedSuffix = true
                 break
             }
         }
 
+        let explicitlyQuoted = query.contains("《") || query.contains("“") || query.contains("\"") || query.contains("「")
         let trimCharacters = CharacterSet.whitespacesAndNewlines.union(
             CharacterSet(charactersIn: "：:，,。.!！?？《》〈〉“”\"'‘’（）()")
         )
@@ -822,16 +843,17 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             "一首歌", "一首歌曲", "几首歌", "几首歌曲", "一些歌", "一些歌曲",
             "同一首歌", "同一首歌曲", "某首歌", "某首歌曲", "几张专辑", "一些专辑",
         ]
-        guard !vagueTargets.contains(query) else { return nil }
+        guard explicitlyQuoted || !vagueTargets.contains(query) else { return nil }
 
+        // 分槽优先级：紧邻目标的显式对象词 > 动作标记 > 模糊 all。
+        // 不再对整句做关键词扫描——实体名（歌名/专辑名/歌手名）里的类型词
+        // 不能污染对象类型判断；没有显式对象词时保持 all，由检索层全域匹配。
         let kind: String
-        if containsAny(value, ["专辑", "album"]) {
-            kind = "album"
-        } else if containsAny(value, ["艺术家", "艺人", "歌手", "artist"]) {
-            kind = "artist"
-        } else if containsAny(value, ["歌单", "播放列表", "playlist"]) {
-            kind = "playlist"
-        } else if marker == "找歌" || containsAny(value, ["歌曲", "首歌", "单曲", "song", "track"]) {
+        if let prefixKind {
+            kind = prefixKind
+        } else if let suffixKind {
+            kind = suffixKind
+        } else if marker == "找歌" {
             kind = "song"
         } else {
             kind = "all"

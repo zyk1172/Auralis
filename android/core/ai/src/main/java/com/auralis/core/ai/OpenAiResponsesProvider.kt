@@ -2,13 +2,12 @@
 package com.auralis.core.ai
 
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
@@ -45,6 +44,8 @@ class OpenAiResponsesProvider(
 ) : AiProvider {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val okHttp = client ?: OkHttpClient.Builder()
+        // AI-06：callTimeout 是整个调用的硬期限（含响应体读取），与请求级期限对齐。
+        .callTimeout(configuration.timeoutMillis, TimeUnit.MILLISECONDS)
         .connectTimeout(configuration.timeoutMillis, TimeUnit.MILLISECONDS)
         .readTimeout(configuration.timeoutMillis, TimeUnit.MILLISECONDS)
         .writeTimeout(configuration.timeoutMillis, TimeUnit.MILLISECONDS)
@@ -94,11 +95,13 @@ class OpenAiResponsesProvider(
     internal fun requestBody(request: AiCompletionRequest, stream: Boolean): JsonObject = buildJsonObject {
         put("model", request.model)
         putJsonArray("input") {
-            request.messages.forEach { message -> encodeInputItems(message).forEach(::add) }
+            request.messages.forEach { message -> encodeInputItems(message, request.model).forEach(::add) }
         }
         if (request.temperature.isFinite()) put("temperature", request.temperature)
         put("max_output_tokens", request.maxTokens)
         if (stream) put("stream", true)
+        put("store", false)
+        if (configuration.supportsReasoningControl) put("include", JsonArray(listOf(JsonPrimitive("reasoning.encrypted_content"))))
 
         request.tools?.takeIf { it.isNotEmpty() && configuration.supportsToolCalling }?.let { tools ->
             putJsonArray("tools") {
@@ -128,8 +131,11 @@ class OpenAiResponsesProvider(
             }
         }
 
+        // 推理控制（AI-02）：仅对声明支持的端点发送；方言配置 Disabled 时彻底不发送。
         request.reasoning?.let { reasoning ->
-            if (configuration.supportsReasoningControl) {
+            if (configuration.supportsReasoningControl &&
+                configuration.reasoningDialect != AiReasoningDialect.Disabled
+            ) {
                 putJsonObject("reasoning") {
                     put("effort", if (reasoning.enabled) reasoning.effort.name.lowercase() else "none")
                 }
@@ -137,7 +143,11 @@ class OpenAiResponsesProvider(
         }
     }
 
-    private fun encodeInputItems(message: AiMessage): List<JsonObject> = when (message.role) {
+    private fun encodeInputItems(message: AiMessage, model: String): List<JsonObject> {
+        if (message.role == AiMessage.Role.Assistant) {
+            configuration.nativeItems(message, AiProviderToolMode.OpenAiResponses, model)?.let { return it }
+        }
+        return when (message.role) {
         AiMessage.Role.System, AiMessage.Role.User -> listOf(
             buildJsonObject {
                 put("type", "message")
@@ -183,15 +193,16 @@ class OpenAiResponsesProvider(
         )
     }
 
-    private suspend fun execute(body: JsonObject): Pair<Int, String> = withContext(Dispatchers.IO) {
+    }
+
+    private suspend fun execute(body: JsonObject): Pair<Int, String> {
         val builder = Request.Builder()
             .url(endpoint())
             .post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
             .header("Accept", "application/json")
         headers().forEach { (k, v) -> builder.header(k, v) }
-        okHttp.newCall(builder.build()).execute().use { response ->
-            response.code to response.body?.string().orEmpty()
-        }
+        // AI-06：可取消桥接（协程取消/超时 → Call.cancel()，阻塞读可被打断）。
+        return okHttp.executeForString(builder.build())
     }
 
     override suspend fun complete(request: AiCompletionRequest): AiCompletionResponse {
@@ -271,7 +282,9 @@ class OpenAiResponsesProvider(
             },
             toolCalls = toolCalls,
             webCitations = citations,
-        )
+            continuation = AiProviderContinuation(AiProviderToolMode.OpenAiResponses,
+                configuration.continuationScope(fallbackModel), output.mapNotNull { it as? JsonObject }),
+        ).also { it.termination.requireComplete() }
     }
 
     private fun decodeArguments(raw: String): JsonElement =
@@ -317,6 +330,7 @@ class OpenAiResponsesProvider(
     private fun nonStreamingProjection(request: AiCompletionRequest): Flow<AiStreamEvent> = flow {
         val response = complete(request)
         emit(AiStreamEvent.Started(response.model))
+        response.continuation?.let { emit(AiStreamEvent.Continuation(it)) }
         response.reasoning?.let { emit(AiStreamEvent.ReasoningDelta(it)) }
         if (response.content.isNotEmpty()) emit(AiStreamEvent.AnswerDelta(response.content))
         response.toolCalls.orEmpty().forEach { emit(AiStreamEvent.ToolCall(it)) }
@@ -335,23 +349,34 @@ class OpenAiResponsesProvider(
             .header("Accept", "text/event-stream, application/json")
         headers().forEach { (k, v) -> builder.header(k, v) }
 
-        val response = withContext(Dispatchers.IO) { okHttp.newCall(builder.build()).execute() }
-        response.use { resp ->
-            if (!resp.isSuccessful) throw classify(resp.code, resp.body?.string().orEmpty())
+        // AI-06：enqueue 桥接拿响应头 + 读取期间协程取消即 Call.cancel()。
+        val call = okHttp.newCall(builder.build())
+        val response = try {
+            call.awaitResponse()
+        } catch (e: java.io.IOException) {
+            call.rethrowAsCancellation(e)
+            throw e
+        }
+        if (!response.isSuccessful) {
+            val detail = response.useCancellable(call) { it.body?.string().orEmpty() }
+            throw classify(response.code, detail)
+        }
+        emit(AiStreamEvent.Started(request.model))
+        response.useCancellable(call) { resp ->
             val reader = resp.body?.charStream()?.buffered()
                 ?: throw AiProviderException(AiProviderFailureKind.ProviderUnavailable, "Responses API 响应体为空")
-            emit(AiStreamEvent.Started(request.model))
             val fragments = linkedMapOf<String, ResponseToolFragment>()
             val emitted = mutableSetOf<String>()
+            val native = sortedMapOf<Int, JsonObject>()
             var data = StringBuilder()
             var completed = false
             while (true) {
-                val line = withContext(Dispatchers.IO) { reader.readLine() } ?: break
+                val line = reader.readLine() ?: break
                 if (line.isEmpty()) {
                     if (data.isNotEmpty()) {
                         val payload = data.toString()
                         data = StringBuilder()
-                        if (handleStreamPayload(payload, fragments, emitted) { emit(it) }) {
+                        if (handleStreamPayload(payload, fragments, emitted, native, request.model) { emit(it) }) {
                             completed = true
                             break
                         }
@@ -364,17 +389,14 @@ class OpenAiResponsesProvider(
                 }
             }
             if (data.isNotEmpty() && !completed) {
-                completed = handleStreamPayload(data.toString(), fragments, emitted) { emit(it) }
+                completed = handleStreamPayload(data.toString(), fragments, emitted, native, request.model) { emit(it) }
             }
             if (!completed) {
-                if (fragments.isNotEmpty()) {
-                    throw AiProviderException(
-                        AiProviderFailureKind.ProviderUnavailable,
-                        "Responses 流在工具调用参数完成前中断",
-                        retryable = true,
-                    )
-                }
-                emit(AiStreamEvent.Completed)
+                if (configuration.assumesImplicitStreamTermination && fragments.isEmpty()) {
+                    if (native.isNotEmpty()) emit(AiStreamEvent.Continuation(AiProviderContinuation(
+                        AiProviderToolMode.OpenAiResponses, configuration.continuationScope(request.model), native.values.toList())))
+                    emit(AiStreamEvent.Completed)
+                } else emit(AiStreamEvent.Terminated(AiStreamTermination(AiStreamTerminationKind.Interrupted, "EOF")))
             }
         }
     }
@@ -383,9 +405,17 @@ class OpenAiResponsesProvider(
         payload: String,
         fragments: MutableMap<String, ResponseToolFragment>,
         emitted: MutableSet<String>,
+        native: MutableMap<Int, JsonObject>,
+        model: String,
         emit: suspend (AiStreamEvent) -> Unit,
     ): Boolean {
         if (payload == "[DONE]") {
+            if (fragments.isNotEmpty()) {
+                emit(AiStreamEvent.Terminated(AiStreamTermination(AiStreamTerminationKind.Interrupted, "unfinished_tool")))
+                return true
+            }
+            if (native.isNotEmpty()) emit(AiStreamEvent.Continuation(AiProviderContinuation(
+                AiProviderToolMode.OpenAiResponses, configuration.continuationScope(model), native.toSortedMap().values.toList())))
             emit(AiStreamEvent.Completed)
             return true
         }
@@ -404,10 +434,15 @@ class OpenAiResponsesProvider(
 
             "response.output_item.added", "response.output_item.done" -> {
                 val item = root["item"] as? JsonObject
+                if (type == "response.output_item.done" && item != null) {
+                    val ordinal = root["output_index"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: native.size
+                    native[ordinal] = item
+                }
                 if (item?.get("type")?.jsonPrimitive?.contentOrNull == "function_call") {
                     val key = item["id"]?.jsonPrimitive?.contentOrNull
                         ?: item["call_id"]?.jsonPrimitive?.contentOrNull
                         ?: (root["output_index"]?.jsonPrimitive?.contentOrNull ?: "0")
+                    if (key in emitted) return false
                     val fragment = fragments.getOrPut(key) { ResponseToolFragment() }
                     item["call_id"]?.jsonPrimitive?.contentOrNull?.let { fragment.callId = it }
                     item["name"]?.jsonPrimitive?.contentOrNull?.let { fragment.name = it }
@@ -432,6 +467,7 @@ class OpenAiResponsesProvider(
                 val key = root["item_id"]?.jsonPrimitive?.contentOrNull
                     ?: root["call_id"]?.jsonPrimitive?.contentOrNull
                     ?: (root["output_index"]?.jsonPrimitive?.contentOrNull ?: "0")
+                if (key in emitted) return false
                 val fragment = fragments.getOrPut(key) { ResponseToolFragment() }
                 root["call_id"]?.jsonPrimitive?.contentOrNull?.let { fragment.callId = it }
                 root["name"]?.jsonPrimitive?.contentOrNull?.let { fragment.name = it }
@@ -445,7 +481,20 @@ class OpenAiResponsesProvider(
                 val input = usage?.get("input_tokens")?.jsonPrimitive?.contentOrNull?.toIntOrNull()
                 val output = usage?.get("output_tokens")?.jsonPrimitive?.contentOrNull?.toIntOrNull()
                 if (input != null || output != null) emit(AiStreamEvent.Usage(input ?: 0, output ?: 0))
+                if (fragments.isNotEmpty()) {
+                    emit(AiStreamEvent.Terminated(AiStreamTermination(AiStreamTerminationKind.Interrupted, "unfinished_tool")))
+                    return true
+                }
+                val items = responseObj?.get("output")?.jsonArray?.mapNotNull { it as? JsonObject }
+                    ?: native.toSortedMap().values.toList()
+                if (items.isNotEmpty()) emit(AiStreamEvent.Continuation(AiProviderContinuation(
+                    AiProviderToolMode.OpenAiResponses, configuration.continuationScope(model), items)))
                 emit(AiStreamEvent.Completed)
+                return true
+            }
+
+            "response.incomplete" -> {
+                emit(AiStreamEvent.Terminated(AiStreamTermination(AiStreamTerminationKind.Truncated, "response.incomplete")))
                 return true
             }
 

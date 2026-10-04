@@ -123,3 +123,22 @@ func declaredChatProtocolKeepsNativeToolsEnabled() throws {
     #expect(provider.supportsToolCalling)
     #expect(provider.capabilities.toolMode == .openAIChat)
 }
+
+@Test("EOF 兼容开关仅适用当前端点和大小写精确匹配的模型")
+func implicitTerminationIsScoped() throws {
+    let suite = "auralis-ai-config-test-\(UUID())"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set("https://relay.example.com", forKey: AIConnectionSettings.Keys.baseURL)
+    defaults.set("/v1/messages", forKey: AIConnectionSettings.Keys.apiPath)
+    defaults.set("ModelA", forKey: AIConnectionSettings.Keys.model)
+    let initial = AIConnectionSettings(defaults: defaults)
+    defaults.set(true, forKey: AIConnectionSettings.Keys.assumesImplicitStreamTermination)
+    defaults.set(initial.endpointFingerprint, forKey: AIConnectionSettings.Keys.implicitStreamTerminationScope)
+    #expect(AIConnectionSettings(defaults: defaults).assumesImplicitStreamTermination)
+    defaults.set("modela", forKey: AIConnectionSettings.Keys.model)
+    #expect(!AIConnectionSettings(defaults: defaults).assumesImplicitStreamTermination)
+    defaults.set("ModelA", forKey: AIConnectionSettings.Keys.model)
+    defaults.set("/other/messages", forKey: AIConnectionSettings.Keys.apiPath)
+    #expect(!AIConnectionSettings(defaults: defaults).assumesImplicitStreamTermination)
+}

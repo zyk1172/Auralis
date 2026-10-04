@@ -3,6 +3,7 @@ package com.auralis.feature.assistant
 
 import androidx.annotation.StringRes
 import kotlinx.serialization.Serializable
+import com.auralis.core.ai.AiPrivacyCategory
 
 // ---------------------------------------------------------------------------
 // 会话/消息持久化模型（对齐 Swift AgentSession/AgentChatMessage；JSON 落盘）
@@ -28,6 +29,7 @@ data class StoredAssistantMessage(
     val role: Role,
     val text: String,
     val createdAtMillis: Long,
+    val disclosureCategories: Set<AiPrivacyCategory>? = null,
 ) {
     enum class Role { User, Assistant }
 }
@@ -53,6 +55,9 @@ enum class AssistantRunPhase(@StringRes val labelRes: Int) {
 sealed interface AssistantLiveItem {
     /** 模型思考文本：只展示，绝不持久化、绝不进上下文。 */
     data class Reasoning(val text: String) : AssistantLiveItem
+
+    /** AI-08：流式正文半成品（增量渲染）；收敛时被定稿替换，绝不落盘。 */
+    data class PartialText(val text: String) : AssistantLiveItem
 
     /** 工具执行状态行。 */
     data class ToolStatus(

@@ -58,7 +58,8 @@ public enum ContextManager {
     public static func trimByTokens(
         _ conversation: [AIMessage],
         maxTokens: Int = ContextManager.maxContextTokens,
-        preservingUserText: String? = nil
+        preservingUserText: String? = nil,
+        continuationTokenCosts: [UUID: Int] = [:]
     ) -> [AIMessage] {
         guard !conversation.isEmpty else { return [] }
         let system = conversation.first { $0.role == .system } ?? conversation[0]
@@ -77,7 +78,7 @@ public enum ContextManager {
             keptIndices.insert(requiredUserIndex)
             tokens += estimatedTokens(requiredUser)
         }
-        for unit in conversationUnits(conversation).reversed() {
+        for unit in conversationUnits(conversation, continuationTokenCosts: continuationTokenCosts).reversed() {
             guard !unit.indices.contains(where: keptIndices.contains) else { continue }
             guard tokens + unit.tokens <= maxTokens else { continue }
             tokens += unit.tokens
@@ -150,7 +151,7 @@ public enum ContextManager {
     }
 
     /// 将历史拆成可独立裁剪的单元。孤立 tool result 本来就不合法，因此不会进入任何单元。
-    private static func conversationUnits(_ conversation: [AIMessage]) -> [ConversationUnit] {
+    private static func conversationUnits(_ conversation: [AIMessage], continuationTokenCosts: [UUID: Int] = [:]) -> [ConversationUnit] {
         var units: [ConversationUnit] = []
         var index = conversation.startIndex
 
@@ -168,7 +169,7 @@ public enum ContextManager {
                 // `.tool` 只能由前面的 assistant tool_calls 组消费；任何没有配对的 tool
                 // 都不能回灌给 OpenAI-compatible Provider。
                 if message.role != .tool {
-                    units.append(.init(indices: [index], tokens: estimatedTokens(message)))
+                    units.append(.init(indices: [index], tokens: estimatedTokens(message) + continuationTokenCosts[message.id, default: 0]))
                 }
                 index = conversation.index(after: index)
                 continue
@@ -192,7 +193,7 @@ public enum ContextManager {
                 let indices = [index] + resultIndices
                 units.append(.init(
                     indices: indices,
-                    tokens: indices.reduce(0) { $0 + estimatedTokens(conversation[$1]) }
+                    tokens: indices.reduce(0) { $0 + estimatedTokens(conversation[$1]) + continuationTokenCosts[conversation[$1].id, default: 0] }
                 ))
                 index = cursor
             } else {

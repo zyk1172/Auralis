@@ -4,6 +4,7 @@ package com.auralis.feature.assistant
 import androidx.annotation.StringRes
 import com.auralis.core.ai.AgentToolDescriptor
 import com.auralis.core.ai.AgentToolRegistry
+import com.auralis.core.ai.AiPrivacyCategory
 import com.auralis.core.ai.SideEffectAuthorizationContext
 import com.auralis.core.ai.ToolConfirmationPolicy
 import com.auralis.core.ai.ToolSideEffect
@@ -337,7 +338,7 @@ class AssistantToolHost(
             }.toString()
         }
 
-        ro("getTrack", "按全局 ID 查询单首歌曲的完整元数据。", """{"properties":{"globalID":{"type":"object"}},"required":["globalID"],"type":"object"}""") { args ->
+        ro("getTrack", "按全局 ID 查询单首歌曲的完整元数据。", """{"properties":{"globalID":{"type":"object"}},"required":["globalID"],"type":"object"}""", category = AiPrivacyCategory.FavoritesAndRatings) { args ->
             val gid = args.globalId()
             val t = graph.catalogRepository.track(gid)
                 ?: throw IllegalArgumentException("本地目录中找不到该歌曲（可能未同步该服务器）")
@@ -398,7 +399,7 @@ class AssistantToolHost(
             }.toString()
         }
 
-        ro("getFavorites", "列出收藏的歌曲。", """{"properties":{"limit":{"type":"integer"}},"type":"object"}""") { args ->
+        ro("getFavorites", "列出收藏的歌曲。", """{"properties":{"limit":{"type":"integer"}},"type":"object"}""", category = AiPrivacyCategory.FavoritesAndRatings) { args ->
             val limit = args.int("limit")?.coerceIn(1, 100) ?: 50
             val tracks = graph.catalogRepository.favoriteTracks(activeServerId())
             buildJsonObject {
@@ -421,7 +422,7 @@ class AssistantToolHost(
             }
         }
 
-        ro("getCurrentQueue", "返回当前播放队列（entryID 用于 queue_remove）。", emptyParams()) {
+        ro("getCurrentQueue", "返回当前播放队列（entryID 用于 queue_remove）。", emptyParams(), category = AiPrivacyCategory.PlaybackHistory) {
             val queue = LocalPlaybackHost.controller().queue.value
             buildJsonObject {
                 put("ok", true)
@@ -540,7 +541,7 @@ class AssistantToolHost(
             }.toString()
         }
 
-        ro("lyrics_get", "获取某首歌曲的歌词。", """{"properties":{"globalID":{"type":"object"}},"required":["globalID"],"type":"object"}""") { args ->
+        ro("lyrics_get", "获取某首歌曲的歌词。", """{"properties":{"globalID":{"type":"object"}},"required":["globalID"],"type":"object"}""", category = AiPrivacyCategory.Lyrics) { args ->
             val gid = args.globalId()
             val track = graph.catalogRepository.track(gid)
                 ?: throw IllegalArgumentException("本地目录中找不到该歌曲")
@@ -663,7 +664,7 @@ class AssistantToolHost(
             "已切到上一首"
         }
 
-        write("likeTrack", "收藏指定歌曲。", """{"properties":{"globalID":{"type":"object"}},"required":["globalID"],"type":"object"}""") { args ->
+        write("likeTrack", "收藏指定歌曲。", """{"properties":{"globalID":{"type":"object"}},"required":["globalID"],"type":"object"}""", category = AiPrivacyCategory.FavoritesAndRatings) { args ->
             val gid = args.globalId()
             val track = graph.catalogRepository.track(gid)
                 ?: throw IllegalArgumentException("本地目录中找不到该歌曲")
@@ -674,7 +675,7 @@ class AssistantToolHost(
             }
         }
 
-        write("unlikeTrack", "取消收藏指定歌曲。", """{"properties":{"globalID":{"type":"object"}},"required":["globalID"],"type":"object"}""") { args ->
+        write("unlikeTrack", "取消收藏指定歌曲。", """{"properties":{"globalID":{"type":"object"}},"required":["globalID"],"type":"object"}""", category = AiPrivacyCategory.FavoritesAndRatings) { args ->
             val gid = args.globalId()
             val track = graph.catalogRepository.track(gid)
                 ?: throw IllegalArgumentException("本地目录中找不到该歌曲")
@@ -709,7 +710,7 @@ class AssistantToolHost(
             }
         }
 
-        write("setRating", "给歌曲评分（1-5 星）。", """{"properties":{"globalID":{"type":"object"},"rating":{"type":"integer"}},"required":["globalID","rating"],"type":"object"}""") { args ->
+        write("setRating", "给歌曲评分（1-5 星）。", """{"properties":{"globalID":{"type":"object"},"rating":{"type":"integer"}},"required":["globalID","rating"],"type":"object"}""", category = AiPrivacyCategory.FavoritesAndRatings) { args ->
             val gid = args.globalId()
             val rating = args.int("rating") ?: throw IllegalArgumentException("缺少 rating")
             if (rating !in 1..5) throw IllegalArgumentException("rating 必须在 1-5")
@@ -719,7 +720,7 @@ class AssistantToolHost(
             "已把《${track.title}》评为 $rating 星"
         }
 
-        write("clearRating", "清除歌曲评分。", """{"properties":{"globalID":{"type":"object"}},"required":["globalID"],"type":"object"}""") { args ->
+        write("clearRating", "清除歌曲评分。", """{"properties":{"globalID":{"type":"object"}},"required":["globalID"],"type":"object"}""", category = AiPrivacyCategory.FavoritesAndRatings) { args ->
             val gid = args.globalId()
             val track = graph.catalogRepository.track(gid)
                 ?: throw IllegalArgumentException("本地目录中找不到该歌曲")
@@ -880,10 +881,11 @@ class AssistantToolHost(
         name: String,
         description: String,
         parametersJson: String?,
+        category: AiPrivacyCategory? = null,
         executor: suspend (Map<String, JsonElement>) -> String,
     ) {
         registry.register(
-            AgentToolDescriptor(name, description, parametersJson, ToolSideEffect.ReadOnly),
+            AgentToolDescriptor(name, description, parametersJson, ToolSideEffect.ReadOnly, disclosureCategory = category),
             executor,
         )
     }
@@ -892,10 +894,11 @@ class AssistantToolHost(
         name: String,
         description: String,
         parametersJson: String?,
+        category: AiPrivacyCategory? = null,
         executor: suspend (Map<String, JsonElement>) -> String,
     ) {
         registry.register(
-            AgentToolDescriptor(name, description, parametersJson, ToolSideEffect.Write, ToolConfirmationPolicy.None),
+            AgentToolDescriptor(name, description, parametersJson, ToolSideEffect.Write, ToolConfirmationPolicy.None, disclosureCategory = category),
             executor,
         )
     }

@@ -43,6 +43,7 @@ class OpenAiCompatibleProviderTest {
         supportsToolCalling: Boolean = true,
         supportsToolChoice: Boolean = true,
         usesStreaming: Boolean = true,
+        client: okhttp3.OkHttpClient? = null,
     ): OpenAiCompatibleProvider {
         val cfg = AiProviderConfiguration(
             id = "test",
@@ -56,7 +57,7 @@ class OpenAiCompatibleProviderTest {
             usesStreaming = usesStreaming,
             supportsParallelTools = true,
         )
-        return OpenAiCompatibleProvider(cfg, apiKeyProvider = { "sk-test" })
+        return OpenAiCompatibleProvider(cfg, apiKeyProvider = { "sk-test" }, client = client)
     }
 
     private fun jsonBody(body: String): JsonObject =
@@ -229,5 +230,89 @@ class OpenAiCompatibleProviderTest {
         assertEquals("tool", tool["role"]?.jsonPrimitive?.contentOrNull())
         assertEquals("call_1", tool["tool_call_id"]?.jsonPrimitive?.contentOrNull())
         assertEquals("已收藏", tool["content"]?.jsonPrimitive?.contentOrNull())
+    }
+
+    // ------------------------------------------------------------------
+    // AI-06：硬期限 —— 阻塞调用必须响应协程取消（非 delay 型假测试）。
+    // client 的 callTimeout 故意远大于协程期限：及时恢复只能来自取消桥接。
+    // ------------------------------------------------------------------
+
+    private fun slowClient(): okhttp3.OkHttpClient = okhttp3.OkHttpClient.Builder()
+        .callTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+
+    private fun ping() = AiCompletionRequest(
+        model = "test-model",
+        messages = listOf(AiMessage(AiMessage.Role.User, "hi")),
+    )
+
+    @Test
+    fun `连接不回应时 withTimeout 及时恢复且连接被关闭`() = runBlocking {
+        // 1.5s 无响应 >> 300ms 协程期限；同时让 MockWebServer 能在 tearDown 正常关闭。
+        server.enqueue(
+            MockResponse().setResponseCode(200)
+                .setHeadersDelay(1500, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .setBody("{}"),
+        )
+        val client = slowClient()
+        val p = provider(client = client)
+        val started = System.currentTimeMillis()
+        val result = kotlinx.coroutines.withTimeoutOrNull(300) { p.complete(ping()) }
+        val elapsed = System.currentTimeMillis() - started
+        assertNull(result)
+        assertTrue("300ms 期限必须及时恢复（实际 ${elapsed}ms）", elapsed < 5_000)
+        // 被取消的连接不复用回连接池。
+        assertEquals(0, client.connectionPool.idleConnectionCount())
+    }
+
+    @Test
+    fun `响应头后卡住 body 时 withTimeout 及时恢复`() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(200)
+                .setBodyDelay(1500, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .setBody("""{"model":"m","choices":[]}"""),
+        )
+        val p = provider(client = slowClient())
+        val started = System.currentTimeMillis()
+        val result = kotlinx.coroutines.withTimeoutOrNull(300) { p.complete(ping()) }
+        val elapsed = System.currentTimeMillis() - started
+        assertNull(result)
+        assertTrue("卡住 body 必须可打断（实际 ${elapsed}ms）", elapsed < 5_000)
+    }
+
+    @Test
+    fun `持续滴字节的响应体读取可被取消`() = runBlocking {
+        // 字节持续滴（1024B/100ms，全程 ~1.6s）：readTimeout 不会触发，只能靠取消打断；
+        // 且总量有限，MockWebServer 能在 tearDown 正常关闭。
+        server.enqueue(
+            MockResponse().setResponseCode(200)
+                .setBody("x".repeat(16_384))
+                .throttleBody(1024, 100, java.util.concurrent.TimeUnit.MILLISECONDS),
+        )
+        val p = provider(client = slowClient())
+        val started = System.currentTimeMillis()
+        val result = kotlinx.coroutines.withTimeoutOrNull(300) { p.complete(ping()) }
+        val elapsed = System.currentTimeMillis() - started
+        assertNull(result)
+        assertTrue("滴字节读取必须可打断（实际 ${elapsed}ms）", elapsed < 5_000)
+    }
+
+    @Test
+    fun `流式读取期间取消可中断流`() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(200)
+                .setBody("data: {\"choices\":[{\"delta\":{\"content\":\"你\"}}]}\n\n")
+                .setBodyDelay(1500, java.util.concurrent.TimeUnit.MILLISECONDS),
+        )
+        val p = provider(client = slowClient())
+        val started = System.currentTimeMillis()
+        val events = kotlinx.coroutines.withTimeoutOrNull(300) {
+            p.stream(ping()).toList()
+        }
+        val elapsed = System.currentTimeMillis() - started
+        assertNull(events)
+        assertTrue("流式读取必须可中断（实际 ${elapsed}ms）", elapsed < 5_000)
     }
 }

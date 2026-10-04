@@ -4,10 +4,8 @@
 package com.auralis.core.ai
 
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -42,7 +40,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
  *   重试一次；**绝不删除 tools/tool_choice**——网关不支持原生工具时保留原错误，
  *   让上层报告原生协议失败；
  * - **SSE 流式**：tool_calls 按 `index` 跨 chunk 拼接 fragments，到流结束
- *   （`[DONE]` / `finish_reason` / 自然结束）才统一产出完整 [AiStreamEvent.ToolCall]；
+ *   （`[DONE]` / `finish_reason`；自然 EOF 默认视为中断）才统一产出完整 [AiStreamEvent.ToolCall]；
  *   `reasoning_content` 归类 [AiStreamEvent.ReasoningDelta]（绝不持久化）；
  *   无法分类的正文归类 [AiStreamEvent.UnknownDelta]（保持可见，绝不静默丢弃）；
  * - **错误分类**：401+模型提示语 → 模型/上游路由而非「API Key 错」。
@@ -126,10 +124,15 @@ class OpenAiCompatibleProvider(
     // 请求体
     // ------------------------------------------------------------------
 
-    private fun requestBody(request: AiCompletionRequest, stream: Boolean): JsonObject = buildJsonObject {
+    internal fun requestBody(request: AiCompletionRequest, stream: Boolean): JsonObject = buildJsonObject {
         put("model", request.model)
         putJsonArray("messages") {
-            request.messages.forEach { msg -> add(msg.asRequestObject()) }
+            request.messages.forEach { msg ->
+                val item = msg.asRequestObject().toMutableMap()
+                configuration.nativeItems(msg, AiProviderToolMode.OpenAiChat, request.model)
+                    ?.firstOrNull()?.get("reasoning_content")?.let { item["reasoning_content"] = it }
+                add(JsonObject(item))
+            }
         }
         if (request.temperature.isFinite()) put("temperature", request.temperature)
         put("max_tokens", request.maxTokens)
@@ -166,9 +169,12 @@ class OpenAiCompatibleProvider(
                 }
             }
         }
-        // 推理控制（仅对声明支持 request-side reasoning 的端点发送）。
+        // 推理控制（AI-02）：仅对声明支持 request-side reasoning 的端点发送 reasoning_effort，
+        // 不默认发给未知端点；方言配置为 Disabled 时彻底不发送。
         val reasoning = request.reasoning
-        if (reasoning != null && reasoning.enabled && configuration.supportsReasoningControl) {
+        if (reasoning != null && reasoning.enabled && configuration.supportsReasoningControl &&
+            configuration.reasoningDialect != AiReasoningDialect.Disabled
+        ) {
             put("reasoning_effort", reasoning.effort.name.lowercase())
         }
     }
@@ -215,34 +221,39 @@ class OpenAiCompatibleProvider(
     private suspend fun executeJson(
         url: String,
         body: JsonObject,
-    ): Pair<Int, String> = withContext(Dispatchers.IO) {
+    ): Pair<Int, String> {
         val builder = Request.Builder().url(url).post(
             body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()),
         )
         for ((k, v) in authHeaders()) builder.header(k, v)
-        builder.build().let { okHttp.newCall(it).execute().use { resp ->
-            resp.code to (resp.body?.string() ?: "")
-        } }
+        // AI-06：可取消桥接（协程取消/超时 → Call.cancel()，阻塞读可被打断）。
+        return okHttp.executeForString(builder.build())
     }
 
+    /** 流式：返回 (Call, Response)，调用方读取响应体期间须用 [useCancellable] 响应取消。 */
     private suspend fun executeStreaming(
         url: String,
         body: JsonObject,
         onStatus: (Int) -> Unit,
-    ): okhttp3.Response = withContext(Dispatchers.IO) {
+    ): Pair<okhttp3.Call, okhttp3.Response> {
         val builder = Request.Builder().url(url).post(
             body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()),
         )
         for ((k, v) in authHeaders()) builder.header(k, v)
-        val resp = okHttp.newCall(builder.build()).execute()
+        val call = okHttp.newCall(builder.build())
+        val resp = try {
+            call.awaitResponse()
+        } catch (e: java.io.IOException) {
+            call.rethrowAsCancellation(e)
+            throw e
+        }
         if (!resp.isSuccessful) {
             val code = resp.code
-            val detail = resp.body?.string().orEmpty()
-            resp.close()
+            val detail = resp.useCancellable(call) { it.body?.string().orEmpty() }
             throw classify(code, detail)
         }
         onStatus(resp.code)
-        resp
+        return call to resp
     }
 
     // ------------------------------------------------------------------
@@ -307,14 +318,11 @@ class OpenAiCompatibleProvider(
             finishReason = finish,
             toolCalls = toolCalls,
         )
-        if (finish == "length" && !toolCalls.isNullOrEmpty()) {
-            throw AiProviderException(
-                AiProviderFailureKind.Unknown,
-                "输出被截断（finish_reason=length 且存在未完成的工具调用）",
-                retryable = true,
-            )
-        }
-        return response
+        response.termination.requireComplete()
+        return response.copy(continuation = reasoning?.takeIf { it.isNotEmpty() }?.let {
+            AiProviderContinuation(AiProviderToolMode.OpenAiChat, configuration.continuationScope(fallbackModel),
+                listOf(buildJsonObject { put("reasoning_content", it) }))
+        })
     }
 
     private fun parseToolCall(tc: JsonObject): AiToolCall? {
@@ -356,6 +364,7 @@ class OpenAiCompatibleProvider(
     private fun nonStreamingProjection(request: AiCompletionRequest): Flow<AiStreamEvent> = flow {
         val response = complete(request)
         emit(AiStreamEvent.Started(response.model))
+        response.continuation?.let { emit(AiStreamEvent.Continuation(it)) }
         response.reasoning?.takeIf { it.isNotEmpty() }?.let { emit(AiStreamEvent.ReasoningDelta(it)) }
         if (response.content.isNotEmpty()) emit(AiStreamEvent.AnswerDelta(response.content))
         response.toolCalls?.forEach { emit(AiStreamEvent.ToolCall(it)) }
@@ -370,91 +379,60 @@ class OpenAiCompatibleProvider(
     )
 
     private fun chatStream(request: AiCompletionRequest): Flow<AiStreamEvent> = flow {
-        val url = endpoint()
         val body = requestBody(request, stream = true)
-        val fragments = LinkedHashMap<Int, ChatToolFragment>()
-        var sawFinishReason = false
-
         try {
-            val resp = executeStreaming(url, body) { }
-            resp.use { response ->
-                val reader = response.body?.charStream()?.buffered()
-                    ?: throw AiProviderException(AiProviderFailureKind.ProviderUnavailable, "响应体为空")
-                emit(AiStreamEvent.Started(request.model))
-
-                var dataLine = StringBuilder()
-                while (true) {
-                    val line = reader.readLine() ?: break
-                    if (line.isEmpty()) {
-                        // SSE 事件边界：flush 累计 data 行。
-                        if (dataLine.isNotEmpty()) {
-                            val payload = dataLine.toString()
-                            dataLine = StringBuilder()
-                            if (handleSsePayload(payload, request.model, fragments) { event ->
-                                    emit(event)
-                                }) { sawFinishReason = true; break }
-                        }
-                        continue
-                    }
-                    if (line.startsWith("data:")) {
-                        val piece = line.removePrefix("data:").trimStart(' ')
-                        if (dataLine.isNotEmpty()) dataLine.append('\n')
-                        dataLine.append(piece)
-                    }
-                    // event:/id:/retry: 行不影响 Chat Completions 语义，忽略。
-                }
-            }
+            chatStreamRawOnce(request, body).collect { emit(it) }
         } catch (e: AiProviderException) {
-            // 参数降级重试（仅字段名适配）。
-            val fallback = fallbackBody(body, e.httpStatus ?: 0, e.message ?: "")
-            if (fallback != null) {
-                val stream2 = chatStreamRawOnce(request, fallback)
-                stream2.collect { emit(it) }
-                return@flow
-            }
+            val fallback = fallbackBody(body, e.httpStatus ?: 0, e.message.orEmpty())
+            if (fallback == null) throw e
+            chatStreamRawOnce(request, fallback).collect { emit(it) }
+        } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             throw classify(0, e.message ?: e.javaClass.simpleName, cause = e)
         }
-
-        // 自然结束（无 [DONE]）：flush 已拼接的 tool call，再补 completed。
-        if (!sawFinishReason) {
-            flushToolFragments(fragments) { emit(it) }
-            emit(AiStreamEvent.Completed)
-        }
     }
 
-    /** 单次 SSE 执行（不含 fallback 逻辑），供降级重试复用。 */
-    private suspend fun chatStreamRawOnce(
-        request: AiCompletionRequest,
-        body: JsonObject,
-    ): Flow<AiStreamEvent> = flow {
-        val resp = executeStreaming(endpoint(), body) { }
-        resp.use { response ->
-            val reader = response.body?.charStream()?.buffered()
+    /** Both the original request and parameter fallback share the same terminal checks. */
+    private fun chatStreamRawOnce(request: AiCompletionRequest, body: JsonObject): Flow<AiStreamEvent> = flow {
+        val (call, response) = executeStreaming(endpoint(), body) { }
+        emit(AiStreamEvent.Started(request.model))
+        response.useCancellable(call) { resp ->
+            val reader = resp.body?.charStream()?.buffered()
                 ?: throw AiProviderException(AiProviderFailureKind.ProviderUnavailable, "响应体为空")
-            emit(AiStreamEvent.Started(request.model))
-            val fragments = LinkedHashMap<Int, ChatToolFragment>()
-            var dataLine = StringBuilder()
-            while (true) {
-                val line = reader.readLine() ?: break
-                if (line.isEmpty()) {
-                    if (dataLine.isNotEmpty()) {
-                        val payload = dataLine.toString()
-                        dataLine = StringBuilder()
-                        val done = handleSsePayload(payload, request.model, fragments) { emit(it) }
-                        if (done) break
-                    }
-                    continue
+            val fragments = linkedMapOf<Int, ChatToolFragment>()
+            val reasoning = StringBuilder()
+            var data = StringBuilder()
+            var ended = false
+            val forward: suspend (AiStreamEvent) -> Unit = { event ->
+                if (event is AiStreamEvent.ReasoningDelta) reasoning.append(event.text)
+                if (event is AiStreamEvent.Completed || event is AiStreamEvent.Terminated) {
+                    if (reasoning.isNotEmpty()) emit(AiStreamEvent.Continuation(AiProviderContinuation(
+                        AiProviderToolMode.OpenAiChat, configuration.continuationScope(request.model),
+                        listOf(buildJsonObject { put("reasoning_content", reasoning.toString()) }),
+                    )))
                 }
-                if (line.startsWith("data:")) {
-                    val piece = line.removePrefix("data:").trimStart(' ')
-                    if (dataLine.isNotEmpty()) dataLine.append('\n')
-                    dataLine.append(piece)
+                emit(event)
+            }
+            while (!ended) {
+                val line = reader.readLine() ?: break
+                if (line.isEmpty() && data.isNotEmpty()) {
+                    ended = handleSsePayload(data.toString(), request.model, fragments, forward)
+                    data = StringBuilder()
+                } else if (line.startsWith("data:")) {
+                    if (data.isNotEmpty()) data.append('\n')
+                    data.append(line.removePrefix("data:").trimStart(' '))
                 }
             }
-            flushToolFragments(fragments) { emit(it) }
-            emit(AiStreamEvent.Completed)
+            if (!ended && data.isNotEmpty()) ended = handleSsePayload(data.toString(), request.model, fragments, forward)
+            if (!ended) {
+                if (configuration.assumesImplicitStreamTermination) {
+                    flushToolFragments(fragments, forward)
+                    forward(AiStreamEvent.Completed)
+                } else {
+                    forward(AiStreamEvent.Terminated(AiStreamTermination(AiStreamTerminationKind.Interrupted, "EOF")))
+                }
+            }
         }
     }
 
@@ -513,8 +491,14 @@ class OpenAiCompatibleProvider(
             }
             val finish = choice["finish_reason"]?.jsonPrimitive?.contentOrNull()
             if (finish != null) {
-                flushToolFragments(fragments, emit)
-                emit(AiStreamEvent.Completed)
+                val termination = AiStreamTermination.chat(finish)
+                if (termination.kind in setOf(AiStreamTerminationKind.Completed, AiStreamTerminationKind.ToolCallsReady)) {
+                    flushToolFragments(fragments, emit)
+                    emit(AiStreamEvent.Completed)
+                } else {
+                    fragments.clear()
+                    emit(AiStreamEvent.Terminated(termination))
+                }
                 return true
             }
         }
@@ -619,38 +603,37 @@ class OpenAiCompatibleProvider(
     }
 
     /** 探测 /models 目录；返回 (catalog 状态, details)。目录缺失视为 notTested 而非 failed。 */
-    private suspend fun probeModelCatalog(): Pair<AiProbeStatus, List<String>> = withContext(Dispatchers.IO) {
+    private suspend fun probeModelCatalog(): Pair<AiProbeStatus, List<String>> {
         val base = baseUrl.newBuilder().addPathSegments("models").build().toString()
         val builder = Request.Builder().url(base)
         for ((k, v) in authHeaders()) builder.header(k, v)
         val detail = try {
-            okHttp.newCall(builder.build()).execute().use { resp ->
-                when {
-                    resp.code == 200 -> {
-                        val ids = runCatching {
-                            json.parseToJsonElement(resp.body?.string().orEmpty()).jsonObject["data"]
-                                ?.jsonArray?.mapNotNull { it.jsonObject["id"]?.jsonPrimitive?.contentOrNull() }
-                                .orEmpty()
-                        }.getOrDefault(emptyList())
-                        if (ids.isEmpty()) {
-                            AiProbeStatus.Degraded to listOf("模型目录为空")
-                        } else if (configuration.model in ids) {
-                            AiProbeStatus.Passed to listOf("模型目录含 ${configuration.model}")
-                        } else {
-                            AiProbeStatus.Failed to listOf("模型 ${configuration.model} 不在目录中（共 ${ids.size} 个模型）")
-                        }
+            val (code, raw) = okHttp.executeForString(builder.build())
+            when {
+                code == 200 -> {
+                    val ids = runCatching {
+                        json.parseToJsonElement(raw).jsonObject["data"]
+                            ?.jsonArray?.mapNotNull { it.jsonObject["id"]?.jsonPrimitive?.contentOrNull() }
+                            .orEmpty()
+                    }.getOrDefault(emptyList())
+                    if (ids.isEmpty()) {
+                        AiProbeStatus.Degraded to listOf("模型目录为空")
+                    } else if (configuration.model in ids) {
+                        AiProbeStatus.Passed to listOf("模型目录含 ${configuration.model}")
+                    } else {
+                        AiProbeStatus.Failed to listOf("模型 ${configuration.model} 不在目录中（共 ${ids.size} 个模型）")
                     }
-                    resp.code == 401 || resp.code == 403 -> {
-                        AiProbeStatus.Failed to listOf("模型目录鉴权失败（HTTP ${resp.code}）")
-                    }
-                    resp.code == 404 -> AiProbeStatus.NotTested to listOf("端点无 /models 目录（HTTP 404，跳过）")
-                    else -> AiProbeStatus.Degraded to listOf("模型目录 HTTP ${resp.code}")
                 }
+                code == 401 || code == 403 -> {
+                    AiProbeStatus.Failed to listOf("模型目录鉴权失败（HTTP $code）")
+                }
+                code == 404 -> AiProbeStatus.NotTested to listOf("端点无 /models 目录（HTTP 404，跳过）")
+                else -> AiProbeStatus.Degraded to listOf("模型目录 HTTP $code")
             }
         } catch (e: Exception) {
             AiProbeStatus.Degraded to listOf("模型目录不可达：${e.message}")
         }
-        detail
+        return detail
     }
 
     // ------------------------------------------------------------------
@@ -679,6 +662,9 @@ class OpenAiCompatibleProvider(
 
     companion object {
         private fun defaultClient(timeoutMillis: Long): OkHttpClient = OkHttpClient.Builder()
+            // AI-06：callTimeout 是整个调用的硬期限（含响应体读取），与请求级期限对齐；
+            // connect/read/write 保留，协程层另有 Call.cancel() 桥接。
+            .callTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
             .connectTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
             .readTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
             .writeTimeout(timeoutMillis, TimeUnit.MILLISECONDS)

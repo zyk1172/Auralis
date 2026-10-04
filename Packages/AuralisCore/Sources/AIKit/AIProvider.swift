@@ -15,6 +15,44 @@ public let auralisDefaultRequestTimeout: TimeInterval = 360
 /// 用户可在 Provider「高级设置」中按实际模型修改 maxContextTokens / maxOutputTokens。
 public let auralisDefaultMaxContextTokens = 256_000
 
+/// Anthropic Messages 的思考控制方言。较新的模型拒绝 `type=enabled` 的
+/// manual 预算模式、要求 adaptive；具体端点/模型适用哪种方言由设置层或
+/// 端点能力记录决定，Provider 不硬编码模型名单。
+public enum AnthropicReasoningDialect: String, Codable, Hashable, Sendable, CaseIterable {
+    /// `thinking: {type: "enabled", budget_tokens: N}`（旧思考模型）。
+    case manual
+    /// `thinking: {type: "adaptive"}` + effort 映射，不携带 budget。
+    case adaptive
+
+    /// 该方言下允许请求的 effort 档位（透传前的取值集合）。
+    public var supportedEfforts: [AIReasoningEffort] {
+        switch self {
+        case .manual:
+            // manual 只有预算；effort 全部映射为预算档位。
+            AIReasoningEffort.allCases
+        case .adaptive:
+            [.low, .medium, .high, .max]
+        }
+    }
+
+    /// manual 预算下限（低于该值服务端拒绝）。
+    public var minimumBudgetTokens: Int? {
+        switch self {
+        case .manual: 1_024
+        case .adaptive: nil
+        }
+    }
+
+    /// 思考开启时是否允许强制 tool_choice（required/named）。
+    /// manual 模式下服务端拒绝 thinking 与强制工具选择组合。
+    public var allowsForcedToolChoiceWhileThinking: Bool {
+        switch self {
+        case .manual: false
+        case .adaptive: true
+        }
+    }
+}
+
 /// Provider-neutral reasoning intensity. The value is intentionally limited to
 /// the common effort vocabulary; individual codecs map it to their own wire
 /// parameter without leaking provider-specific names into AgentKit or the UI.
@@ -522,6 +560,13 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
     /// from the presence of response reasoning metadata.
     public var supportsReasoningControl: Bool
     public var supportsImageInput: Bool
+    /// 兼容策略：少数网关确实以 SSE 自然 EOF 作为正常结束（不发 [DONE] /
+    /// finish_reason / message_stop）。默认 false——无显式终止信号一律按
+    /// transportInterrupted 处理，只有确认该端点行为后才显式打开。
+    public var assumesImplicitStreamTermination: Bool
+    /// Anthropic 端点的思考控制方言记录；nil 时 Provider 使用 manual 默认。
+    /// 由设置层按模型/端点能力写入，Provider 不做模型名单推断。
+    public var anthropicReasoningDialect: AnthropicReasoningDialect?
 
     public init(
         id: UUID = UUID(),
@@ -550,7 +595,9 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         supportsHostedWebFetch: Bool = false,
         supportsReasoningMetadata: Bool = false,
         supportsReasoningControl: Bool = false,
-        supportsImageInput: Bool = false
+        supportsImageInput: Bool = false,
+        assumesImplicitStreamTermination: Bool = false,
+        anthropicReasoningDialect: AnthropicReasoningDialect? = nil
     ) {
         self.id = id
         self.name = name
@@ -579,6 +626,8 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         self.supportsReasoningMetadata = supportsReasoningMetadata
         self.supportsReasoningControl = supportsReasoningControl
         self.supportsImageInput = supportsImageInput
+        self.assumesImplicitStreamTermination = assumesImplicitStreamTermination
+        self.anthropicReasoningDialect = anthropicReasoningDialect
     }
 
     /// 自定义解码：旧配置 / 旧备份缺少 `maxContextTokens` 时使用当前默认值，
@@ -590,6 +639,7 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         case supportsToolCalling, hasVerifiedModelAvailability, supportsParallelTools, supportsToolChoice
         case supportsStrictSchema, supportsHostedWebSearch, supportsHostedWebFetch
         case supportsReasoningMetadata, supportsReasoningControl, supportsImageInput
+        case assumesImplicitStreamTermination, anthropicReasoningDialect
     }
 
     public init(from decoder: any Decoder) throws {
@@ -624,6 +674,8 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         supportsReasoningMetadata = try container.decodeIfPresent(Bool.self, forKey: .supportsReasoningMetadata) ?? false
         supportsReasoningControl = try container.decodeIfPresent(Bool.self, forKey: .supportsReasoningControl) ?? false
         supportsImageInput = try container.decodeIfPresent(Bool.self, forKey: .supportsImageInput) ?? false
+        assumesImplicitStreamTermination = try container.decodeIfPresent(Bool.self, forKey: .assumesImplicitStreamTermination) ?? false
+        anthropicReasoningDialect = try container.decodeIfPresent(AnthropicReasoningDialect.self, forKey: .anthropicReasoningDialect)
     }
 
     /// 输出上限别名：与既有 `maxTokens` 同一数值，语义上独立于上下文窗口。
@@ -654,6 +706,7 @@ public struct AIPrivacyPermissions: Codable, Hashable, Sendable {
             && allowsPlaybackHistory
             && allowsFavoritesAndRatings
             && allowsLyrics
+            && allowsExternalDiscovery
     }
 
     public func allows(_ category: AIPrivacyCategory) -> Bool {
@@ -918,8 +971,22 @@ public struct AICompletionResponse: Codable, Hashable, Sendable {
     public let content: String
     /// 模型思考文本。流式运行期间可以作为瞬态展示，但绝不写入聊天记录。
     public let reasoning: String?
+    /// 输入 token 总量口径：OpenAI `prompt_tokens` 通常已包含 cached_tokens
+    ///（cache 字段是子集明细）；Anthropic `input_tokens` 不含
+    /// cache_read/cache_creation，总输入需要三者相加。详见各 codec 注释。
     public let inputTokens: Int?
     public let outputTokens: Int?
+    /// 命中 Provider 缓存的输入 token（Chat: prompt_tokens_details.cached_tokens；
+    /// Anthropic: cache_read_input_tokens）。未提供时保持 nil，不填 0。
+    public let cacheReadTokens: Int?
+    /// 写入 Provider 缓存的输入 token（Anthropic: cache_creation_input_tokens）。
+    public let cacheCreationTokens: Int?
+    /// 推理/思考消耗的 token（Chat: completion_tokens_details.reasoning_tokens；
+    /// Responses: output_tokens_details.reasoning_tokens）。
+    public let reasoningTokens: Int?
+    /// Provider 响应级请求 ID（OpenAI x-request-id / Anthropic request-id 头），
+    /// 用于把一次失败定位到服务端的具体响应。
+    public let requestID: String?
     /// `choices[0].finish_reason`（如 "stop" / "tool_calls"）。原生 function calling 下，
     /// `tool_calls` 表示模型要求 App 执行工具后继续，而不是任务完成。
     public let finishReason: String?
@@ -927,6 +994,9 @@ public struct AICompletionResponse: Codable, Hashable, Sendable {
     public let toolCalls: [AIToolCall]?
     /// Provider hosted web/search 返回的来源，不泄漏 Provider 私有 payload。
     public let webCitations: [AIWebCitation]?
+    /// 本轮捕获的供应商原生推理续接状态（按供应商原生顺序）。
+    /// ToolLoop 把它们按序追加进 transcript，续接请求按 vendor 匹配回放。
+    public let continuations: [AIProviderContinuation]?
 
     public init(
         model: String,
@@ -934,18 +1004,28 @@ public struct AICompletionResponse: Codable, Hashable, Sendable {
         reasoning: String? = nil,
         inputTokens: Int? = nil,
         outputTokens: Int? = nil,
+        cacheReadTokens: Int? = nil,
+        cacheCreationTokens: Int? = nil,
+        reasoningTokens: Int? = nil,
+        requestID: String? = nil,
         finishReason: String? = nil,
         toolCalls: [AIToolCall]? = nil,
-        webCitations: [AIWebCitation]? = nil
+        webCitations: [AIWebCitation]? = nil,
+        continuations: [AIProviderContinuation]? = nil
     ) {
         self.model = model
         self.content = content
         self.reasoning = reasoning
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
+        self.cacheReadTokens = cacheReadTokens
+        self.cacheCreationTokens = cacheCreationTokens
+        self.reasoningTokens = reasoningTokens
+        self.requestID = requestID
         self.finishReason = finishReason
         self.toolCalls = toolCalls
         self.webCitations = webCitations
+        self.continuations = continuations
     }
 }
 
@@ -1052,8 +1132,43 @@ public struct AIConnectionResult: Codable, Hashable, Sendable {
     }
 }
 
+/// 流式响应的结构化终止语义。`completed` 事件保持原样以兼容既有消费方；
+/// 任何非「正常完成」的结束都以 `.terminated` 事件显式表达，绝不把
+/// 「连接结束」静默等同于「任务完成」。
+public struct AIStreamTermination: Codable, Hashable, Sendable {
+    public enum Kind: String, Codable, Hashable, Sendable {
+        /// 模型自然结束（stop / end_turn / response.completed）。
+        case completed
+        /// 模型要求执行工具后继续（tool_calls / tool_use）。
+        case toolCallsReady
+        /// 输出达到长度上限被截断（length / max_tokens / max_output_tokens）。
+        case truncated
+        /// 连接在显式终止信号前结束（SSE 自然 EOF、非 token 原因的 incomplete）。
+        case transportInterrupted
+        /// 服务端拒绝生成（content_filter / refusal）。
+        case refused
+        /// 服务端暂停（Anthropic pause_turn）。
+        case paused
+        /// 服务端报告失败（response.failed）。
+        case failed
+        /// 被取消。
+        case cancelled
+    }
+
+    public let kind: Kind
+    /// 供应商原始停止原因字符串（如 "length"、"end_turn"），仅用于诊断。
+    public let rawReason: String?
+
+    public init(kind: Kind, rawReason: String? = nil) {
+        self.kind = kind
+        self.rawReason = rawReason
+    }
+
+    public static let completed = AIStreamTermination(kind: .completed)
+}
+
 public enum AIStreamEvent: Equatable, Sendable {
-    case started(model: String)
+    case started(model: String, requestID: String? = nil)
     /// Provider has explicitly classified this token as reasoning/thinking.
     /// It is presentation-only and must never be persisted as conversation.
     case reasoningDelta(String)
@@ -1070,8 +1185,19 @@ public enum AIStreamEvent: Equatable, Sendable {
     case toolCall(AIToolCall)
     /// Provider hosted web/search 返回的来源。
     case webCitations([AIWebCitation])
+    /// 供应商原生推理续接状态（签名思考块 / reasoning_content / 原生
+    /// reasoning item）。ToolLoop 按序追加进 transcript，由匹配 vendor 的
+    /// codec 在续接请求中原样回放。
+    case providerContinuation(AIProviderContinuation)
+    /// 正常完成（stop / end_turn / response.completed / 显式 [DONE]）。
+    /// 语义等价于 terminated(.completed)，保留独立事件以兼容既有消费方。
     case completed
-    case usage(input: Int, output: Int)
+    /// 非正常完成的终止：截断、连接提前结束、拒绝、暂停、失败等。
+    /// 这是该流的最后一帧；消费方不得把任务标记为正常完成。
+    case terminated(AIStreamTermination)
+    /// Token 用量。cache/reasoning 明细未提供时保持 nil，不填 0。
+    /// 输入口径见 `AICompletionResponse.inputTokens` 注释。
+    case usage(input: Int, output: Int, cacheRead: Int? = nil, cacheCreation: Int? = nil, reasoning: Int? = nil)
 
 }
 
@@ -1113,5 +1239,17 @@ public struct MockAIProvider: AIProvider {
             continuation.yield(.completed)
             continuation.finish()
         }
+    }
+}
+
+public extension AIProviderConfiguration {
+    func continuationScope(model: String) -> String {
+        "\(baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))|\(apiPath.trimmingCharacters(in: CharacterSet(charactersIn: "/")))|\(model)"
+    }
+}
+
+extension AICompletionResponse {
+    func bindingContinuations(to scope: String) -> Self {
+        Self(model: model, content: content, reasoning: reasoning, inputTokens: inputTokens, outputTokens: outputTokens, cacheReadTokens: cacheReadTokens, cacheCreationTokens: cacheCreationTokens, reasoningTokens: reasoningTokens, requestID: requestID, finishReason: finishReason, toolCalls: ["refusal", "content_filter"].contains(finishReason ?? "") ? nil : toolCalls, webCitations: webCitations, continuations: continuations?.map { $0.bound(to: scope) })
     }
 }

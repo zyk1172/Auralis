@@ -4,10 +4,9 @@
 package com.auralis.core.ai
 
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -100,6 +99,20 @@ class AnthropicMessagesProvider(
         configuration.customHeaders.forEach { (name, value) -> put(name, value) }
     }
 
+    /**
+     * 解析本次请求实际使用的思考方言（AI-02）。
+     * 未开思考 / 端点未声明支持 / maxTokens 无法容纳 budget → 不发送；
+     * Automatic 对 Anthropic Messages 解析为 Manual（当前稳定形态）。
+     */
+    internal fun resolvedDialect(reasoning: AiReasoningConfiguration?, maxTokens: Int): AiReasoningDialect {
+        if (reasoning == null || !reasoning.enabled) return AiReasoningDialect.Disabled
+        if (!configuration.supportsReasoningControl || maxTokens <= 1) return AiReasoningDialect.Disabled
+        return when (configuration.reasoningDialect) {
+            AiReasoningDialect.Automatic -> AiReasoningDialect.Manual
+            else -> configuration.reasoningDialect
+        }
+    }
+
     internal fun requestBody(request: AiCompletionRequest, stream: Boolean): JsonObject {
         val system = request.messages
             .filter { it.role == AiMessage.Role.System }
@@ -107,28 +120,47 @@ class AnthropicMessagesProvider(
             .filter { it.isNotEmpty() }
             .joinToString("\n\n")
         val disableTools = request.toolChoice == AiToolChoice.None
-        val reasoningEnabled = request.reasoning?.enabled == true &&
-            configuration.supportsReasoningControl && request.maxTokens > 1
+        val chosenDialect = resolvedDialect(request.reasoning, request.maxTokens)
+        val forced = request.toolChoice == AiToolChoice.Required || request.toolChoice is AiToolChoice.Named
+        val dialect = if ((forced && chosenDialect == AiReasoningDialect.Manual) || (chosenDialect == AiReasoningDialect.Manual && request.maxTokens <= 1_024)) AiReasoningDialect.Disabled else chosenDialect
 
         return buildJsonObject {
             put("model", request.model)
             put("max_tokens", request.maxTokens)
-            put("messages", encodeMessages(request.messages))
+            put("messages", encodeMessages(request.messages, request.model))
             if (system.isNotEmpty()) put("system", system)
-            if (!reasoningEnabled && request.temperature.isFinite()) put("temperature", request.temperature)
+            if (dialect == AiReasoningDialect.Disabled && request.temperature.isFinite()) {
+                put("temperature", request.temperature)
+            }
             if (stream) put("stream", true)
 
-            if (reasoningEnabled) {
-                val suggested = when (request.reasoning?.effort) {
-                    AiReasoningEffort.Minimal, AiReasoningEffort.Low -> 1_024
-                    AiReasoningEffort.Medium -> 2_048
-                    AiReasoningEffort.High -> 4_096
-                    null -> 2_048
+            when (dialect) {
+                AiReasoningDialect.Manual -> {
+                    // effort→budget 映射仅在 Manual 模式使用。
+                    val suggested = when (request.reasoning?.effort) {
+                        AiReasoningEffort.Minimal, AiReasoningEffort.Low -> 1_024
+                        AiReasoningEffort.Medium -> 2_048
+                        AiReasoningEffort.High -> 4_096
+                        null -> 2_048
+                    }
+                    putJsonObject("thinking") {
+                        put("type", "enabled")
+                        put("budget_tokens", suggested.coerceAtMost(request.maxTokens - 1).coerceAtLeast(1))
+                    }
                 }
-                putJsonObject("thinking") {
-                    put("type", "enabled")
-                    put("budget_tokens", suggested.coerceAtMost(request.maxTokens - 1).coerceAtLeast(1))
+
+                AiReasoningDialect.Adaptive -> {
+                    putJsonObject("thinking") { put("type", "adaptive") }
+                    putJsonObject("output_config") {
+                        put("effort", when (request.reasoning?.effort) {
+                            AiReasoningEffort.Minimal, AiReasoningEffort.Low -> "low"
+                            AiReasoningEffort.High -> "high"
+                            else -> "medium"
+                        })
+                    }
                 }
+
+                else -> Unit
             }
 
             val tools = request.tools.orEmpty()
@@ -169,7 +201,7 @@ class AnthropicMessagesProvider(
      * 将中立 transcript 投影成 Anthropic content blocks。
      * 连续 tool 结果必须合并到同一个 user message，避免破坏并行工具调用与结果的关联。
      */
-    internal fun encodeMessages(source: List<AiMessage>): JsonArray = buildJsonArray {
+    internal fun encodeMessages(source: List<AiMessage>, model: String = configuration.model): JsonArray = buildJsonArray {
         var index = 0
         while (index < source.size) {
             val message = source[index]
@@ -193,6 +225,8 @@ class AnthropicMessagesProvider(
                     addJsonObject {
                         put("role", "assistant")
                         putJsonArray("content") {
+                            val native = configuration.nativeItems(message, AiProviderToolMode.AnthropicMessages, model)
+                            if (native != null) native.forEach { add(it) } else {
                             if (message.content.isNotEmpty()) {
                                 addJsonObject {
                                     put("type", "text")
@@ -212,6 +246,7 @@ class AnthropicMessagesProvider(
                                     put("type", "text")
                                     put("text", "")
                                 }
+                            }
                             }
                         }
                     }
@@ -238,38 +273,65 @@ class AnthropicMessagesProvider(
         }
     }
 
-    private suspend fun executeJson(body: JsonObject): Pair<Int, String> = withContext(Dispatchers.IO) {
+    private suspend fun executeJson(body: JsonObject): Pair<Int, String> {
         val builder = Request.Builder()
             .url(endpoint())
             .post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
         headers(stream = false).forEach { (name, value) -> builder.header(name, value) }
-        okHttp.newCall(builder.build()).execute().use { response ->
-            response.code to response.body?.string().orEmpty()
-        }
+        // AI-06：可取消桥接（协程取消/超时 → Call.cancel()，阻塞读可被打断）。
+        return okHttp.executeForString(builder.build())
     }
 
-    private suspend fun executeStreaming(body: JsonObject): okhttp3.Response = withContext(Dispatchers.IO) {
+    /** 流式：返回 (Call, Response)，读取响应体期间须用 [useCancellable] 响应取消。 */
+    private suspend fun executeStreaming(body: JsonObject): Pair<okhttp3.Call, okhttp3.Response> {
         val builder = Request.Builder()
             .url(endpoint())
             .post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
         headers(stream = true).forEach { (name, value) -> builder.header(name, value) }
-        val response = okHttp.newCall(builder.build()).execute()
+        val call = okHttp.newCall(builder.build())
+        val response = try {
+            call.awaitResponse()
+        } catch (e: java.io.IOException) {
+            call.rethrowAsCancellation(e)
+            throw e
+        }
         if (!response.isSuccessful) {
             val status = response.code
-            val detail = response.body?.string().orEmpty()
-            response.close()
+            val detail = response.useCancellable(call) { it.body?.string().orEmpty() }
             throw classify(status, detail)
         }
-        response
+        return call to response
     }
 
+    /**
+     * 错误详情是否指向 thinking 参数本身（AI-02：错误归因到参数级别）。
+     * 命中时仅本次请求去掉 thinking 重试一次，绝不永久关闭思考能力。
+     */
+    internal fun mentionsThinking(detail: String): Boolean {
+        val d = detail.lowercase()
+        return d.contains("thinking") || d.contains("budget_tokens")
+    }
+
+    /** 去掉 thinking 字段的请求体（参数级降级副本）。 */
+    internal fun withoutThinking(body: JsonObject): JsonObject =
+        JsonObject(body.toMutableMap().apply { remove("thinking") })
+
     override suspend fun complete(request: AiCompletionRequest): AiCompletionResponse {
-        val (status, raw) = try {
-            executeJson(requestBody(request, stream = false))
+        val body = requestBody(request, stream = false)
+        var (status, raw) = try {
+            executeJson(body)
         } catch (e: AiProviderException) {
+            throw e
+        } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             throw classify(0, e.message ?: e.javaClass.simpleName, e)
+        }
+        // 参数级降级：端点明确拒绝 thinking 时仅本次去掉该字段重试一次。
+        if ((status == 400 || status == 422) && body.containsKey("thinking") && mentionsThinking(raw)) {
+            val retry = executeJson(withoutThinking(body))
+            status = retry.first
+            raw = retry.second
         }
         if (status !in 200..299) throw classify(status, raw)
         return parseCompletion(raw, request.model)
@@ -300,7 +362,7 @@ class AnthropicMessagesProvider(
             }
         }
         val usage = root["usage"]?.jsonObject
-        return AiCompletionResponse(
+        val result = AiCompletionResponse(
             model = root["model"]?.jsonPrimitive?.contentOrNull() ?: fallbackModel,
             content = answer,
             reasoning = reasoning.takeIf { it.isNotEmpty() },
@@ -308,7 +370,12 @@ class AnthropicMessagesProvider(
             outputTokens = usage?.get("output_tokens")?.jsonPrimitive?.contentOrNull()?.toIntOrNull(),
             finishReason = root["stop_reason"]?.let { if (it is JsonNull) null else it.jsonPrimitive.contentOrNull() },
             toolCalls = calls.takeIf { it.isNotEmpty() },
+            continuation = AiProviderContinuation(AiProviderToolMode.AnthropicMessages,
+                configuration.continuationScope(fallbackModel), root["content"]?.jsonArray.orEmpty().mapNotNull { it as? JsonObject }),
+            termination = AiStreamTermination.anthropic(root["stop_reason"]?.let { if (it is JsonNull) null else it.jsonPrimitive.contentOrNull() }),
         )
+        result.termination.requireComplete()
+        return result
     }
 
     private data class ToolFragment(
@@ -327,6 +394,7 @@ class AnthropicMessagesProvider(
     private fun nonStreamingProjection(request: AiCompletionRequest): Flow<AiStreamEvent> = flow {
         val response = complete(request)
         emit(AiStreamEvent.Started(response.model))
+        response.continuation?.let { emit(AiStreamEvent.Continuation(it)) }
         response.reasoning?.takeIf { it.isNotEmpty() }?.let { emit(AiStreamEvent.ReasoningDelta(it)) }
         response.content.takeIf { it.isNotEmpty() }?.let { emit(AiStreamEvent.AnswerDelta(it)) }
         response.toolCalls.orEmpty().forEach { emit(AiStreamEvent.ToolCall(it)) }
@@ -337,17 +405,30 @@ class AnthropicMessagesProvider(
     }
 
     private fun anthropicStream(request: AiCompletionRequest): Flow<AiStreamEvent> = flow {
-        val body = requestBody(request, stream = true)
+        var body = requestBody(request, stream = true)
         val fragments = linkedMapOf<Int, ToolFragment>()
         var inputTokens = 0
         var outputTokens = 0
         var completed = false
+        val state = NativeStreamState()
         try {
-            val response = executeStreaming(body)
-            response.use { resp ->
+            var (call, response) = try {
+                executeStreaming(body)
+            } catch (e: AiProviderException) {
+                // 参数级降级：端点明确拒绝 thinking 时仅本次去掉该字段重试一次。
+                if ((e.httpStatus == 400 || e.httpStatus == 422) && body.containsKey("thinking") &&
+                    mentionsThinking(e.message ?: "")
+                ) {
+                    body = withoutThinking(body)
+                    executeStreaming(body)
+                } else {
+                    throw e
+                }
+            }
+            emit(AiStreamEvent.Started(request.model))
+            response.useCancellable(call) { resp ->
                 val reader = resp.body?.charStream()?.buffered()
                     ?: throw AiProviderException(AiProviderFailureKind.ProviderUnavailable, "Anthropic 流式响应体为空")
-                emit(AiStreamEvent.Started(request.model))
                 var dataLine = StringBuilder()
                 while (true) {
                     val line = reader.readLine() ?: break
@@ -355,7 +436,7 @@ class AnthropicMessagesProvider(
                         if (dataLine.isNotEmpty()) {
                             val payload = dataLine.toString()
                             dataLine = StringBuilder()
-                            val result = handleSsePayload(payload, fragments) { event -> emit(event) }
+                            val result = handleSsePayload(payload, fragments, state, request.model) { event -> emit(event) }
                             inputTokens = result.inputTokens ?: inputTokens
                             outputTokens = result.outputTokens ?: outputTokens
                             if (result.completed) {
@@ -371,7 +452,7 @@ class AnthropicMessagesProvider(
                     }
                 }
                 if (!completed && dataLine.isNotEmpty()) {
-                    val result = handleSsePayload(dataLine.toString(), fragments) { emit(it) }
+                    val result = handleSsePayload(dataLine.toString(), fragments, state, request.model) { emit(it) }
                     inputTokens = result.inputTokens ?: inputTokens
                     outputTokens = result.outputTokens ?: outputTokens
                     completed = result.completed
@@ -379,15 +460,41 @@ class AnthropicMessagesProvider(
             }
         } catch (e: AiProviderException) {
             throw e
+        } catch (e: CancellationException) {
+            // 取消（含 withTimeout 硬期限）不参与错误分类，直接传播。
+            throw e
         } catch (e: Exception) {
             throw classify(0, e.message ?: e.javaClass.simpleName, e)
         }
 
         if (!completed) {
-            flushToolFragments(fragments) { emit(it) }
-            if (inputTokens > 0 || outputTokens > 0) emit(AiStreamEvent.Usage(inputTokens, outputTokens))
-            emit(AiStreamEvent.Completed)
+            if (configuration.assumesImplicitStreamTermination) {
+                finishStream(fragments, state, request.model, AiStreamTermination.anthropic(state.stopReason)) { emit(it) }
+            } else emit(AiStreamEvent.Terminated(AiStreamTermination(AiStreamTerminationKind.Interrupted, "EOF")))
         }
+    }
+
+    private data class NativeStreamState(
+        val blocks: MutableMap<Int, JsonObject> = linkedMapOf(),
+        var stopReason: String? = null,
+    )
+
+    private suspend fun finishStream(
+        fragments: MutableMap<Int, ToolFragment>, state: NativeStreamState, model: String,
+        termination: AiStreamTermination, emit: suspend (AiStreamEvent) -> Unit,
+    ) {
+        if (termination.kind in setOf(AiStreamTerminationKind.Completed, AiStreamTerminationKind.ToolCallsReady)) {
+            fragments.forEach { (index, fragment) ->
+                val block = state.blocks[index]?.toMutableMap() ?: return@forEach
+                block["input"] = if (fragment.arguments.isEmpty()) fragment.initialInput else
+                    runCatching { json.parseToJsonElement(fragment.arguments) }.getOrElse { JsonPrimitive(fragment.arguments) }
+                state.blocks[index] = JsonObject(block)
+            }
+            flushToolFragments(fragments, emit)
+            emit(AiStreamEvent.Continuation(AiProviderContinuation(AiProviderToolMode.AnthropicMessages,
+                configuration.continuationScope(model), state.blocks.toSortedMap().values.toList())))
+            emit(AiStreamEvent.Completed)
+        } else emit(AiStreamEvent.Terminated(termination))
     }
 
     private data class SseResult(
@@ -399,6 +506,8 @@ class AnthropicMessagesProvider(
     private suspend fun handleSsePayload(
         payload: String,
         fragments: MutableMap<Int, ToolFragment>,
+        state: NativeStreamState,
+        model: String,
         emit: suspend (AiStreamEvent) -> Unit,
     ): SseResult {
         val root = runCatching { json.parseToJsonElement(payload).jsonObject }.getOrElse {
@@ -415,6 +524,7 @@ class AnthropicMessagesProvider(
                 val index = root["index"]?.jsonPrimitive?.contentOrNull()?.toIntOrNull()
                 val block = root["content_block"]?.jsonObject
                 if (index != null && block != null) {
+                    state.blocks[index] = block
                     when (block["type"]?.jsonPrimitive?.contentOrNull()) {
                         "tool_use" -> fragments[index] = ToolFragment(
                             index = index,
@@ -433,6 +543,18 @@ class AnthropicMessagesProvider(
 
             "content_block_delta" -> {
                 val delta = root["delta"]?.jsonObject
+                val index = root["index"]?.jsonPrimitive?.contentOrNull()?.toIntOrNull()
+                val native = state.blocks[index]?.toMutableMap()
+                val field = when (delta?.get("type")?.jsonPrimitive?.contentOrNull()) {
+                    "text_delta" -> "text"
+                    "thinking_delta" -> "thinking"
+                    "signature_delta" -> "signature"
+                    else -> null
+                }
+                if (index != null && native != null && field != null) {
+                    native[field] = JsonPrimitive(native[field]?.jsonPrimitive?.contentOrNull().orEmpty() + delta?.get(field)?.jsonPrimitive?.contentOrNull().orEmpty())
+                    state.blocks[index] = JsonObject(native)
+                }
                 when (delta?.get("type")?.jsonPrimitive?.contentOrNull()) {
                     "text_delta" -> delta["text"]?.jsonPrimitive?.contentOrNull()?.takeIf { it.isNotEmpty() }
                         ?.let { emit(AiStreamEvent.AnswerDelta(it)) }
@@ -448,13 +570,13 @@ class AnthropicMessagesProvider(
             }
 
             "message_delta" -> {
+                root["delta"]?.jsonObject?.get("stop_reason")?.let { if (it !is JsonNull) state.stopReason = it.jsonPrimitive.contentOrNull() }
                 val usage = root["usage"]?.jsonObject
                 SseResult(outputTokens = usage?.get("output_tokens")?.jsonPrimitive?.contentOrNull()?.toIntOrNull())
             }
 
             "message_stop" -> {
-                flushToolFragments(fragments, emit)
-                emit(AiStreamEvent.Completed)
+                finishStream(fragments, state, model, AiStreamTermination.anthropic(state.stopReason), emit)
                 SseResult(completed = true)
             }
 
@@ -547,6 +669,8 @@ class AnthropicMessagesProvider(
 
     companion object {
         private fun defaultClient(timeoutMillis: Long): OkHttpClient = OkHttpClient.Builder()
+            // AI-06：callTimeout 是整个调用的硬期限（含响应体读取），与请求级期限对齐。
+            .callTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
             .connectTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
             .readTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
             .writeTimeout(timeoutMillis, TimeUnit.MILLISECONDS)

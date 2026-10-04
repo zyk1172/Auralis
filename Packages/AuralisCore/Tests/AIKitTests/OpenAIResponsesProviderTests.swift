@@ -419,7 +419,12 @@ struct OpenAIResponsesProviderTests {
 
     @Test func parsesCompletedFailedAndErrorEvents() {
         #expect(OpenAICompatibleProvider.parseResponsesStreamEvent(#"{"type":"response.completed"}"#) == .done)
-        #expect(OpenAICompatibleProvider.parseResponsesStreamEvent(#"{"type":"response.incomplete"}"#) == .done)
+        // AI-03：incomplete 不是完成。非 max_output_tokens 原因一律按中断处理。
+        #expect(OpenAICompatibleProvider.parseResponsesStreamEvent(#"{"type":"response.incomplete"}"#)
+            == .terminated(AIStreamTermination(kind: .transportInterrupted, rawReason: "incomplete")))
+        #expect(OpenAICompatibleProvider.parseResponsesStreamEvent(
+            #"{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}"#
+        ) == .terminated(AIStreamTermination(kind: .truncated, rawReason: "max_output_tokens")))
 
         let failed = OpenAICompatibleProvider.parseResponsesStreamEvent(
             #"{"type":"response.failed","response":{"error":{"message":"上游超时"}}}"#
@@ -852,11 +857,17 @@ struct OpenAIResponsesNetworkTests {
 
         data: {"type":"response.completed","response":{"id":"resp_tool"}}
         """
+        let roundTripBody = """
+        data: {"type":"response.output_text.delta","delta":"能力可用"}
+
+        data: {"type":"response.completed","response":{"id":"resp_roundtrip"}}
+        """
         AIKitMockURLProtocol.reset(stubs: [
             .response(data: Data(#"{"data":[{"id":"test-model"}]}"#.utf8)),
             .response(data: Data(stubBody.utf8)),
             .response(headers: ["Content-Type": "text/event-stream"], data: Data(sse.utf8)),
             .response(headers: ["Content-Type": "text/event-stream"], data: Data(toolBody.utf8)),
+            .response(headers: ["Content-Type": "text/event-stream"], data: Data(roundTripBody.utf8)),
             .response(headers: ["Content-Type": "text/event-stream"], data: Data(toolBody.utf8)),
             .response(data: Data(stubBody.utf8)),
             .response(data: Data(stubBody.utf8)),
@@ -868,7 +879,7 @@ struct OpenAIResponsesNetworkTests {
         #expect(result.model == "gpt-4.1")
 
         let requests = AIKitMockURLProtocol.requests
-        #expect(requests.count == 7)
+        #expect(requests.count == 8)
         let object = try requestObject(from: requests[1])
         #expect(object["max_output_tokens"] as? Int == 32)
         #expect(object["input"] != nil)
@@ -878,12 +889,18 @@ struct OpenAIResponsesNetworkTests {
         #expect(nativeProbe["tools"] != nil)
         #expect(nativeProbe["tool_choice"] == nil)
         #expect(nativeProbe["max_output_tokens"] as? Int == auralisDefaultMaxOutputTokens)
-        let jsonModeProbe = try requestObject(from: requests[5])
-        #expect(((jsonModeProbe["text"] as? [String: Any])?["format"] as? [String: Any])?["type"] as? String == "json_object")
-        let schemaProbe = try requestObject(from: requests[6])
-        #expect(((schemaProbe["text"] as? [String: Any])?["format"] as? [String: Any])?["name"] as? String == "auralis_probe")
-        let toolChoiceProbe = try requestObject(from: requests[4])
+        // AI-09：探测升级为完整 round-trip——第二阶段必须把模拟工具结果
+        // 按同一 call_id 回灌（function_call + function_call_output 配对）。
+        let roundTripProbe = try requestObject(from: requests[4])
+        let roundTripInput = try #require(roundTripProbe["input"] as? [[String: Any]])
+        #expect(roundTripInput.contains { $0["type"] as? String == "function_call" && $0["call_id"] as? String == "probe" })
+        #expect(roundTripInput.contains { $0["type"] as? String == "function_call_output" && $0["call_id"] as? String == "probe" })
+        let toolChoiceProbe = try requestObject(from: requests[5])
         #expect(toolChoiceProbe["tool_choice"] as? String == "required")
+        let jsonModeProbe = try requestObject(from: requests[6])
+        #expect(((jsonModeProbe["text"] as? [String: Any])?["format"] as? [String: Any])?["type"] as? String == "json_object")
+        let schemaProbe = try requestObject(from: requests[7])
+        #expect(((schemaProbe["text"] as? [String: Any])?["format"] as? [String: Any])?["name"] as? String == "auralis_probe")
     }
 
     /// Chat 路径回归：apiPath 为 chat/completions 时仍用旧格式，不受 Responses 改动影响。
@@ -972,27 +989,53 @@ struct OpenAIResponsesNetworkTests {
         #expect(events.contains { if case .answerDelta = $0 { return true }; return false } == false)
     }
 
-    /// 网关不发 [DONE] / response.completed 也视为正常结束（沿用 Chat 路径行为）。
-    @Test func streamsEndingWithoutTerminalEventStillCompletes() async throws {
+    /// 网关不发 [DONE] / response.completed 的 EOF：默认不再是「正常完成」，
+    /// 而是 transportInterrupted；只有显式配置兼容策略的端点才按 completed 处理。
+    @Test func streamsEndingWithoutTerminalEventIsInterruptedByDefault() async throws {
         let sse = """
         data: {"type":"response.output_text.delta","delta":"收"}
 
         data: {"type":"response.output_text.delta","delta":"到"}
         """
         AIKitMockURLProtocol.reset(stubs: [
-            .response(statusCode: 200, headers: ["Content-Type": "text/event-stream"], data: Data(sse.utf8))
+            .response(statusCode: 200, headers: ["Content-Type": "text/event-stream"], data: Data(sse.utf8)),
+            .response(statusCode: 200, headers: ["Content-Type": "text/event-stream"], data: Data(sse.utf8)),
         ])
-        let provider = makeProvider(session: makeMockSession())
 
+        // 默认：无显式终止信号的 EOF → transportInterrupted，正文仍完整保留。
         var events: [AIStreamEvent] = []
-        for try await event in provider.stream(
+        for try await event in makeProvider(session: makeMockSession()).stream(
             AICompletionRequest(model: "test-model", messages: [AIMessage(role: .user, content: "hi")])
         ) {
             events.append(event)
         }
         #expect(events.contains(.answerDelta("收")))
         #expect(events.contains(.answerDelta("到")))
-        #expect(events.last == .completed)
+        #expect(events.last == .terminated(AIStreamTermination(
+            kind: .transportInterrupted,
+            rawReason: "eof_without_terminal_signal"
+        )))
+
+        // 显式兼容策略：确认端点以 EOF 为正常结束后，才按 completed 处理。
+        let relaxedProvider = OpenAICompatibleProvider(
+            configuration: AIProviderConfiguration(
+                name: "test",
+                baseURL: URL(string: "http://localhost:11434")!,
+                apiPath: "/v1/responses",
+                model: "test-model",
+                supportsToolCalling: true,
+                assumesImplicitStreamTermination: true
+            ),
+            credentialVault: KeychainCredentialVault(),
+            session: makeMockSession()
+        )
+        var relaxedEvents: [AIStreamEvent] = []
+        for try await event in relaxedProvider.stream(
+            AICompletionRequest(model: "test-model", messages: [AIMessage(role: .user, content: "hi")])
+        ) {
+            relaxedEvents.append(event)
+        }
+        #expect(relaxedEvents.last == .completed)
     }
 
     @Test func responsesEOFWithIncompleteFunctionCallIsRetryableFailure() async {
