@@ -290,8 +290,59 @@ public struct AnthropicMessagesProvider: AIProvider {
             ?? http.value(forHTTPHeaderField: "x-request-id")
     }
 
-    public func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+    /// Diagnostics may explicitly reject SSE while ordinary completion remains usable.
+    /// Project that non-streaming request into the neutral stream contract without
+    /// collapsing refusal into normal completion.
+    private func nonStreamingProjection(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
         AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let response = try await complete(request)
+                    continuation.yield(.started(model: response.model, requestID: response.requestID))
+                    if let reasoning = response.reasoning, !reasoning.isEmpty {
+                        continuation.yield(.reasoningDelta(reasoning))
+                    }
+                    if !response.content.isEmpty {
+                        continuation.yield(.answerDelta(response.content))
+                    }
+                    for item in response.continuations ?? [] {
+                        continuation.yield(.providerContinuation(
+                            item.bound(to: configuration.continuationScope(model: request.model))
+                        ))
+                    }
+                    for toolCall in response.toolCalls ?? [] {
+                        continuation.yield(.toolCall(toolCall))
+                    }
+                    if response.inputTokens != nil || response.outputTokens != nil {
+                        continuation.yield(.usage(
+                            input: response.inputTokens ?? 0,
+                            output: response.outputTokens ?? 0,
+                            cacheRead: response.cacheReadTokens,
+                            cacheCreation: response.cacheCreationTokens,
+                            reasoning: response.reasoningTokens
+                        ))
+                    }
+                    let termination = Self.termination(forStopReason: response.finishReason)
+                    switch termination.kind {
+                    case .completed, .toolCallsReady:
+                        continuation.yield(.completed)
+                    default:
+                        continuation.yield(.terminated(termination))
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    public func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        if !configuration.usesStreaming {
+            return nonStreamingProjection(request)
+        }
+        return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     let body = try Self.requestBody(

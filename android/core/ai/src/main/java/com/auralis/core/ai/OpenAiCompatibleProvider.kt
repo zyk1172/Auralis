@@ -367,8 +367,14 @@ class OpenAiCompatibleProvider(
         response.continuation?.let { emit(AiStreamEvent.Continuation(it)) }
         response.reasoning?.takeIf { it.isNotEmpty() }?.let { emit(AiStreamEvent.ReasoningDelta(it)) }
         if (response.content.isNotEmpty()) emit(AiStreamEvent.AnswerDelta(response.content))
-        response.toolCalls?.forEach { emit(AiStreamEvent.ToolCall(it)) }
-        emit(AiStreamEvent.Completed)
+        if (response.termination.kind != AiStreamTerminationKind.Refused) {
+            response.toolCalls?.forEach { emit(AiStreamEvent.ToolCall(it)) }
+        }
+        when (response.termination.kind) {
+            AiStreamTerminationKind.Completed, AiStreamTerminationKind.ToolCallsReady ->
+                emit(AiStreamEvent.Completed)
+            else -> emit(AiStreamEvent.Terminated(response.termination))
+        }
     }
 
     private data class ChatToolFragment(

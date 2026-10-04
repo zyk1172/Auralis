@@ -80,13 +80,14 @@ struct OpenAIChatStreamingTests {
         override func stopLoading() {}
     }
 
-    private func makeProvider() -> OpenAICompatibleProvider {
+    private func makeProvider(usesStreaming: Bool = true) -> OpenAICompatibleProvider {
         OpenAICompatibleProvider(
             configuration: AIProviderConfiguration(
                 name: "test",
                 baseURL: URL(string: "http://localhost:11434")!,
                 apiPath: "/v1/chat/completions",
                 model: "test-model",
+                usesStreaming: usesStreaming,
                 supportsToolCalling: true
             ),
             credentialVault: KeychainCredentialVault(),
@@ -262,4 +263,27 @@ struct OpenAIChatStreamingTests {
         })
         #expect(events.last == .completed)
     }
+
+    @Test func nonStreamingContentFilterRemainsRefused() async throws {
+        let body = #"{"model":"test-model","choices":[{"message":{"role":"assistant","content":"请求被拒绝"},"finish_reason":"content_filter"}]}"#
+        ChatMockURLProtocol.reset(stubs: [.response(data: Data(body.utf8))])
+
+        var events: [AIStreamEvent] = []
+        for try await event in makeProvider(usesStreaming: false).stream(
+            AICompletionRequest(
+                model: "test-model",
+                messages: [AIMessage(role: .user, content: "hi")]
+            )
+        ) {
+            events.append(event)
+        }
+
+        #expect(events.contains(.answerDelta("请求被拒绝")))
+        #expect(events.last == .terminated(AIStreamTermination(
+            kind: .refused,
+            rawReason: "content_filter"
+        )))
+        #expect(!events.contains(.completed))
+    }
+
 }

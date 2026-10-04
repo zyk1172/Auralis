@@ -77,13 +77,14 @@ struct AnthropicMessagesProviderTests {
         return URLSession(configuration: configuration)
     }
 
-    private func makeProvider(supportsReasoningControl: Bool = false) -> AnthropicMessagesProvider {
+    private func makeProvider(supportsReasoningControl: Bool = false, usesStreaming: Bool = true) -> AnthropicMessagesProvider {
         AnthropicMessagesProvider(
             configuration: AIProviderConfiguration(
                 name: "test",
                 baseURL: URL(string: "https://relay.example.com")!,
                 apiPath: "/v1/messages",
                 model: "claude-test",
+                usesStreaming: usesStreaming,
                 supportsToolCalling: true,
                 supportsToolChoice: true,
                 supportsReasoningControl: supportsReasoningControl
@@ -287,6 +288,33 @@ struct AnthropicMessagesProviderTests {
         #expect(blocks.compactMap { $0["type"] as? String } == ["thinking", "tool_use"])
         #expect(blocks[0]["signature"] as? String == "sig")
         #expect(captured.originScope != nil)
+    }
+
+
+    @Test("Anthropic 非流式降级保留 refusal 终止语义")
+    func nonStreamingFallbackPreservesRefusal() async throws {
+        let response = #"{"id":"msg_refused","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"不能处理该请求"}],"stop_reason":"refusal","usage":{"input_tokens":3,"output_tokens":2}}"#
+        AnthropicMockURLProtocol.reset(data: Data(response.utf8))
+
+        var events: [AIStreamEvent] = []
+        for try await event in makeProvider(usesStreaming: false).stream(
+            AICompletionRequest(
+                model: "claude-test",
+                messages: [AIMessage(role: .user, content: "test")]
+            )
+        ) {
+            events.append(event)
+        }
+
+        let request = try #require(AnthropicMockURLProtocol.requests.first)
+        let body = try requestObject(request)
+        #expect(body["stream"] == nil)
+        #expect(events.contains(.answerDelta("不能处理该请求")))
+        #expect(events.last == .terminated(AIStreamTermination(
+            kind: .refused,
+            rawReason: "refusal"
+        )))
+        #expect(!events.contains(.completed))
     }
 
 }

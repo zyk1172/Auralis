@@ -397,11 +397,17 @@ class AnthropicMessagesProvider(
         response.continuation?.let { emit(AiStreamEvent.Continuation(it)) }
         response.reasoning?.takeIf { it.isNotEmpty() }?.let { emit(AiStreamEvent.ReasoningDelta(it)) }
         response.content.takeIf { it.isNotEmpty() }?.let { emit(AiStreamEvent.AnswerDelta(it)) }
-        response.toolCalls.orEmpty().forEach { emit(AiStreamEvent.ToolCall(it)) }
+        if (response.termination.kind != AiStreamTerminationKind.Refused) {
+            response.toolCalls.orEmpty().forEach { emit(AiStreamEvent.ToolCall(it)) }
+        }
         if (response.inputTokens != null || response.outputTokens != null) {
             emit(AiStreamEvent.Usage(response.inputTokens ?: 0, response.outputTokens ?: 0))
         }
-        emit(AiStreamEvent.Completed)
+        when (response.termination.kind) {
+            AiStreamTerminationKind.Completed, AiStreamTerminationKind.ToolCallsReady ->
+                emit(AiStreamEvent.Completed)
+            else -> emit(AiStreamEvent.Terminated(response.termination))
+        }
     }
 
     private fun anthropicStream(request: AiCompletionRequest): Flow<AiStreamEvent> = flow {

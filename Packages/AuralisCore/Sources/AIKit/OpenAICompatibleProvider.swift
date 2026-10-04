@@ -773,7 +773,15 @@ public struct OpenAICompatibleProvider: AIProvider {
                     if let citations = response.webCitations, !citations.isEmpty {
                         continuation.yield(.webCitations(citations))
                     }
-                    continuation.yield(.completed)
+                    let termination = response.finishReason.map {
+                        Self.termination(forChatFinishReason: $0)
+                    } ?? .completed
+                    switch termination.kind {
+                    case .completed, .toolCallsReady:
+                        continuation.yield(.completed)
+                    default:
+                        continuation.yield(.terminated(termination))
+                    }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)

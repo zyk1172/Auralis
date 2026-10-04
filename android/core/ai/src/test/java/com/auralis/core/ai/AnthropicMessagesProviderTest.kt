@@ -348,4 +348,29 @@ class AnthropicMessagesProviderTest {
         assertNull(events)
         assertTrue("流式读取必须可中断（实际 ${elapsed}ms）", elapsed < 5_000)
     }
+
+    @Test
+    fun `非流式 refusal 保留拒绝终止语义`() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"id":"msg_refused","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"不能处理该请求"}],"stop_reason":"refusal","usage":{"input_tokens":3,"output_tokens":2}}""",
+            ),
+        )
+        val events = provider(streaming = false).stream(
+            AiCompletionRequest(
+                model = "claude-test",
+                messages = listOf(AiMessage(AiMessage.Role.User, "test")),
+            ),
+        ).toList()
+
+        val request = server.takeRequest()
+        val body = Json.parseToJsonElement(request.body.readUtf8()).jsonObject
+        assertNull(body["stream"])
+        assertTrue(events.any { it is AiStreamEvent.AnswerDelta && it.text == "不能处理该请求" })
+        val terminal = events.last() as AiStreamEvent.Terminated
+        assertEquals(AiStreamTerminationKind.Refused, terminal.termination.kind)
+        assertEquals("refusal", terminal.termination.rawReason)
+        assertTrue(events.none { it is AiStreamEvent.Completed })
+    }
+
 }

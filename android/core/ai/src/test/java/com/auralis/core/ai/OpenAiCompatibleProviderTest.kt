@@ -315,4 +315,26 @@ class OpenAiCompatibleProviderTest {
         assertNull(events)
         assertTrue("流式读取必须可中断（实际 ${elapsed}ms）", elapsed < 5_000)
     }
+
+    @Test
+    fun `非流式 content filter 保留拒绝终止语义`() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"model":"test-model","choices":[{"message":{"role":"assistant","content":"请求被拒绝"},"finish_reason":"content_filter"}]}""",
+            ),
+        )
+        val events = provider(usesStreaming = false).stream(
+            AiCompletionRequest(
+                model = "test-model",
+                messages = listOf(AiMessage(AiMessage.Role.User, "hi")),
+            ),
+        ).toList()
+
+        assertTrue(events.any { it is AiStreamEvent.AnswerDelta && it.text == "请求被拒绝" })
+        val terminal = events.last() as AiStreamEvent.Terminated
+        assertEquals(AiStreamTerminationKind.Refused, terminal.termination.kind)
+        assertEquals("content_filter", terminal.termination.rawReason)
+        assertTrue(events.none { it is AiStreamEvent.Completed })
+    }
+
 }
