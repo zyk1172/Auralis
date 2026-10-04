@@ -1176,7 +1176,10 @@ struct OpenAIResponsesNetworkTests {
     }
 
     @Test func parsesResponsesRefusalAsVisibleRefusedContent() throws {
-        let response = try parse(#"{"id":"resp_refused","object":"response","model":"test-model","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"refusal","refusal":"不能处理该请求"}]}]}"#)
+        let response = try OpenAICompatibleProvider.parseResponsesCompletion(
+            data: Data(#"{"id":"resp_refused","object":"response","model":"test-model","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"refusal","refusal":"不能处理该请求"}]}]}"#.utf8),
+            fallbackModel: "test-model"
+        )
         #expect(response.content == "不能处理该请求")
         #expect(response.finishReason == "content_filter")
     }
