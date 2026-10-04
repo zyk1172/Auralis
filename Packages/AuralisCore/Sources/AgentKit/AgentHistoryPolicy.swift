@@ -74,6 +74,7 @@ public enum AgentHistoryPolicy {
 
     private static var legacyDefaultPermissions: AIPrivacyPermissions {
         var permissions = AIPrivacyPermissions()
+        permissions.allowsExternalDiscovery = true
         permissions.allowsLyrics = true
         permissions.allowsPlaybackHistory = true
         permissions.allowsFavoritesAndRatings = true
@@ -87,11 +88,17 @@ public enum AgentHistoryPolicy {
             for item in message.messages {
                 switch item {
                 case let .text(text):
-                    // Assistant text may be a persisted rendering of an older
-                    // tool result. Once a disclosure switch is closed, it is
-                    // no longer safe to replay opaque assistant prose whose
-                    // provenance cannot be recovered.
-                    if message.role == .user || permissions.allowPersistedAssistantText {
+                    // 助手正文按运行期披露标记（disclosureCategories）按类别过滤：
+                    // 只丢弃沾过已撤销类别的正文，普通解释与知识回答保留。
+                    // 旧数据没有标记（nil）时来源不可考，维持保守投影——
+                    // 只有全部本地披露类别开启才重放。
+                    if message.role == .user {
+                        content += text + "\n"
+                    } else if let disclosed = message.disclosureCategories {
+                        if disclosed.allSatisfy({ permissions.allows($0) }) {
+                            content += text + "\n"
+                        }
+                    } else if permissions.allowPersistedAssistantText {
                         content += text + "\n"
                     }
                 case let .trackCards(cards):
@@ -125,6 +132,7 @@ public enum AgentHistoryPolicy {
                     let artists = cards.map { "\($0.name)（artistID=\($0.globalID.description)，\($0.albumCount) 张专辑）" }
                     content += "（艺术家：\(artists.joined(separator: separator))）\n"
                 case let .webSources(sources):
+                    guard permissions.allowsExternalDiscovery else { continue }
                     let links = sources.prefix(5).map { "\($0.title)（\($0.url.absoluteString)）" }
                     content += "（联网来源：\(links.joined(separator: separator))）\n"
                 case let .playlistProposal(name, tracks):

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+import AIKit
 import Domain
 import Foundation
 import LocalCatalog
@@ -213,11 +214,24 @@ public struct AgentChatMessage: Codable, Sendable, Identifiable {
     public let role: Role
     public let messages: [AgentMessage]
     public let createdAt: Date
+    /// 生成这条消息的运行实际披露过的隐私类别（如歌词、播放历史）。
+    /// 历史投影据此按类别过滤：撤销某类别后，只丢弃沾过该类别数据的
+    /// 助手正文，普通解释不受影响。
+    /// - 空集合：运行未接触任何受限类别，正文总是可以重放。
+    /// - nil：旧数据或来源不可考，维持保守投影（全部类别开启才重放）。
+    public let disclosureCategories: Set<AIPrivacyCategory>?
 
-    public init(id: UUID = UUID(), role: Role, messages: [AgentMessage], createdAt: Date = .now) {
+    public init(
+        id: UUID = UUID(),
+        role: Role,
+        messages: [AgentMessage],
+        createdAt: Date = .now,
+        disclosureCategories: Set<AIPrivacyCategory>? = nil
+    ) {
         self.id = id
         self.role = role
         self.messages = messages
         self.createdAt = createdAt
+        self.disclosureCategories = disclosureCategories
     }
 }

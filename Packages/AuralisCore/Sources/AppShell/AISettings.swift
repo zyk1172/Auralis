@@ -188,6 +188,8 @@ struct AIConnectionSettings: Sendable {
     /// 单次回复输出上限（token）。
     var maxOutputTokens: Int
     var reasoning: AIReasoningConfiguration
+    var anthropicReasoningDialect: AnthropicReasoningDialect
+    var assumesImplicitStreamTermination: Bool
     /// Whether the configured context value is an explicit model fact rather
     /// than the legacy/default placeholder.
     var hasKnownContextWindow: Bool
@@ -206,6 +208,9 @@ struct AIConnectionSettings: Sendable {
         /// provider-neutral three-state reasoning mode existed.
         static let reasoningEnabled = "auralis.ai.reasoningEnabled"
         static let reasoningEffort = "auralis.ai.reasoningEffort"
+        static let anthropicReasoningDialect = "auralis.ai.anthropicReasoningDialect"
+        static let assumesImplicitStreamTermination = "auralis.ai.assumesImplicitStreamTermination"
+        static let implicitStreamTerminationScope = "auralis.ai.implicitStreamTerminationScope"
         static let hasKnownContextWindow = "auralis.ai.hasKnownContextWindow"
         static let verifiedCapabilities = "auralis.ai.verifiedProviderCapabilities"
     }
@@ -245,6 +250,10 @@ struct AIConnectionSettings: Sendable {
         )
         hasKnownContextWindow = defaults.object(forKey: Keys.hasKnownContextWindow) as? Bool
             ?? defaults.object(forKey: Keys.maxContextTokens) != nil
+        anthropicReasoningDialect = AnthropicReasoningDialect(rawValue: defaults.string(forKey: Keys.anthropicReasoningDialect) ?? "") ?? .manual
+        assumesImplicitStreamTermination = false
+        assumesImplicitStreamTermination = defaults.bool(forKey: Keys.assumesImplicitStreamTermination)
+            && defaults.string(forKey: Keys.implicitStreamTerminationScope) == endpointFingerprint
     }
 
     /// 把用户可能漏写协议的地址补全为合法 URL。
@@ -307,12 +316,16 @@ struct AIConnectionSettings: Sendable {
         "\(effectiveEndpointMode.title) · \(effectiveAPIPath)"
     }
 
-    private var capabilityFingerprint: String {
+    var endpointFingerprint: String {
         [
-            normalizedBaseURL()?.absoluteString.lowercased() ?? baseURL.lowercased(),
-            effectiveAPIPath.lowercased(),
-            model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+            normalizedBaseURL()?.absoluteString ?? baseURL,
+            effectiveAPIPath,
+            model.trimmingCharacters(in: .whitespacesAndNewlines),
         ].joined(separator: "|")
+    }
+
+    private var capabilityFingerprint: String {
+        "\(endpointFingerprint)|\(anthropicReasoningDialect.rawValue)|\(assumesImplicitStreamTermination)"
     }
 
     private var verifiedCapabilities: AIProviderDiagnostics? {
@@ -401,7 +414,9 @@ struct AIConnectionSettings: Sendable {
             // is enabled only for model families that expose thinking; generic
             // Chat Completions gateways remain opt-out until explicitly known.
             supportsReasoningControl: supportsReasoningControl
-                && verifiedCapabilities?.reasoning != .failed
+                && verifiedCapabilities?.reasoning != .failed,
+            assumesImplicitStreamTermination: assumesImplicitStreamTermination,
+            anthropicReasoningDialect: anthropicReasoningDialect
         )
         if effectiveEndpointMode == .anthropicMessages {
             return AnthropicMessagesProvider(configuration: configuration, credentialVault: credentialVault, session: session)

@@ -80,13 +80,14 @@ struct OpenAIChatStreamingTests {
         override func stopLoading() {}
     }
 
-    private func makeProvider() -> OpenAICompatibleProvider {
+    private func makeProvider(usesStreaming: Bool = true) -> OpenAICompatibleProvider {
         OpenAICompatibleProvider(
             configuration: AIProviderConfiguration(
                 name: "test",
                 baseURL: URL(string: "http://localhost:11434")!,
                 apiPath: "/v1/chat/completions",
                 model: "test-model",
+                usesStreaming: usesStreaming,
                 supportsToolCalling: true
             ),
             credentialVault: KeychainCredentialVault(),
@@ -146,7 +147,9 @@ struct OpenAIChatStreamingTests {
         #expect(events.last == .completed)
     }
 
-    /// 网关不发 [DONE] 也视为正常结束，并把已收集的 tool calls 补发。
+    /// 网关不发 [DONE] / finish_reason 的 EOF：已收集的 tool calls 仍补发，
+    /// 但默认不再视为「正常完成」——以 transportInterrupted 显式收尾；
+    /// 显式配置兼容策略的端点才按 completed 处理。
     @Test func streamsToolCallsWithoutTerminalEvent() async throws {
         let sse = """
         data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_2","type":"function","function":{"name":"playTrack","arguments":"{\\"trackID\\":\\"srv:1\\"}"}}]}}]}
@@ -154,12 +157,12 @@ struct OpenAIChatStreamingTests {
         data: {"choices":[{"delta":{"content":"收"}}]}
         """
         ChatMockURLProtocol.reset(stubs: [
-            .response(statusCode: 200, headers: ["Content-Type": "text/event-stream"], data: Data(sse.utf8))
+            .response(statusCode: 200, headers: ["Content-Type": "text/event-stream"], data: Data(sse.utf8)),
+            .response(statusCode: 200, headers: ["Content-Type": "text/event-stream"], data: Data(sse.utf8)),
         ])
-        let provider = makeProvider()
 
         var events: [AIStreamEvent] = []
-        for try await event in provider.stream(
+        for try await event in makeProvider().stream(
             AICompletionRequest(model: "test-model", messages: [AIMessage(role: .user, content: "hi")])
         ) {
             events.append(event)
@@ -167,7 +170,31 @@ struct OpenAIChatStreamingTests {
 
         #expect(events.contains(.answerDelta("收")))
         #expect(events.contains(.toolCall(AIToolCall(id: "call_2", name: "playTrack", arguments: "{\"trackID\":\"srv:1\"}"))))
-        #expect(events.last == .completed)
+        #expect(events.last == .terminated(AIStreamTermination(
+            kind: .transportInterrupted,
+            rawReason: "eof_without_terminal_signal"
+        )))
+
+        // 显式兼容策略：确认端点以 EOF 为正常结束后按 completed 处理。
+        let relaxedProvider = OpenAICompatibleProvider(
+            configuration: AIProviderConfiguration(
+                name: "test",
+                baseURL: URL(string: "http://localhost:11434")!,
+                apiPath: "/v1/chat/completions",
+                model: "test-model",
+                supportsToolCalling: true,
+                assumesImplicitStreamTermination: true
+            ),
+            credentialVault: KeychainCredentialVault(),
+            session: makeMockSession()
+        )
+        var relaxedEvents: [AIStreamEvent] = []
+        for try await event in relaxedProvider.stream(
+            AICompletionRequest(model: "test-model", messages: [AIMessage(role: .user, content: "hi")])
+        ) {
+            relaxedEvents.append(event)
+        }
+        #expect(relaxedEvents.last == .completed)
     }
 
     /// 纯文本流：只有 delta + completed，不产出任何 toolCall。
@@ -236,4 +263,27 @@ struct OpenAIChatStreamingTests {
         })
         #expect(events.last == .completed)
     }
+
+    @Test func nonStreamingContentFilterRemainsRefused() async throws {
+        let body = #"{"model":"test-model","choices":[{"message":{"role":"assistant","content":"请求被拒绝"},"finish_reason":"content_filter"}]}"#
+        ChatMockURLProtocol.reset(stubs: [.response(data: Data(body.utf8))])
+
+        var events: [AIStreamEvent] = []
+        for try await event in makeProvider(usesStreaming: false).stream(
+            AICompletionRequest(
+                model: "test-model",
+                messages: [AIMessage(role: .user, content: "hi")]
+            )
+        ) {
+            events.append(event)
+        }
+
+        #expect(events.contains(.answerDelta("请求被拒绝")))
+        #expect(events.last == .terminated(AIStreamTermination(
+            kind: .refused,
+            rawReason: "content_filter"
+        )))
+        #expect(!events.contains(.completed))
+    }
+
 }

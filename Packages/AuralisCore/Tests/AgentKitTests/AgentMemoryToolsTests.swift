@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import AgentKit
+import AIKit
 import Domain
 import Foundation
 import LocalCatalog
@@ -11,11 +12,26 @@ import Testing
 private final class MemoryStubSystemService: AgentSystemService, @unchecked Sendable {
     var memories: [AgentMemoryEntry] = []
     var skills: [AgentSkillEntry] = []
+    var lastSavedSource: AgentMemorySource?
+    var lastSavedCategory: AIPrivacyCategory?
 
     func agentMemories() async -> [AgentMemoryEntry] { memories }
     func saveMemory(key: String, value: String) async -> Bool {
         memories.removeAll { $0.key == key }
         memories.append(AgentMemoryEntry(key: key, value: value))
+        return true
+    }
+    func saveMemory(
+        key: String,
+        value: String,
+        source: AgentMemorySource,
+        category: AIPrivacyCategory?,
+        expiresAt: Date?
+    ) async -> Bool {
+        lastSavedSource = source
+        lastSavedCategory = category
+        memories.removeAll { $0.key == key }
+        memories.append(AgentMemoryEntry(key: key, value: value, source: source, category: category, expiresAt: expiresAt))
         return true
     }
     func deleteMemory(key: String) async -> Bool {

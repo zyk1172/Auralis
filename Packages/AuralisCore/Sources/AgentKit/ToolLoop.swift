@@ -170,6 +170,15 @@ public struct ToolLoop {
         var webCitations: [AIWebCitation] = []
         var inputTokens: Int?
         var outputTokens: Int?
+        var cacheReadTokens: Int?
+        var cacheCreationTokens: Int?
+        var reasoningTokens: Int?
+        /// Provider 响应级请求 ID（用于把失败轮定位到具体端点响应）。
+        var requestID: String?
+        /// 本轮捕获的供应商原生推理续接状态；追加进 transcript 供续接回放。
+        var continuations: [AIProviderContinuation] = []
+        /// 本轮的统一终止语义；默认正常完成。
+        var termination: AIStreamTermination = .completed
     }
 
     /// Internal loop representation. Native provider calls stay structured all
@@ -310,6 +319,29 @@ public struct ToolLoop {
         if let scopedWebService = webService as? any AgentWebRunScopedService {
             await scopedWebService.beginRun(runID)
         }
+        // A new answer can quote prior assistant prose or recalled memories
+        // without making another tool call. Carry those provenance categories.
+        var inherited = Set<AIPrivacyCategory>()
+        for message in history where message.role == .assistant {
+            if let categories = message.disclosureCategories,
+               categories.allSatisfy({ context.privacyPermissions.allows($0) }) {
+                inherited.formUnion(categories)
+            } else if message.disclosureCategories == nil && context.privacyPermissions.allowPersistedAssistantText {
+                inherited.formUnion(AIPrivacyCategory.allCases)
+            }
+        }
+        for memory in context.memories where memory.isDisclosable(under: context.privacyPermissions) {
+            inherited.formUnion(memory.disclosureCategories ?? [])
+            if let category = memory.category { inherited.insert(category) }
+        }
+        for skill in context.skills where skill.isDisclosable(under: context.privacyPermissions) {
+            inherited.formUnion(skill.disclosureCategories ?? [])
+        }
+        // Structured prompt facts are also disclosed before the first tool.
+        if context.allowsMetadata { inherited.insert(.metadata) }
+        if context.privacyPermissions.allowsPlaybackHistory { inherited.insert(.playbackHistory) }
+        if context.allowsFavoritesAndRatings { inherited.insert(.favoritesAndRatings) }
+        await AgentRunDisclosureRegistry.shared.record(runID: runID, categories: inherited)
         // 用户消息先回显
         await emit(AgentChatMessage(
             id: executionLineage?.originUserMessageID ?? UUID(),
@@ -767,6 +799,9 @@ public struct ToolLoop {
         var indeterminateSideEffects = Set<String>()
         var cachedReadResults: [String: String] = [:]
         var readRepeatCounts: [String: Int] = [:]
+        // 供应商原生推理续接状态（按 assistant 消息 id 归档），续接请求时
+        // 由匹配 vendor 的 codec 原样回放。
+        var continuationsByMessageID: [UUID: [AIProviderContinuation]] = [:]
         // A one-time, Runtime-owned read-only expansion is a recovery from a
         // thin first schema window, not a substitute for model planning.
         var didAutomaticToolExpansion = false
@@ -844,12 +879,13 @@ public struct ToolLoop {
             conversation = ContextManager.trimByTokens(
                 conversation,
                 maxTokens: inputBudget,
-                preservingUserText: userText
+                preservingUserText: userText,
+                continuationTokenCosts: continuationsByMessageID.mapValues { $0.reduce(0) { $0 + ContextManager.estimatedTokens($1.payload.jsonString) } }
             )
 
             let request = AICompletionRequest(
                 model: model,
-                transcript: AITranscript(messages: conversation),
+                transcript: Self.transcript(for: conversation, continuations: continuationsByMessageID),
                 temperature: 0.3,
                 maxTokens: provider.capabilities.maxOutputTokens,
                 tools: nativeMode ? toolDefinitions : nil,
@@ -944,7 +980,12 @@ public struct ToolLoop {
             }
 
             if nativeMode, !nativeCalls.isEmpty {
-                conversation.append(AIMessage(role: .assistant, content: streamedText, toolCalls: nativeCalls))
+                let assistantMessage = AIMessage(role: .assistant, content: streamedText, toolCalls: nativeCalls)
+                conversation.append(assistantMessage)
+                // 续接状态归档到本回合：下一轮请求由 codec 按 vendor 回放。
+                if !outcome.continuations.isEmpty {
+                    continuationsByMessageID[assistantMessage.id] = outcome.continuations
+                }
             } else {
                 conversation.append(AIMessage(role: .assistant, content: streamedText))
             }
@@ -1552,6 +1593,12 @@ public struct ToolLoop {
         // Mutation / deterministic 任务的模型正文是 provisional：完成条件满足前
         // 不实时上屏，避免“已经替换好了”在真实副作用成功前误导用户。
         let buffersProvisionalText = Self.policyRequiresToolExecution(policy)
+        // 供应商原生推理续接状态（按 assistant 消息 id 归档）。
+        var continuationsByMessageID: [UUID: [AIProviderContinuation]] = [:]
+        // AI-11 诊断：协议/端点模式 + 每轮（请求/工具/恢复）分阶段记录。
+        diagnostics.providerProtocol = provider.capabilities.toolMode.rawValue
+        // 恢复轮计时：恢复分支注入后，到下一轮模型成功响应的耗时。
+        var pendingRecoveryStarted: Date?
 
         while true {
             let customSnapshot = await context.customToolRegistry.modelSnapshot()
@@ -1712,6 +1759,8 @@ public struct ToolLoop {
             let didUseForcedSkillCall = forcedSkillCall != nil
 
             let outcome: StreamOutcome
+            // AI-11 诊断：本轮请求阶段计时起点（forced skill call 无模型请求）。
+            var roundRequestStarted: Date?
             if didUseForcedSkillCall {
                 var forcedOutcome = StreamOutcome()
                 if nativeMode, let forcedSkillCall {
@@ -1744,7 +1793,8 @@ public struct ToolLoop {
                 conversation = ContextManager.trimByTokens(
                     conversation,
                     maxTokens: contextBudget,
-                    preservingUserText: userText
+                    preservingUserText: userText,
+                    continuationTokenCosts: continuationsByMessageID.mapValues { $0.reduce(0) { $0 + ContextManager.estimatedTokens($1.payload.jsonString) } }
                 )
 
                 // 单次回复上限真正来自用户配置（request.maxTokens 直接使用该值）。
@@ -1760,7 +1810,7 @@ public struct ToolLoop {
                 }
                 let request = AICompletionRequest(
                     model: model,
-                    transcript: AITranscript(messages: requestConversation),
+                    transcript: Self.transcript(for: requestConversation, continuations: continuationsByMessageID),
                     temperature: 0.3,
                     maxTokens: reservedOutput,
                     tools: nativeMode ? toolDefinitions : nil,
@@ -1768,6 +1818,8 @@ public struct ToolLoop {
                     hostedTools: hostedTools.isEmpty ? nil : hostedTools,
                     reasoning: context.reasoning
                 )
+                // AI-11 诊断：本轮请求阶段计时（含流式 + 兼容补发）。
+                roundRequestStarted = Date()
                 do {
                     // 确定性 mutation 任务：模型正文是 provisional，工具成功前不
                     // 实时上屏（避免“已经替换好了”等未经核实的成功声明误导用户）。
@@ -1793,6 +1845,7 @@ public struct ToolLoop {
                        !didRecoverSkillProviderFailure,
                        let recovery = activeSkill.handleProviderFailure(error) {
                         didRecoverSkillProviderFailure = true
+                        pendingRecoveryStarted = Date()
                         taskState.errors.append(recovery.message)
                         taskState.pendingActions = [recovery.message]
                         taskState.status = .waitingForTool
@@ -1810,6 +1863,7 @@ public struct ToolLoop {
                     }
                     if error is AgentRunnerError, !didRecoverProviderTimeout {
                         didRecoverProviderTimeout = true
+                        pendingRecoveryStarted = Date()
                         let recovery = "AI 回答等待已达到 360 秒上限；已停止这一轮并要求 Agent 改走不同的可用路径。"
                         taskState.errors.append(recovery)
                         taskState.pendingActions = [recovery]
@@ -1834,6 +1888,28 @@ public struct ToolLoop {
 
             didRecoverSkillProviderFailure = false
             didRecoverProviderTimeout = false
+
+            // AI-11 诊断：记录本轮请求阶段（模型、终止原因、request ID、
+            // token 分类）；工具阶段耗时在工具执行后补记到同一轮。
+            if !didUseForcedSkillCall {
+                var roundDiagnostics = AgentRoundDiagnostics(
+                    round: taskState.progress.modelRounds + 1,
+                    model: model,
+                    terminationReason: outcome.termination.rawReason ?? outcome.termination.kind.rawValue,
+                    requestDuration: roundRequestStarted.map { Date().timeIntervalSince($0) },
+                    providerRequestID: outcome.requestID,
+                    inputTokens: outcome.inputTokens,
+                    outputTokens: outcome.outputTokens,
+                    cacheReadTokens: outcome.cacheReadTokens,
+                    cacheCreationTokens: outcome.cacheCreationTokens,
+                    reasoningTokens: outcome.reasoningTokens
+                )
+                if let recoveryStarted = pendingRecoveryStarted {
+                    roundDiagnostics.recoveryDuration = Date().timeIntervalSince(recoveryStarted)
+                    pendingRecoveryStarted = nil
+                }
+                diagnostics.recordRound(roundDiagnostics)
+            }
 
             if !didUseForcedSkillCall {
                 await progress(AgentProgress(
@@ -2086,7 +2162,12 @@ public struct ToolLoop {
             } else if let skillInternalCall {
                 conversation.append(AIMessage(role: .assistant, content: "Stateful Skill 步骤：\(skillInternalCall.name)"))
             } else if nativeMode, !nativeCalls.isEmpty {
-                conversation.append(AIMessage(role: .assistant, content: streamedText, toolCalls: nativeCalls))
+                let assistantMessage = AIMessage(role: .assistant, content: streamedText, toolCalls: nativeCalls)
+                conversation.append(assistantMessage)
+                // 续接状态归档到本回合：下一轮请求由 codec 按 vendor 回放。
+                if !outcome.continuations.isEmpty {
+                    continuationsByMessageID[assistantMessage.id] = outcome.continuations
+                }
             } else {
                 conversation.append(AIMessage(role: .assistant, content: streamedText))
             }
@@ -2166,6 +2247,8 @@ public struct ToolLoop {
             // 本轮统计（用于合并工具轨迹展示）。
             var roundSearchCalls = 0
             var roundToolNames: Set<String> = []
+            // AI-11 诊断：本轮工具阶段计时。
+            let toolPhaseStarted = Date()
 
             for rawCall in calls {
                 var call = rawCall
@@ -2680,6 +2763,8 @@ public struct ToolLoop {
             }
 
             conversation.append(contentsOf: toolMessages)
+            // AI-11 诊断：补记本轮工具阶段耗时到同一轮记录。
+            diagnostics.recordLastRoundToolPhase(duration: Date().timeIntervalSince(toolPhaseStarted))
             if shouldCompactSkillTranscript, let activeSkill {
                 conversation = Self.compactSkillTranscript(
                     conversation,
@@ -2994,6 +3079,25 @@ public struct ToolLoop {
             return AIMessage(role: .tool, content: content, toolCallID: callID)
         }
         return AIMessage(role: .user, content: content)
+    }
+
+    /// 构造请求 transcript：把本轮捕获的供应商原生续接条目（签名思考块 /
+    /// reasoning_content / 原生 reasoning item）追加在它们所属的 assistant
+    /// 回合之前，保持供应商原始顺序。key 是 assistant 消息的稳定 id——
+    /// 上下文裁剪后关联仍然正确。codec 只回放 vendor 匹配的条目。
+    private static func transcript(
+        for conversation: [AIMessage],
+        continuations: [UUID: [AIProviderContinuation]]
+    ) -> AITranscript {
+        guard !continuations.isEmpty else { return AITranscript(messages: conversation) }
+        var items: [AITranscriptItem] = []
+        for message in conversation {
+            if let round = continuations[message.id], !round.isEmpty {
+                items.append(contentsOf: round.map(AITranscriptItem.providerContinuation))
+            }
+            items.append(contentsOf: AITranscript(messages: [message]).items)
+        }
+        return AITranscript(items: items)
     }
 
     /// tool_search 结果 → 当前 schema 的扩展（Generic Chat 与 Task Loop 共用，
@@ -3389,13 +3493,32 @@ public struct ToolLoop {
         onAnswerDelta: @escaping @Sendable (String) async -> Void,
         onReasoningDelta: @escaping @Sendable (String) async -> Void
     ) async throws -> StreamOutcome {
-        let streamed = try await streamWithRetry(
+        var streamed = try await streamWithRetry(
             provider: provider,
             request: request,
             timeout: timeout,
             onAnswerDelta: onAnswerDelta,
             onReasoningDelta: onReasoningDelta
         )
+        // 非正常终止不得视为任务完成：截断时未闭合的工具参数不能执行；
+        // 连接中断时恢复路径沿用既有超时/失败语义，不重复已确认的写操作。
+        switch streamed.termination.kind {
+        case .truncated:
+            throw AIProviderError.outputTruncated
+        case .transportInterrupted, .paused:
+            let reason = streamed.termination.rawReason ?? "unknown"
+            throw AIProviderError.transport("模型响应流在显式终止信号前结束（\(reason)）；本轮不作为正常完成。")
+        case .failed:
+            throw AIProviderError.transport("模型响应流报告失败（\(streamed.termination.rawReason ?? "unknown")）。")
+        case .cancelled:
+            throw CancellationError()
+        case .refused:
+            streamed.toolCalls = []
+        case .completed, .toolCallsReady:
+            // refused：模型完成回合但拒绝请求，其说明文本就是最终回答，
+            // 由完成度评估器判定任务是否真正完成，不当作传输故障。
+            break
+        }
         guard streamed.answerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               streamed.toolCalls.isEmpty
         else {
@@ -3422,6 +3545,15 @@ public struct ToolLoop {
         fallback.webCitations = response.webCitations ?? streamed.webCitations
         fallback.inputTokens = response.inputTokens ?? streamed.inputTokens
         fallback.outputTokens = response.outputTokens ?? streamed.outputTokens
+        fallback.cacheReadTokens = response.cacheReadTokens ?? streamed.cacheReadTokens
+        fallback.cacheCreationTokens = response.cacheCreationTokens ?? streamed.cacheCreationTokens
+        fallback.reasoningTokens = response.reasoningTokens ?? streamed.reasoningTokens
+        fallback.requestID = response.requestID ?? streamed.requestID
+        // 非流式补发的响应携带自己的续接状态（对应实际回答这一轮）；
+        // reasoningOnly 修复轮禁止工具，其续接状态不进入 transcript。
+        if !reasoningOnly, let continuations = response.continuations {
+            fallback.continuations = continuations
+        }
         if fallback.reasoningText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            let reasoning = response.reasoning,
            !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -3491,8 +3623,8 @@ public struct ToolLoop {
             for try await event in provider.stream(request) {
                 if Task.isCancelled { throw CancellationError() }
                 switch event {
-                case .started:
-                    break
+                case let .started(_, requestID):
+                    outcome.requestID = requestID ?? outcome.requestID
                 case let .reasoningDelta(text):
                     outcome.reasoningText += text
                     await onReasoningDelta(text)
@@ -3512,10 +3644,20 @@ public struct ToolLoop {
                     outcome.toolCalls.append(call)
                 case let .webCitations(citations):
                     outcome.webCitations.append(contentsOf: citations)
-                case let .usage(input, output):
+                case let .providerContinuation(item):
+                    outcome.continuations.append(item)
+                case let .usage(input, output, cacheRead, cacheCreation, reasoning):
                     outcome.inputTokens = input
                     outcome.outputTokens = output
+                    outcome.cacheReadTokens = cacheRead ?? outcome.cacheReadTokens
+                    outcome.cacheCreationTokens = cacheCreation ?? outcome.cacheCreationTokens
+                    outcome.reasoningTokens = reasoning ?? outcome.reasoningTokens
                 case .completed:
+                    return outcome
+                case let .terminated(termination):
+                    // 非正常终止（截断/中断/拒绝等）是流的最后一帧；
+                    // 是否可恢复由 streamWithFallback 按 kind 判定。
+                    outcome.termination = termination
                     return outcome
                 }
             }

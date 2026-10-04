@@ -43,6 +43,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import com.auralis.core.ai.AiReasoningDialect
+import com.auralis.core.data.prefs.AiPrivacyPermissionFlags
 import com.auralis.core.ai.AiProviderConfiguration
 import com.auralis.core.ai.AiProviderFactory
 import com.auralis.core.ai.AiProviderFailureKind
@@ -86,6 +88,10 @@ fun AiSettingsPage(
     var maxContext by remember { mutableStateOf("") }
     var maxOutput by remember { mutableStateOf("") }
     var toolCalling by remember { mutableStateOf(true) }
+    var reasoningEnabled by remember { mutableStateOf(false) }
+    var reasoningDialect by remember { mutableStateOf("Manual") }
+    var implicitScope by remember { mutableStateOf<String?>(null) }
+    var privacy by remember { mutableStateOf(AiPrivacyPermissionFlags()) }
     var apiKeyInput by remember { mutableStateOf("") }
 
     var savedNotice by remember { mutableStateOf<String?>(null) }
@@ -102,6 +108,10 @@ fun AiSettingsPage(
         maxContext = settings.maxContextTokens.toString()
         maxOutput = settings.maxOutputTokens.toString()
         toolCalling = settings.supportsToolCalling
+        reasoningEnabled = settings.reasoningEnabled
+        reasoningDialect = settings.reasoningDialect
+        implicitScope = settings.implicitStreamTerminationScope
+        privacy = prefs.aiPrivacyPermissionsValue()
         apiKeySaved = graph.vault.retrieve(AiConnectionSettings.API_KEY_REFERENCE) != null
     }
 
@@ -112,6 +122,9 @@ fun AiSettingsPage(
         maxContextTokens = maxContext.toIntOrNull() ?: AiConnectionSettings.DEFAULT_MAX_CONTEXT_TOKENS,
         maxOutputTokens = maxOutput.toIntOrNull() ?: AiConnectionSettings.DEFAULT_MAX_OUTPUT_TOKENS,
         supportsToolCalling = toolCalling,
+        reasoningEnabled = reasoningEnabled,
+        reasoningDialect = reasoningDialect,
+        implicitStreamTerminationScope = implicitScope,
     )
 
     fun save() {
@@ -128,6 +141,9 @@ fun AiSettingsPage(
                 maxOutput.toIntOrNull() ?: AiConnectionSettings.DEFAULT_MAX_OUTPUT_TOKENS,
             )
             prefs.setAiSupportsToolCalling(toolCalling)
+            val settings = currentSettings()
+            prefs.setAiCompatibility(reasoningDialect, settings.assumesImplicitStreamTermination, settings)
+            prefs.setAiPrivacyPermissions(privacy)
             if (apiKeyInput.isNotBlank()) {
                 graph.vault.store(AiConnectionSettings.API_KEY_REFERENCE, apiKeyInput.trim())
                 apiKeyInput = ""
@@ -160,6 +176,9 @@ fun AiSettingsPage(
                     hasKnownContextWindow = false,
                     usesStreaming = true,
                     supportsToolCalling = settings.supportsToolCalling,
+                    supportsReasoningControl = true,
+                    reasoningDialect = runCatching { AiReasoningDialect.valueOf(settings.reasoningDialect) }.getOrDefault(AiReasoningDialect.Manual),
+                    assumesImplicitStreamTermination = settings.assumesImplicitStreamTermination,
                 )
                 val apiKey = graph.vault.retrieve(AiConnectionSettings.API_KEY_REFERENCE)
                 val provider = AiProviderFactory.create(config, apiKeyProvider = { apiKey })
@@ -287,6 +306,26 @@ fun AiSettingsPage(
             item { SettingsCaption(stringResource(R.string.settings_ai_key_caption)) }
 
             item { SettingsSectionTitle(stringResource(R.string.settings_ai_advanced_section)) }
+            item {
+                AiSettingsToggle(stringResource(R.string.settings_ai_reasoning_enabled), reasoningEnabled) { reasoningEnabled = it }
+                if (apiPath.trimEnd('/').endsWith("/messages")) {
+                    AiSettingsToggle(stringResource(R.string.settings_ai_adaptive_thinking), reasoningDialect == "Adaptive") {
+                        reasoningDialect = if (it) "Adaptive" else "Manual"
+                    }
+                }
+                AiSettingsToggle(stringResource(R.string.settings_ai_implicit_end), currentSettings().assumesImplicitStreamTermination) {
+                    implicitScope = if (it) currentSettings().endpointScope else null
+                }
+                SettingsCaption(stringResource(R.string.settings_ai_implicit_end_note))
+            }
+            item {
+                SettingsSectionTitle(stringResource(R.string.settings_ai_privacy_section))
+                AiSettingsToggle(stringResource(R.string.settings_ai_privacy_metadata), privacy.allowsMetadata) { privacy = privacy.copy(allowsMetadata = it) }
+                AiSettingsToggle(stringResource(R.string.settings_ai_privacy_lyrics), privacy.allowsLyrics) { privacy = privacy.copy(allowsLyrics = it) }
+                AiSettingsToggle(stringResource(R.string.settings_ai_privacy_history), privacy.allowsPlaybackHistory) { privacy = privacy.copy(allowsPlaybackHistory = it) }
+                AiSettingsToggle(stringResource(R.string.settings_ai_privacy_favorites), privacy.allowsFavoritesAndRatings) { privacy = privacy.copy(allowsFavoritesAndRatings = it) }
+                AiSettingsToggle(stringResource(R.string.settings_ai_privacy_external), privacy.allowsExternalDiscovery) { privacy = privacy.copy(allowsExternalDiscovery = it) }
+            }
             item { FieldLabel(stringResource(R.string.settings_ai_context_label)) }
             item {
                 AiSettingsTextField(
@@ -518,4 +557,12 @@ private fun FieldLabel(text: String) {
             bottom = AuralisSpacing.xSmall,
         ),
     )
+}
+
+@Composable
+private fun AiSettingsToggle(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = AuralisSpacing.small), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, modifier = Modifier.weight(1f), color = LocalAuralisTheme.current.colors.primaryText)
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
 }

@@ -77,13 +77,14 @@ struct AnthropicMessagesProviderTests {
         return URLSession(configuration: configuration)
     }
 
-    private func makeProvider(supportsReasoningControl: Bool = false) -> AnthropicMessagesProvider {
+    private func makeProvider(supportsReasoningControl: Bool = false, usesStreaming: Bool = true) -> AnthropicMessagesProvider {
         AnthropicMessagesProvider(
             configuration: AIProviderConfiguration(
                 name: "test",
                 baseURL: URL(string: "https://relay.example.com")!,
                 apiPath: "/v1/messages",
                 model: "claude-test",
+                usesStreaming: usesStreaming,
                 supportsToolCalling: true,
                 supportsToolChoice: true,
                 supportsReasoningControl: supportsReasoningControl
@@ -259,4 +260,61 @@ struct AnthropicMessagesProviderTests {
                 "必须按 content_block.index 恢复顺序，实际：\(received.map(\.name))")
         #expect(received.map(\.id) == ["tool-z", "tool-a"])
     }
+    @Test("流式续接保留签名、完整原生顺序与起始工具参数")
+    func streamingNativeTurnPreservesInputAndSignature() async throws {
+        let sse = """
+        data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}
+
+        data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hidden"}}
+
+        data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig"}}
+
+        data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"c","name":"read","input":{"q":"initial"}}}
+
+        data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}
+
+        data: {"type":"message_stop"}
+        """
+        AnthropicMockURLProtocol.reset(data: Data(sse.utf8))
+        var call: AIToolCall?
+        var native: AIProviderContinuation?
+        for try await event in makeProvider().stream(AICompletionRequest(model: "claude-test", messages: [AIMessage(role: .user, content: "q")])) {
+            if case let .toolCall(value) = event { call = value }
+            if case let .providerContinuation(value) = event { native = value }
+        }
+        #expect(call?.arguments == .object(["q": .string("initial")]))
+        let captured = try #require(native)
+        let blocks = try #require(try JSONSerialization.jsonObject(with: captured.payload.jsonData) as? [[String: Any]])
+        #expect(blocks.compactMap { $0["type"] as? String } == ["thinking", "tool_use"])
+        #expect(blocks[0]["signature"] as? String == "sig")
+        #expect(captured.originScope != nil)
+    }
+
+
+    @Test("Anthropic 非流式降级保留 refusal 终止语义")
+    func nonStreamingFallbackPreservesRefusal() async throws {
+        let response = #"{"id":"msg_refused","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"不能处理该请求"}],"stop_reason":"refusal","usage":{"input_tokens":3,"output_tokens":2}}"#
+        AnthropicMockURLProtocol.reset(data: Data(response.utf8))
+
+        var events: [AIStreamEvent] = []
+        for try await event in makeProvider(usesStreaming: false).stream(
+            AICompletionRequest(
+                model: "claude-test",
+                messages: [AIMessage(role: .user, content: "test")]
+            )
+        ) {
+            events.append(event)
+        }
+
+        let request = try #require(AnthropicMockURLProtocol.requests.first)
+        let body = try requestObject(request)
+        #expect(body["stream"] == nil)
+        #expect(events.contains(.answerDelta("不能处理该请求")))
+        #expect(events.last == .terminated(AIStreamTermination(
+            kind: .refused,
+            rawReason: "refusal"
+        )))
+        #expect(!events.contains(.completed))
+    }
+
 }

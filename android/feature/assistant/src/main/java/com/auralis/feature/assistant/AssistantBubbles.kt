@@ -100,6 +100,23 @@ internal fun AssistantBubble(
     }
 }
 
+/** 流式正文半成品气泡（AI-08；无时间戳与复制按钮，收敛后被定稿气泡替换，不落盘）。 */
+@Composable
+internal fun StreamingTextBubble(text: String, modifier: Modifier = Modifier) {
+    val colors = LocalAuralisTheme.current.colors
+    Column(modifier = modifier.fillMaxWidth().padding(vertical = AuralisSpacing.xSmall)) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.primaryText,
+            modifier = Modifier
+                .background(colors.elevated, RoundedCornerShape(AuralisRadius.medium))
+                .padding(horizontal = AuralisSpacing.medium, vertical = AuralisSpacing.small)
+                .widthIn(max = 520.dp),
+        )
+    }
+}
+
 /** 工具执行状态行（运行中瞬态；不写盘）。 */
 @Composable
 internal fun ToolStatusRow(item: AssistantLiveItem.ToolStatus, modifier: Modifier = Modifier) {

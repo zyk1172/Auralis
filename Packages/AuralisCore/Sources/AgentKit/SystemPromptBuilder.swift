@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+import AIKit
 import Foundation
 
 /// Builds the small, provider-neutral instruction layer shared by generic chat
@@ -34,8 +35,13 @@ public enum SystemPromptBuilder {
         let favoriteSummary = context.allowsFavoritesAndRatings
             ? "\(context.favoriteCount) 首收藏"
             : "收藏与评分：已隐藏"
-        let memories = memorySummary(context.memories, language: language, goal: goal)
-        let skills = skillSummary(context.skills, language: language, goal: goal)
+        let memories = memorySummary(
+            context.memories,
+            language: language,
+            goal: goal,
+            permissions: context.privacyPermissions
+        )
+        let skills = skillSummary(context.skills.filter { $0.isDisclosable(under: context.privacyPermissions) }, language: language, goal: goal)
         let awareness = awarenessSummary(
             awarenessTools ?? tools,
             activeSkillID: activeSkillID,
@@ -282,7 +288,16 @@ public enum SystemPromptBuilder {
         return context.recentlyPlayedTitles.prefix(5).joined(separator: language == "en" ? ", " : "、")
     }
 
-    private static func memorySummary(_ entries: [AgentMemoryEntry], language: String, goal: String) -> String {
+    private static func memorySummary(
+        _ allEntries: [AgentMemoryEntry],
+        language: String,
+        goal: String,
+        permissions: AIPrivacyPermissions
+    ) -> String {
+        // 注入前按来源类别与有效期过滤：撤销 lyrics/history/favorites 后，
+        // 对应派生记忆不再进入模型上下文；过期记忆不再主动召回。
+        // 不过滤的内容保持在本地，用户仍可用 memory_list 查看、memory_delete 删除。
+        let entries = allEntries.filter { $0.isDisclosable(under: permissions) }
         guard !entries.isEmpty else {
             return language == "en"
                 ? "(No memories yet; use memory_save only when the user explicitly shares durable personal information.)"
@@ -318,7 +333,12 @@ public enum SystemPromptBuilder {
         append(recent, limit: maxCoreMemoryEntries + maxRelevantMemoryEntries + maxRecentMemoryEntries)
         append(sorted, limit: maxMemoryEntries)
 
-        var lines = selected.map { "- \($0.key)：\($0.value)" }
+        // 外部来源的记忆保留来源标注：它是参考材料，不是用户亲自确认的偏好。
+        var lines = selected.map { entry in
+            entry.source == .external
+                ? AIContentTrustBoundary.wrap("- \(entry.key)：\(entry.value)", trustLevel: .externalUntrusted)
+                : "- \(entry.key)：\(entry.value)"
+        }
         let remaining = entries.count - selected.count
         if remaining > 0 {
             lines.append("- （另有 \(remaining) 条记忆未注入；需要时使用 memory_search 按问题查询。）")
@@ -342,7 +362,11 @@ public enum SystemPromptBuilder {
             if left != right { return left > right }
             return lhs.createdAt == rhs.createdAt ? lhs.name < rhs.name : lhs.createdAt > rhs.createdAt
         }.prefix(maxSkillEntries)
-        var lines = selected.map { "- 「\($0.name)」：\($0.summary)" }
+        var lines = selected.map { skill in
+            skill.source == .external
+                ? AIContentTrustBoundary.wrap("- 「\(skill.name)」：\(skill.summary)", trustLevel: .externalUntrusted)
+                : "- 「\(skill.name)」：\(skill.summary)"
+        }
         let remaining = skills.count - selected.count
         if remaining > 0 {
             lines.append("- （另有 \(remaining) 个技能未注入；需要时使用 skill_list / skill_read 按需读取。）")

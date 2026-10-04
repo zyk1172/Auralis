@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+import AIKit
 import AgentKit
 import AppShell
 import Foundation
@@ -157,3 +158,32 @@ struct AgentMemoryStoreTests {
     #expect(reloaded.skills.count == 1)
     #expect(reloaded.readSkill(name: "夜跑")?.instructions == corrected)
 }
+
+    @Test("记忆和技能跨实例保留全部来源类别") @MainActor
+    func provenancePersists() throws {
+        let dir = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = AgentMemoryStore(directory: dir)
+        #expect(store.saveMemory(key: "inferred", value: "reference", source: .external, expiresAt: Date(timeIntervalSince1970: 4_000_000_000), disclosureCategories: [.lyrics, .favoritesAndRatings]))
+        #expect(store.createSkill(name: "external", instructions: "reference instructions", source: .external, disclosureCategories: [.externalDiscovery]) != nil)
+        let loaded = AgentMemoryStore(directory: dir)
+        let memory = try #require(loaded.memories.first)
+        #expect(memory.source == .external)
+        #expect(memory.disclosureCategories == [.lyrics, .favoritesAndRatings])
+        #expect(!memory.isDisclosable(under: AIPrivacyPermissions()))
+        let skill = try #require(loaded.readSkill(name: "external"))
+        #expect(skill.source == .external)
+        #expect(!skill.isDisclosable(under: AIPrivacyPermissions()))
+    }
+
+    @Test("兼容旧 Markdown 技能且损坏的来源记录不会回落旧内容") @MainActor
+    func legacySkillAndCorruptProvenance() throws {
+        let dir = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = AgentMemoryStore(directory: dir)
+        let skills = dir.appendingPathComponent("skills")
+        try Data("legacy instructions".utf8).write(to: skills.appendingPathComponent("legacy.md"))
+        #expect(store.readSkill(name: "legacy")?.source == .userCreated)
+        try Data("broken".utf8).write(to: skills.appendingPathComponent("legacy.json"))
+        #expect(store.readSkill(name: "legacy") == nil)
+    }

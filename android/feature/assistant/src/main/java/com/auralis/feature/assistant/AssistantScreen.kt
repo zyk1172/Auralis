@@ -241,6 +241,8 @@ fun AssistantScreen(
                     items(run.liveItems.size) { index ->
                         when (val item = run.liveItems[index]) {
                             is AssistantLiveItem.ToolStatus -> ToolStatusRow(item)
+                            // 流式半成品：增量渲染（不落盘，收敛后被定稿替换）。
+                            is AssistantLiveItem.PartialText -> StreamingTextBubble(item.text)
                             is AssistantLiveItem.Reasoning -> Unit
                         }
                     }

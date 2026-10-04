@@ -1,0 +1,138 @@
+{
+  "sourceLanguage": "zh-Hans",
+  "strings": {
+    "思考方式": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "思考方式"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thinking mode"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "思考方式"
+          }
+        }
+      }
+    },
+    "固定思考预算": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "固定思考预算"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fixed thinking budget"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "固定思考預算"
+          }
+        }
+      }
+    },
+    "自适应思考": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自适应思考"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adaptive thinking"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自適應思考"
+          }
+        }
+      }
+    },
+    "选择与你的模型兼容的思考方式。": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择与你的模型兼容的思考方式。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose the thinking mode supported by your model."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選擇與你的模型相容的思考方式。"
+          }
+        }
+      }
+    },
+    "允许接口以连接结束表示完成": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "允许接口以连接结束表示完成"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow connection close to indicate completion"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "允許介面以連線結束表示完成"
+          }
+        }
+      }
+    },
+    "仅在服务明确采用此方式时启用；意外断开的响应也可能被视为完整结果。": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "仅在服务明确采用此方式时启用；意外断开的响应也可能被视为完整结果。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable only if your service uses this convention; interrupted responses may also be accepted as complete."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "僅在服務明確採用此方式時啟用；意外斷開的回應也可能被視為完整結果。"
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

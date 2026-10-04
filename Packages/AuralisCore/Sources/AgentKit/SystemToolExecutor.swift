@@ -147,27 +147,73 @@ public struct SystemToolExecutor {
             case "memory_save":
                 let key = try require(call, "key")
                 let value = try require(call, "value")
+                // Provenance comes from the runtime, never a model assertion.
+                var categories = await currentDisclosureCategories()
+                let category = try call.optionalString("category").map { raw -> AIPrivacyCategory in
+                    guard let category = AIPrivacyCategory(rawValue: raw) else {
+                        throw ToolRuntimeError.invalidParameter(name: "category", expected: "metadata/lyrics/playbackHistory/favoritesAndRatings/externalDiscovery", value: raw)
+                    }
+                    return category
+                }
+                if let category { categories.insert(category) }
+                let expiry: Date?
+                if let raw = call.optionalString("expiresAt") {
+                    let fractional = ISO8601DateFormatter()
+                    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                    guard let parsed = ISO8601DateFormatter().date(from: raw) ?? fractional.date(from: raw), parsed > .now else {
+                        throw ToolRuntimeError.invalidParameter(name: "expiresAt", expected: "future RFC3339 timestamp", value: raw)
+                    }
+                    expiry = parsed
+                } else { expiry = nil }
                 guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
-                let saved = await systemService.saveMemory(key: key, value: value)
+                let saved = await systemService.saveMemory(
+                    key: key,
+                    value: value,
+                    source: categories.contains(.externalDiscovery) || categories.contains(.lyrics) ? .external : categories.isEmpty ? .userAsserted : .derivedFromTools,
+                    category: category,
+                    expiresAt: expiry,
+                    disclosureCategories: categories
+                )
                 return saved
                     ? .ok(call, descriptor, "已记住：\(key) = \(value)", .text("小猫记住了：\(key) = \(value)（下次会话也记得喵）"))
                     : .fail(call, descriptor, "保存记忆失败：字段名或内容为空 / 过长")
             case "memory_list":
+                // 模型侧读取同样遵守披露类别：被撤销类别的派生记忆不外发；
+                // 本地 UI 查看记忆不受此限制。
                 let memories = await systemService.agentMemories()
+                    .filter { $0.isDisclosable(under: resolvedPrivacy) }
                 if memories.isEmpty {
                     return .ok(call, descriptor, "还没有记住关于主人的信息", .text("记忆是空的。主人告诉小猫名字、喜好等信息后，小猫就会记住喵。"))
                 }
-                let text = memories.map { "\($0.key)：\($0.value)（记于 \(Self.dateText($0.updatedAt))）" }.joined(separator: "\n")
+                for entry in memories {
+                    var categories = entry.disclosureCategories ?? []
+                    if let category = entry.category { categories.insert(category) }
+                    await recordDisclosure(categories)
+                }
+                let text = memories.map { entry in
+                    let line = "\(entry.key)：\(entry.value)（记于 \(Self.dateText(entry.updatedAt))）"
+                    return entry.source == .external ? AIContentTrustBoundary.wrap(line, trustLevel: .externalUntrusted) : line
+                }.joined(separator: "\n")
                 return .ok(call, descriptor, "共 \(memories.count) 条记忆", .text(text))
             case "memory_search":
                 let query = try require(call, "query")
                 // limit 是 integer schema：优先结构化 number（4.0 → 4），避免字符串投影静默丢失。
                 let limit = min(max((try? call.int("limit")) ?? 10, 1), 50)
-                let memories = Array((await systemService.searchMemories(query: query)).prefix(limit))
+                let memories = Array((await systemService.searchMemories(query: query))
+                    .filter { $0.isDisclosable(under: resolvedPrivacy) }
+                    .prefix(limit))
                 if memories.isEmpty {
                     return .ok(call, descriptor, "没有找到相关记忆", .text("没有找到与「\(query)」相关的长期记忆。"))
                 }
-                let text = memories.map { "\($0.key)：\($0.value)（记于 \(Self.dateText($0.updatedAt))）" }.joined(separator: "\n")
+                for entry in memories {
+                    var categories = entry.disclosureCategories ?? []
+                    if let category = entry.category { categories.insert(category) }
+                    await recordDisclosure(categories)
+                }
+                let text = memories.map { entry in
+                    let line = "\(entry.key)：\(entry.value)（记于 \(Self.dateText(entry.updatedAt))）"
+                    return entry.source == .external ? AIContentTrustBoundary.wrap(line, trustLevel: .externalUntrusted) : line
+                }.joined(separator: "\n")
                 return .ok(call, descriptor, "找到 \(memories.count) 条相关记忆", .text(text))
             case "memory_delete":
                 let key = try require(call, "key")
@@ -184,13 +230,14 @@ public struct SystemToolExecutor {
                 let name = try require(call, "name")
                 let instructions = try require(call, "instructions")
                 guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
-                if let entry = await systemService.createSkill(name: name, instructions: instructions) {
+                let categories = await currentDisclosureCategories()
+                if let entry = await systemService.createSkill(name: name, instructions: instructions, source: categories.contains(.externalDiscovery) || categories.contains(.lyrics) ? .external : .userCreated, disclosureCategories: categories) {
                     let text = "技能「\(entry.name)」已保存到本机 skill 文件，之后用 skill_read 读取完整指令即可使用。"
                     return .ok(call, descriptor, "已创建技能「\(entry.name)」", .text(text))
                 }
                 return .fail(call, descriptor, "创建技能失败：名称或指令为空 / 过长")
             case "skill_list":
-                let skills = await systemService.agentSkills()
+                let skills = await systemService.agentSkills().filter { $0.isDisclosable(under: resolvedPrivacy) }
                 if skills.isEmpty {
                     return .ok(call, descriptor, "还没有创建技能", .text("没有技能。让小猫把一段常用指令用 skill_create 存下来，下次就能直接调用喵。"))
                 }
@@ -198,10 +245,11 @@ public struct SystemToolExecutor {
                 return .ok(call, descriptor, "技能 \(skills.count) 个", .text(text))
             case "skill_read":
                 let name = try require(call, "name")
-                guard let entry = await systemService.readSkill(name: name) else {
+                guard let entry = await systemService.readSkill(name: name), entry.isDisclosable(under: resolvedPrivacy) else {
                     return .fail(call, descriptor, "没有找到技能：\(name)")
                 }
-                return .ok(call, descriptor, "技能「\(entry.name)」", .text(entry.instructions))
+                await recordDisclosure(entry.disclosureCategories ?? [])
+                return .ok(call, descriptor, "技能「\(entry.name)」", .text(entry.source == .external ? AIContentTrustBoundary.wrap(entry.instructions, trustLevel: .externalUntrusted) : entry.instructions))
             case "skill_delete":
                 let name = try require(call, "name")
                 guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
@@ -413,6 +461,16 @@ public struct SystemToolExecutor {
     }
 
     // MARK: - Helpers
+
+    private static func currentDisclosureCategories() async -> Set<AIPrivacyCategory> {
+        guard let runID = ToolExecutionContext.lease?.runID else { return [] }
+        return await AgentRunDisclosureRegistry.shared.categories(runID: runID)
+    }
+
+    private static func recordDisclosure(_ categories: Set<AIPrivacyCategory>) async {
+        guard let runID = ToolExecutionContext.lease?.runID else { return }
+        await AgentRunDisclosureRegistry.shared.record(runID: runID, categories: categories)
+    }
 
     private static var permitsMutationCommit: Bool {
         ToolExecutionContext.permitsMutationCommit

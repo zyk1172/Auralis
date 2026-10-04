@@ -1434,6 +1434,9 @@ public enum AgentToolRegistry {
               parameters: [
                 .init(name: "key", required: true, description: "字段名，如 名字 / 喜欢的歌手 / 生日"),
                 .init(name: "value", required: true, description: "要记住的内容"),
+                .init(name: "expiresAt", required: false, description: "可选有效期，RFC3339 时间戳；只在用户要求时填写"),
+                .init(name: "category", required: false, description: "该记忆隶属的披露类别；对应类别被用户关闭后此记忆不再外发",
+                      schemaJSON: #"{"type":"string","enum":["metadata","lyrics","playbackHistory","favoritesAndRatings","externalDiscovery"]}"#),
               ]),
         .init(name: "memory_list", group: .memory, permission: .readOnly, summary: "查看已记住的关于主人的信息"),
         .init(name: "memory_delete", group: .memory, permission: .reversible,

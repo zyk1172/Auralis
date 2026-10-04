@@ -230,6 +230,10 @@ class AuralisPreferences(private val context: Context) {
     private val aiMaxOutputTokens = intPreferencesKey("auralis.ai.max-output-tokens")
     private val aiSupportsToolCalling = booleanPreferencesKey("auralis.ai.supports-tool-calling")
 
+    private val aiReasoningEnabled = booleanPreferencesKey("auralis.ai.reasoning-enabled")
+    private val aiReasoningDialect = stringPreferencesKey("auralis.ai.reasoning-dialect")
+    private val aiImplicitTerminationScope = stringPreferencesKey("auralis.ai.implicit-termination-scope")
+
     val aiEnabledFlow: Flow<Boolean> = store.data.map { it[aiEnabled] ?: true }
 
     suspend fun aiEnabledValue(): Boolean = aiEnabledFlow.first()
@@ -254,6 +258,9 @@ class AuralisPreferences(private val context: Context) {
             maxContextTokens = it[aiMaxContextTokens] ?: AiConnectionSettings.DEFAULT_MAX_CONTEXT_TOKENS,
             maxOutputTokens = it[aiMaxOutputTokens] ?: AiConnectionSettings.DEFAULT_MAX_OUTPUT_TOKENS,
             supportsToolCalling = it[aiSupportsToolCalling] ?: true,
+            reasoningEnabled = it[aiReasoningEnabled] ?: false,
+            reasoningDialect = it[aiReasoningDialect] ?: "Manual",
+            implicitStreamTerminationScope = it[aiImplicitTerminationScope],
         )
     }
 
@@ -283,6 +290,49 @@ class AuralisPreferences(private val context: Context) {
         store.edit { it[aiSupportsToolCalling] = value }
     }
 
+    suspend fun setAiCompatibility(dialect: String, implicitTermination: Boolean, settings: AiConnectionSettings) {
+        store.edit {
+            it[aiReasoningEnabled] = settings.reasoningEnabled
+            it[aiReasoningDialect] = dialect
+            if (implicitTermination) it[aiImplicitTerminationScope] = settings.endpointScope
+            else it.remove(aiImplicitTerminationScope)
+        }
+    }
+
+    // ------------------------------------------------------------ AI 披露权限（AI-12）
+    // 一次外发 consent（aiConsentGiven）是总闸；这里是按类别的细化开关，
+    // 决定哪些本地内容允许投影进发给模型的上下文/工具结果。
+    // 默认值与 Swift 一致：仅元数据开，其余关。本地 UI 展示不受限。
+
+    private val aiPrivacyMetadata = booleanPreferencesKey("auralis.ai.privacy.metadata")
+    private val aiPrivacyLyrics = booleanPreferencesKey("auralis.ai.privacy.lyrics")
+    private val aiPrivacyPlaybackHistory = booleanPreferencesKey("auralis.ai.privacy.playback-history")
+    private val aiPrivacyFavorites = booleanPreferencesKey("auralis.ai.privacy.favorites-and-ratings")
+    private val aiPrivacyExternalDiscovery = booleanPreferencesKey("auralis.ai.privacy.external-discovery")
+
+    val aiPrivacyPermissionsFlow: Flow<AiPrivacyPermissionFlags> = store.data.map {
+        AiPrivacyPermissionFlags(
+            allowsMetadata = it[aiPrivacyMetadata] ?: true,
+            allowsLyrics = it[aiPrivacyLyrics] ?: false,
+            allowsPlaybackHistory = it[aiPrivacyPlaybackHistory] ?: false,
+            allowsFavoritesAndRatings = it[aiPrivacyFavorites] ?: false,
+            allowsExternalDiscovery = it[aiPrivacyExternalDiscovery] ?: false,
+        )
+    }
+
+    suspend fun aiPrivacyPermissionsValue(): AiPrivacyPermissionFlags = aiPrivacyPermissionsFlow.first()
+
+    /** 设置页 UI 的写入口（按类别逐项开关）。 */
+    suspend fun setAiPrivacyPermissions(flags: AiPrivacyPermissionFlags) {
+        store.edit {
+            it[aiPrivacyMetadata] = flags.allowsMetadata
+            it[aiPrivacyLyrics] = flags.allowsLyrics
+            it[aiPrivacyPlaybackHistory] = flags.allowsPlaybackHistory
+            it[aiPrivacyFavorites] = flags.allowsFavoritesAndRatings
+            it[aiPrivacyExternalDiscovery] = flags.allowsExternalDiscovery
+        }
+    }
+
     companion object {
         private const val RECENT_SEARCH_SEPARATOR = "\u001f"
         private const val RECENT_SEARCH_LIMIT = 10
@@ -294,6 +344,19 @@ class AuralisPreferences(private val context: Context) {
  * baseURL 是合法 http(s)、apiPath 非空、model 非空。
  * API Key 不在此结构内 —— 见 [AuralisPreferences] AI 段注释。
  */
+/**
+ * AI 披露权限开关（AI-12，core:data 中立表示；core:ai 的 AiPrivacyPermissions 由
+ * feature 层映射，避免 core:data 反向依赖 core:ai）。
+ * 默认值与 Swift 一致：仅元数据开，其余关。
+ */
+data class AiPrivacyPermissionFlags(
+    val allowsMetadata: Boolean = true,
+    val allowsLyrics: Boolean = false,
+    val allowsPlaybackHistory: Boolean = false,
+    val allowsFavoritesAndRatings: Boolean = false,
+    val allowsExternalDiscovery: Boolean = false,
+)
+
 data class AiConnectionSettings(
     val baseUrl: String,
     val apiPath: String,
@@ -301,7 +364,12 @@ data class AiConnectionSettings(
     val maxContextTokens: Int,
     val maxOutputTokens: Int,
     val supportsToolCalling: Boolean,
+    val reasoningEnabled: Boolean = false,
+    val reasoningDialect: String = "Manual",
+    val implicitStreamTerminationScope: String? = null,
 ) {
+    val endpointScope: String get() = "${baseUrl.trim().trimEnd('/')}|${apiPath.trim().trim('/')}|${model.trim()}"
+    val assumesImplicitStreamTermination: Boolean get() = implicitStreamTerminationScope == endpointScope
     val isComplete: Boolean
         get() {
             val trimmed = baseUrl.trim()

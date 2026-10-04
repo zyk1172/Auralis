@@ -315,6 +315,10 @@ class AssistantCoordinator(
         }
 
         // ---- 首次外发确认（允许一次 / 允许并记住 / 取消）----
+        // 语义（AI-12）：这是一次「允许把本地内容发给模型提供商」的总闸；
+        // 具体哪些类别（歌词/播放历史/收藏评分）可外发由
+        // AuralisPreferences 的 auralis.ai.privacy.* 类别开关细化
+        // （默认仅元数据开，与 Swift 一致），在执行链投影层生效。
         if (!prefs.aiConsentGivenValue()) {
             val choice = requestConsent(ConsentRequest(modelName = settings.model, detail = stringRes(R.string.assistant_consent_detail)))
             when (choice) {
@@ -374,19 +378,38 @@ class AssistantCoordinator(
                     lastCompletedAtMillis = System.currentTimeMillis(),
                 )
             } else {
-                val loop = AgentToolLoop(provider, host.registry(), maxRounds = 8)
+                // AI-05：把当前会话（仅当前会话）的落盘消息投影为模型历史，
+                // 剔除刚追加的当前用户消息（它作为 userText 单独传递）；
+                // AI-12：投影与工具结果回灌都遵守披露类别权限。
+                val permissions = with(AssistantHistoryProjection) {
+                    prefs.aiPrivacyPermissionsValue().toAiPermissions()
+                }
+                val historySource = _sessions.value.firstOrNull { it.id == sessionId }?.messages.orEmpty()
+                val history = AssistantHistoryProjection.modelMessages(
+                    historySource.dropLast(1),
+                    permissions,
+                )
+                val loop = AgentToolLoop(
+                    provider,
+                    host.registry(),
+                    maxRounds = 8,
+                    privacyPermissions = permissions,
+                )
                 val result = loop.run(
                     systemPrompt = SYSTEM_PROMPT,
                     userText = text,
                     model = settings.model,
+                    history = history,
                     authorizeOperations = writeToolNames,
+                    reasoning = if (settings.reasoningEnabled) com.auralis.core.ai.AiReasoningConfiguration() else null,
+
                     confirm = { confirmation ->
                         requestConfirm(runId, confirmation.title, confirmation.detail, destructive = true)
                     },
                     onEvent = { event -> handleRunEvent(runId, event) },
                 )
                 if (currentRunId != runId) return // 迟到结果丢弃
-                appendAssistantMessage(sessionId, result.finalAnswer.trim())
+                appendAssistantMessage(sessionId, result.finalAnswer.trim(), result.disclosureCategories)
                 logActions(result.writeOperations)
             }
         } catch (c: CancellationException) {
@@ -440,13 +463,14 @@ class AssistantCoordinator(
         return session.id
     }
 
-    private suspend fun appendAssistantMessage(sessionId: String, answer: String) {
+    private suspend fun appendAssistantMessage(sessionId: String, answer: String, categories: Set<com.auralis.core.ai.AiPrivacyCategory> = emptySet()) {
         val trimmed = answer.trim()
         if (trimmed.isEmpty()) return
         val assistantMessage = StoredAssistantMessage(
             StoredAssistantMessage.Role.Assistant,
             trimmed,
             System.currentTimeMillis(),
+            disclosureCategories = categories,
         )
         store.appendMessage(sessionId, assistantMessage)
         _sessions.value = _sessions.value.map { session ->
@@ -520,12 +544,43 @@ class AssistantCoordinator(
         if (currentRunId != runId) return
         val current = _run.value
         when (event) {
-            is AgentRunEvent.AssistantText -> _run.value = current.copy(phase = AssistantRunPhase.Responding)
+            is AgentRunEvent.AssistantText -> _run.value = current.copy(
+                phase = AssistantRunPhase.Responding,
+                // 收敛定稿：移除流式半成品（定稿由 appendAssistantMessage 落盘并展示）。
+                liveItems = current.liveItems.filterNot { it is AssistantLiveItem.PartialText },
+            )
+            // AI-08：流式正文增量 —— 更新 PartialText 瞬态条目（不落盘）。
+            is AgentRunEvent.AssistantTextDelta -> {
+                val items = current.liveItems.toMutableList()
+                val index = items.indexOfFirst { it is AssistantLiveItem.PartialText }
+                if (index >= 0) {
+                    val existing = (items[index] as AssistantLiveItem.PartialText).text
+                    items[index] = AssistantLiveItem.PartialText(existing + event.text)
+                } else {
+                    items += AssistantLiveItem.PartialText(event.text)
+                }
+                _run.value = current.copy(phase = AssistantRunPhase.Responding, liveItems = items)
+            }
             is AgentRunEvent.Reasoning -> _run.value = current.copy(phase = AssistantRunPhase.Thinking)
+            // AI-08：流式思考增量 —— 只瞬态展示，绝不持久化、绝不进上下文。
+            is AgentRunEvent.ReasoningDelta -> {
+                val items = current.liveItems.toMutableList()
+                val index = items.indexOfFirst { it is AssistantLiveItem.Reasoning }
+                if (index >= 0) {
+                    val existing = (items[index] as AssistantLiveItem.Reasoning).text
+                    items[index] = AssistantLiveItem.Reasoning(existing + event.text)
+                } else {
+                    items += AssistantLiveItem.Reasoning(event.text)
+                }
+                _run.value = current.copy(phase = AssistantRunPhase.Thinking, liveItems = items)
+            }
             is AgentRunEvent.ToolInvoked -> {
                 _run.value = current.copy(
                     phase = AssistantRunPhase.Working,
-                    liveItems = current.liveItems + AssistantLiveItem.ToolStatus(
+                    // 新一轮工具执行：上一轮的正文/思考半成品作废。
+                    liveItems = current.liveItems.filterNot {
+                        it is AssistantLiveItem.PartialText || it is AssistantLiveItem.Reasoning
+                    } + AssistantLiveItem.ToolStatus(
                         toolName = event.call.name,
                         label = toolLabel(event.call.name),
                         state = AssistantLiveItem.ToolStatus.State.Running,
@@ -659,6 +714,9 @@ class AssistantCoordinator(
             hasKnownContextWindow = false,
             usesStreaming = true,
             supportsToolCalling = settings.supportsToolCalling,
+            supportsReasoningControl = true,
+            reasoningDialect = runCatching { com.auralis.core.ai.AiReasoningDialect.valueOf(settings.reasoningDialect) }.getOrDefault(com.auralis.core.ai.AiReasoningDialect.Manual),
+            assumesImplicitStreamTermination = settings.assumesImplicitStreamTermination,
             supportsParallelTools = false,
             supportsToolChoice = false,
         )

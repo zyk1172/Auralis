@@ -100,4 +100,14 @@
     <string name="settings_ai_revoke">撤销授权</string>
     <string name="settings_ai_about_section">说明</string>
     <string name="settings_ai_privacy_note">在助手页对话时，内容会发送到你配置的模型服务商。只读查询与播放不依赖模型；写操作（播放/收藏/评分/歌单）会在对话中说明后执行，删除类操作会逐次请你批准。</string>
+    <string name="settings_ai_adaptive_thinking">自适应思考（Anthropic）</string>
+    <string name="settings_ai_implicit_end">允许接口以连接结束表示完成</string>
+    <string name="settings_ai_implicit_end_note">仅在服务明确采用此方式时启用；意外断开的响应也可能被视为完整结果。修改端点或模型后需要重新启用。</string>
+    <string name="settings_ai_privacy_section">允许发送给模型的内容</string>
+    <string name="settings_ai_privacy_metadata">曲库元数据</string>
+    <string name="settings_ai_privacy_lyrics">歌词</string>
+    <string name="settings_ai_privacy_history">播放历史</string>
+    <string name="settings_ai_privacy_favorites">收藏与评分</string>
+    <string name="settings_ai_privacy_external">外部搜索内容</string>
+    <string name="settings_ai_reasoning_enabled">启用思考</string>
 </resources>

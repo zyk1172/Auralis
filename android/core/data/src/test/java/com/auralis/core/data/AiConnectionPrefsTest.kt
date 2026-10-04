@@ -55,4 +55,13 @@ class AiConnectionPrefsTest : RoomDbTest() {
         val incomplete = saved.copy(baseUrl = "", model = " ")
         assertFalse(incomplete.isComplete)
     }
+    @Test fun `EOF compatibility is bound to endpoint path and model`() {
+        val settings = AiConnectionSettings("https://relay.example.com", "/v1/messages", "ModelA", 32000, 4000, true)
+        val enabled = settings.copy(implicitStreamTerminationScope = settings.endpointScope)
+        assertTrue(enabled.assumesImplicitStreamTermination)
+        assertFalse(enabled.copy(model = "modela").assumesImplicitStreamTermination)
+        assertFalse(enabled.copy(apiPath = "/other/messages").assumesImplicitStreamTermination)
+        assertFalse(enabled.copy(baseUrl = "https://other.example.com").assumesImplicitStreamTermination)
+    }
+
 }

@@ -106,6 +106,50 @@ public extension AIProviderError {
                 || text.contains("unknown parameter"))
     }
 
+    /// 工具结果回灌被服务端以配对协议错误拒绝（tool_call_id/tool_use_id
+    /// 与 tool_result 不匹配）。这属于协议失败，不是「模型没调用工具」的
+    /// 不确定观察。
+    var indicatesToolProtocolFailure: Bool {
+        guard case let .httpStatusDetail(_, detail) = self else { return false }
+        let text = detail.lowercased()
+        let mentionsPairing = text.contains("tool_call_id")
+            || text.contains("tool_use_id")
+            || text.contains("tool_result")
+            || text.contains("tool result")
+        guard mentionsPairing else { return false }
+        return text.contains("mismatch")
+            || text.contains("unexpected")
+            || text.contains("missing")
+            || text.contains("without")
+            || text.contains("invalid")
+            || text.contains("not found")
+            || text.contains("does not match")
+    }
+
+    /// 服务端明确拒绝的具体参数名（如 "thinking"、"tool_choice"、"budget_tokens"）。
+    /// 参数级归因让调用方只调整该参数，而不是把整个能力（如 reasoning）
+    /// 永久关闭。识别不出具体参数时为 nil。
+    var rejectedParameter: String? {
+        guard case let .httpStatusDetail(_, detail) = self else { return nil }
+        let text = detail.lowercased()
+        let isRejection = text.contains("not supported")
+            || text.contains("unsupported")
+            || text.contains("unknown parameter")
+            || text.contains("invalid parameter")
+            || text.contains("unrecognized")
+        guard isRejection else { return nil }
+        // 已知线网参数按出现顺序归因；越具体越优先。
+        for parameter in [
+            "budget_tokens", "reasoning_effort", "reasoning_content", "thinking",
+            "tool_choice", "tools", "response_format", "text.format",
+            "max_completion_tokens", "max_output_tokens", "max_tokens",
+            "temperature", "reasoning", "output_config",
+        ] where text.contains(parameter) {
+            return parameter
+        }
+        return nil
+    }
+
     /// 是否属于「瞬时故障」——值得再试一次，而不是配置或业务层面的确定性错误。
     /// 供 Provider 内部重试与上层（如 AgentRunner）判定是否补一次重试共用。
     var isTransient: Bool {
@@ -433,17 +477,26 @@ public struct OpenAICompatibleProvider: AIProvider {
             parametersJSON: #"{"type":"object","properties":{},"additionalProperties":false}"#
         )
         do {
-            let observed = try await observesToolCall(
+            let roundTrip = try await observeToolRoundTrip(
                 with: self,
                 tool: probe,
                 toolChoice: nil
             )
-            guard observed else {
+            switch roundTrip {
+            case .noToolCallObserved:
                 return (.unavailable, .notTested, [String(localized: "原生工具探测未收到工具调用；这不代表模型不支持工具。", bundle: .module)])
+            case .roundTripUnanswered:
+                // 第一阶段成功但第二轮无回答：round-trip 不完整，不能判 passed，
+                // 也不能据此永久关闭能力。
+                return (.degraded, .notTested, [String(localized: "原生工具探测第一阶段收到工具调用，但回灌模拟工具结果后未收到第二轮回答；这是瞬时观测，不会据此关闭原生工具。", bundle: .module)])
+            case .roundTripCompleted:
+                let choice = await probeToolChoice(with: probe)
+                return (.passed, choice.status, choice.details)
             }
-            let choice = await probeToolChoice(with: probe)
-            return (.passed, choice.status, choice.details)
         } catch let error as AIProviderError {
+            if error.indicatesToolProtocolFailure {
+                return (.failed, .notTested, [String(localized: "工具结果回灌被服务端拒绝（tool_call_id 配对协议失败）：\(error.localizedDescription)", bundle: .module)])
+            }
             if error.explicitlyRejectsNativeTools {
                 return (.failed, .notTested, [String(localized: "服务端明确拒绝原生工具：\(error.localizedDescription)", bundle: .module)])
             }
@@ -451,6 +504,71 @@ public struct OpenAICompatibleProvider: AIProvider {
         } catch {
             return (.unavailable, .notTested, [String(localized: "原生工具探测未完成：\(error.localizedDescription)", bundle: .module)])
         }
+    }
+
+    /// 原生工具探测的两个阶段。
+    private enum ToolRoundTripOutcome {
+        case noToolCallObserved
+        case roundTripUnanswered
+        case roundTripCompleted
+    }
+
+    /// 完整 round-trip 探测：观察到工具调用后，把模拟工具结果按同一
+    /// tool_call_id 回灌，要求模型给出第二轮回答。只观察首个调用会把
+    /// 「会调用但不会续接」的端点误判为原生工具可用。
+    private func observeToolRoundTrip(
+        with provider: OpenAICompatibleProvider,
+        tool: AIToolDefinition,
+        toolChoice: AIToolChoice?
+    ) async throws -> ToolRoundTripOutcome {
+        let prompt = "Use capabilities_get to inspect the available Auralis capabilities."
+        var observedCall: AIToolCall?
+        for try await event in provider.stream(AICompletionRequest(
+                model: configuration.model,
+                messages: [AIMessage(role: .user, content: prompt)],
+                temperature: 0,
+                maxTokens: configuration.maxOutputTokens,
+                tools: [tool],
+                toolChoice: toolChoice
+            )) {
+            if case let .toolCall(call) = event, call.name == tool.name {
+                observedCall = call
+                break
+            }
+        }
+        guard let call = observedCall else { return .noToolCallObserved }
+
+        // 第二阶段：assistant(tool_calls) + tool 消息按同一 tool_call_id 配对。
+        var answered = false
+        for try await event in provider.stream(AICompletionRequest(
+                model: configuration.model,
+                messages: [
+                    AIMessage(role: .user, content: prompt),
+                    AIMessage(role: .assistant, content: "", toolCalls: [call]),
+                    AIMessage(
+                        role: .tool,
+                        content: #"{"ok":true,"capabilities":["library_search","playback_control"]}"#,
+                        toolCallID: call.id,
+                        name: call.name
+                    ),
+                ],
+                temperature: 0,
+                maxTokens: min(configuration.maxOutputTokens, 256),
+                tools: [tool],
+                toolChoice: nil
+            )) {
+            switch event {
+            case let .answerDelta(text) where !text.isEmpty,
+                 let .unknownDelta(text) where !text.isEmpty:
+                answered = true
+            case .toolCall:
+                answered = true
+            default:
+                break
+            }
+            if answered { break }
+        }
+        return answered ? .roundTripCompleted : .roundTripUnanswered
     }
 
     private func probeJSONOutput() async -> (status: AIProbeStatus, details: [String]) {
@@ -588,18 +706,31 @@ public struct OpenAICompatibleProvider: AIProvider {
         return try await performRequestWithParameterFallback(
             body: requestBody(request, stream: false),
             run: { try await session.data(for: $0) },
-            transform: { data, _ in
+            transform: { data, urlResponse in
+                let requestID = Self.requestID(from: urlResponse)
                 let response = if usesResponsesAPI {
-                    try Self.parseResponsesCompletion(data: data, fallbackModel: request.model)
+                    try Self.parseResponsesCompletion(data: data, fallbackModel: request.model, requestID: requestID)
                 } else {
-                    try Self.parseCompletion(data: data, fallbackModel: request.model)
+                    try Self.parseCompletion(data: data, fallbackModel: request.model, requestID: requestID)
                 }
-                if response.finishReason == "length", response.toolCalls?.isEmpty == false {
+                // finish_reason == "length" 一律视为截断：无论有没有工具调用，
+                // 被截断的正文都不能当成完整回答、未闭合的工具参数更不能执行。
+                if ["length", "incomplete"].contains(response.finishReason ?? "") {
                     throw AIProviderError.outputTruncated
                 }
-                return response
+                if let reason = response.finishReason, !["stop", "tool_calls", "function_call", "content_filter"].contains(reason) {
+                    throw AIProviderError.malformedResponse(detail: "Unsuccessful completion: " + reason, retryable: true)
+                }
+                return response.bindingContinuations(to: configuration.continuationScope(model: request.model))
             }
         )
+    }
+
+    /// Provider 响应级请求 ID（OpenAI `x-request-id`；部分网关用 `request-id`）。
+    static func requestID(from response: URLResponse) -> String? {
+        guard let http = response as? HTTPURLResponse else { return nil }
+        return http.value(forHTTPHeaderField: "x-request-id")
+            ?? http.value(forHTTPHeaderField: "request-id")
     }
 
     public func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
@@ -632,16 +763,25 @@ public struct OpenAICompatibleProvider: AIProvider {
             let task = Task {
                 do {
                     let response = try await complete(request)
-                    continuation.yield(.started(model: response.model))
+                    continuation.yield(.started(model: response.model, requestID: response.requestID))
                     if let reasoning = response.reasoning, !reasoning.isEmpty {
                         continuation.yield(.reasoningDelta(reasoning))
                     }
                     if !response.content.isEmpty { continuation.yield(.answerDelta(response.content)) }
+                    for item in response.continuations ?? [] { continuation.yield(.providerContinuation(item.bound(to: configuration.continuationScope(model: request.model)))) }
                     for toolCall in response.toolCalls ?? [] { continuation.yield(.toolCall(toolCall)) }
                     if let citations = response.webCitations, !citations.isEmpty {
                         continuation.yield(.webCitations(citations))
                     }
-                    continuation.yield(.completed)
+                    let termination = response.finishReason.map {
+                        Self.termination(forChatFinishReason: $0)
+                    } ?? .completed
+                    switch termination.kind {
+                    case .completed, .toolCallsReady:
+                        continuation.yield(.completed)
+                    default:
+                        continuation.yield(.terminated(termination))
+                    }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -658,76 +798,69 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// arguments 需要跨 chunk 拼接），这里按 `index` 合并 fragments，
     /// 到流结束（`[DONE]`、`finish_reason` 或自然结束）时统一产出完整 `.toolCall`，
     /// 保证参数不会因为提前产出而被截断。
+    ///
+    /// 终止语义：`[DONE]` / finish_reason=stop|tool_calls → `.completed`；
+    /// length → `.terminated(.truncated)`；content_filter → `.terminated(.refused)`；
+    /// 没有任何显式终止信号的自然 EOF → `.terminated(.transportInterrupted)`
+    /// （除非端点被显式配置为以 EOF 为正常结束）。
     private func chatStream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let (bytes, _) = try await performRequestBytesWithParameterFallback(body: requestBody(request, stream: true))
-                    continuation.yield(.started(model: request.model))
+                    let (bytes, response) = try await performRequestBytesWithParameterFallback(body: requestBody(request, stream: true))
+                    continuation.yield(.started(model: request.model, requestID: Self.requestID(from: response)))
                     var parser = SSEParser()
                     var toolCallFragments: [Int: ChatToolCallFragment] = [:]
                     var pendingLine = Data()
-                    for try await byte in bytes {
-                        pendingLine.append(byte)
-                        guard byte == 0x0A else { continue }
-                        // 以原始换行切分输入，而不是使用 `bytes.lines`。后者会吞掉
-                        // 空行，无法区分 SSE 的事件边界；这里完整保留多段 data:。
-                        for message in parser.append(pendingLine) {
-                            if message.data == "[DONE]" {
-                                Self.yieldAssembledToolCalls(fragments: toolCallFragments, continuation: continuation)
-                                continuation.yield(.completed)
-                                continuation.finish()
-                                return
-                            }
-                            for event in Self.streamEvents(
-                                from: message.data,
-                                toolCallArgumentsInFlight: !toolCallFragments.isEmpty
-                            ) {
-                                continuation.yield(event)
-                            }
-                            if let usage = Self.streamUsage(from: message.data) {
-                                continuation.yield(.usage(input: usage.input, output: usage.output))
-                            }
-                            for fragment in Self.streamToolCallFragments(from: message.data) {
-                                if var existing = toolCallFragments[fragment.index] {
-                                    if existing.id == nil { existing.id = fragment.id }
-                                    if existing.name == nil { existing.name = fragment.name }
-                                    existing.arguments += fragment.arguments
-                                    toolCallFragments[fragment.index] = existing
-                                } else {
-                                    toolCallFragments[fragment.index] = fragment
-                                }
-                            }
-                            // 一些 OpenAI 兼容网关会发送标准的 finish_reason，但不会
-                            // 再补 [DONE] 或主动关闭 SSE 连接。若忽略它，最终文本虽然
-                            // 已显示，AgentRunner 仍会一直等待，界面就会卡在“正在执行”。
-                            if let finishReason = Self.streamFinishReason(message.data) {
-                                if finishReason == "length" { throw AIProviderError.outputTruncated }
-                                Self.yieldAssembledToolCalls(fragments: toolCallFragments, continuation: continuation)
-                                continuation.yield(.completed)
-                                continuation.finish()
-                                return
-                            }
-                        }
-                        pendingLine.removeAll(keepingCapacity: true)
+                    var reasoningContent = ""
+                    var ended = false
+
+                    /// DeepSeek 等思考模式要求带 tools 的续接请求保留完整
+                    /// reasoning_content；把流式推理增量聚合成一条续接条目。
+                    func yieldReasoningContinuation() {
+                        guard !reasoningContent.isEmpty else { return }
+                        continuation.yield(.providerContinuation(AIProviderContinuation(
+                            vendor: .openAIChat,
+                            ordinal: 0,
+                            payload: .object(["reasoning_content": .string(reasoningContent)]),
+                            originScope: configuration.continuationScope(model: request.model)
+                        )))
                     }
-                    // 末尾若没有空行，仍解析缓冲中的最后一个 SSE 事件。
-                    if !pendingLine.isEmpty { _ = parser.append(pendingLine) }
-                    for message in parser.finish() {
-                        if message.data == "[DONE]" {
-                            Self.yieldAssembledToolCalls(fragments: toolCallFragments, continuation: continuation)
+
+                    func finish(termination: AIStreamTermination) {
+                        ended = true
+                        yieldReasoningContinuation()
+                        Self.yieldAssembledToolCalls(fragments: toolCallFragments, continuation: continuation)
+                        switch termination.kind {
+                        case .completed, .toolCallsReady:
                             continuation.yield(.completed)
-                            continuation.finish()
+                        default:
+                            continuation.yield(.terminated(termination))
+                        }
+                        continuation.finish()
+                    }
+
+                    func consume(_ message: SSEMessage) {
+                        guard !ended else { return }
+                        if message.data == "[DONE]" {
+                            finish(termination: .completed)
                             return
                         }
                         for event in Self.streamEvents(
                             from: message.data,
                             toolCallArgumentsInFlight: !toolCallFragments.isEmpty
                         ) {
+                            if case let .reasoningDelta(text) = event { reasoningContent += text }
                             continuation.yield(event)
                         }
                         if let usage = Self.streamUsage(from: message.data) {
-                            continuation.yield(.usage(input: usage.input, output: usage.output))
+                            continuation.yield(.usage(
+                                input: usage.input,
+                                output: usage.output,
+                                cacheRead: usage.cacheRead,
+                                cacheCreation: usage.cacheCreation,
+                                reasoning: usage.reasoning
+                            ))
                         }
                         for fragment in Self.streamToolCallFragments(from: message.data) {
                             if var existing = toolCallFragments[fragment.index] {
@@ -739,23 +872,57 @@ public struct OpenAICompatibleProvider: AIProvider {
                                 toolCallFragments[fragment.index] = fragment
                             }
                         }
+                        // 一些 OpenAI 兼容网关会发送标准的 finish_reason，但不会
+                        // 再补 [DONE] 或主动关闭 SSE 连接。finish_reason 是显式
+                        // 终止信号，按各自语义映射为统一终止。
                         if let finishReason = Self.streamFinishReason(message.data) {
-                            if finishReason == "length" { throw AIProviderError.outputTruncated }
-                            Self.yieldAssembledToolCalls(fragments: toolCallFragments, continuation: continuation)
-                            continuation.yield(.completed)
-                            continuation.finish()
+                            finish(termination: Self.termination(forChatFinishReason: finishReason))
                             return
                         }
                     }
-                    // 网关不发 [DONE] 也视为正常结束（沿用既有行为），此时同样补发 tool calls。
-                    Self.yieldAssembledToolCalls(fragments: toolCallFragments, continuation: continuation)
-                    continuation.yield(.completed)
-                    continuation.finish()
+
+                    for try await byte in bytes {
+                        pendingLine.append(byte)
+                        guard byte == 0x0A else { continue }
+                        // 以原始换行切分输入，而不是使用 `bytes.lines`。后者会吞掉
+                        // 空行，无法区分 SSE 的事件边界；这里完整保留多段 data:。
+                        for message in parser.append(pendingLine) { consume(message) }
+                        pendingLine.removeAll(keepingCapacity: true)
+                        if ended { break }
+                    }
+                    // 末尾若没有空行，仍解析缓冲中的最后一个 SSE 事件。
+                    if !ended, !pendingLine.isEmpty {
+                        for message in parser.append(pendingLine) { consume(message) }
+                    }
+                    if !ended {
+                        for message in parser.finish() { consume(message) }
+                    }
+                    if !ended {
+                        // 网关在没有任何显式终止信号时断开：这不是「正常完成」。
+                        // 仅当端点被显式配置为以 EOF 为正常结束时才按 completed 处理。
+                        finish(termination: configuration.assumesImplicitStreamTermination
+                            ? .completed
+                            : AIStreamTermination(kind: .transportInterrupted, rawReason: "eof_without_terminal_signal"))
+                    }
                 } catch {
                     continuation.finish(throwing: error)
                 }
             }
             continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Chat finish_reason → 统一终止语义。
+    static func termination(forChatFinishReason reason: String) -> AIStreamTermination {
+        switch reason {
+        case "length":
+            return AIStreamTermination(kind: .truncated, rawReason: reason)
+        case "content_filter":
+            return AIStreamTermination(kind: .refused, rawReason: reason)
+        case "tool_calls":
+            return AIStreamTermination(kind: .toolCallsReady, rawReason: reason)
+        default:
+            return AIStreamTermination(kind: .completed, rawReason: reason)
         }
     }
 
@@ -781,101 +948,79 @@ public struct OpenAICompatibleProvider: AIProvider {
         }.first
     }
 
-    /// Responses API 以 response.status=incomplete + max_output_tokens 表达等价的截断。
-    private static func responsesStreamIsTruncated(_ data: String) -> Bool {
-        guard let object = try? JSONSerialization.jsonObject(with: Data(data.utf8)) as? [String: Any],
-              let response = object["response"] as? [String: Any],
-              response["status"] as? String == "incomplete",
-              let details = response["incomplete_details"] as? [String: Any]
-        else { return false }
-        return details["reason"] as? String == "max_output_tokens"
-    }
-
     /// Responses API 流式：SSE 事件按 `data: {"type":...}` 解析，
     /// 映射到现有 `AIStreamEvent`：
     /// - `response.reasoning*_text.delta` → `.reasoningDelta`
     /// - `response.output_text.delta` → `.answerDelta`
     /// - `response.output_item.done`（function_call）→ `.toolCall`
-    /// - `[DONE]` / `response.completed` / 流自然结束 → `.completed`
+    /// - `response.output_item.done`（reasoning）→ `.providerContinuation`
+    /// - `[DONE]` / `response.completed` → `.completed`
+    /// - `response.incomplete`（max_output_tokens → truncated；其它 → interrupted）
     /// - `response.failed` / `error` → 上抛
     private func responsesStream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let (bytes, _) = try await performRequestBytesWithParameterFallback(body: requestBody(request, stream: true))
-                    continuation.yield(.started(model: request.model))
+                    let (bytes, response) = try await performRequestBytesWithParameterFallback(body: requestBody(request, stream: true))
+                    continuation.yield(.started(model: request.model, requestID: Self.requestID(from: response)))
                     var parser = SSEParser()
                     var pendingLine = Data()
                     var responseToolCallFragments: [String: ResponsesToolCallFragment] = [:]
                     var emittedResponseToolCallKeys = Set<String>()
-                    for try await byte in bytes {
-                        pendingLine.append(byte)
-                        guard byte == 0x0A else { continue }
-                        // 保留真实 SSE 事件边界，支持 event:/id: 与多段 data:。
-                        for message in parser.append(pendingLine) {
-                            if message.data == "[DONE]" {
-                                continuation.yield(.completed)
+                    var nativeOutput: [Int: [String: Any]] = [:]
+                    var sawRefusal = false
+                    var ended = false
+
+                    func finish(termination: AIStreamTermination) {
+                        ended = true
+                        if termination.kind == .completed || termination.kind == .toolCallsReady {
+                            guard responseToolCallFragments.isEmpty else {
+                                continuation.yield(.terminated(.init(kind: .transportInterrupted, rawReason: "unfinished_tool")))
                                 continuation.finish()
                                 return
                             }
-                            if Self.responsesStreamIsTruncated(message.data) { throw AIProviderError.outputTruncated }
-                            if let toolCall = Self.consumeResponsesToolCallEvent(
-                                message.data,
-                                fragments: &responseToolCallFragments,
-                                emittedKeys: &emittedResponseToolCallKeys
-                            ) {
-                                continuation.yield(.toolCall(toolCall))
-                                continue
-                            }
-                            let parsed = Self.parseResponsesStreamEvent(
-                                message.data,
-                                allowTypelessAnswer: responseToolCallFragments.isEmpty
-                            )
-                            switch parsed {
-                            case let .reasoning(text):
-                                continuation.yield(.reasoningDelta(text))
-                            case let .answer(text):
-                                continuation.yield(.answerDelta(text))
-                            case let .unknownDelta(text):
-                                continuation.yield(.unknownDelta(text))
-                            case let .toolCall(call):
-                                continuation.yield(.toolCall(call))
-                            case let .webCitations(citations):
-                                continuation.yield(.webCitations(citations))
-                            case .done:
-                                if let usage = Self.responsesUsage(from: message.data) {
-                                    continuation.yield(.usage(input: usage.input, output: usage.output))
-                                }
-                                continuation.yield(.completed)
-                                continuation.finish()
-                                return
-                            case let .failed(detail):
-                                throw AIProviderError.malformedResponse(
-                                    detail: String(localized: "服务返回错误：\(detail)", bundle: .module),
-                                    retryable: false
-                                )
-                            case .ignore:
-                                break
+                            let output = nativeOutput.keys.sorted().compactMap { nativeOutput[$0] }
+                            for item in Self.responsesContinuations(from: ["output": output]) ?? [] {
+                                continuation.yield(.providerContinuation(item.bound(to: configuration.continuationScope(model: request.model))))
                             }
                         }
-                        pendingLine.removeAll(keepingCapacity: true)
-                    }
-                    // 末尾若没有空行，仍处理最后一个完整 SSE 事件。
-                    if !pendingLine.isEmpty { _ = parser.append(pendingLine) }
-                    for message in parser.finish() {
-                        if message.data == "[DONE]" {
+                        switch termination.kind {
+                        case .completed, .toolCallsReady:
                             continuation.yield(.completed)
-                            continuation.finish()
+                        default:
+                            continuation.yield(.terminated(termination))
+                        }
+                        continuation.finish()
+                    }
+
+                    func consume(_ message: SSEMessage) {
+                        guard !ended else { return }
+                        if message.data == "[DONE]" {
+                            finish(termination: sawRefusal
+                                ? AIStreamTermination(kind: .refused, rawReason: "refusal")
+                                : .completed)
                             return
                         }
-                        if Self.responsesStreamIsTruncated(message.data) { throw AIProviderError.outputTruncated }
+                        if let data = message.data.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                            let eventType = object["type"] as? String
+                            if eventType == "response.refusal.delta" || eventType == "response.refusal.done" { sawRefusal = true }
+                            if eventType == "response.output_item.done", let item = object["item"] as? [String: Any] {
+                                nativeOutput[object["output_index"] as? Int ?? nativeOutput.count] = item
+                            }
+                            if eventType == "response.completed", let response = object["response"] as? [String: Any] {
+                                if Self.responsesRefusal(from: response) != nil { sawRefusal = true }
+                                if let output = response["output"] as? [[String: Any]], !output.isEmpty {
+                                    nativeOutput = Dictionary(uniqueKeysWithValues: output.enumerated().map { ($0.offset, $0.element) })
+                                }
+                            }
+                        }
                         if let toolCall = Self.consumeResponsesToolCallEvent(
                             message.data,
                             fragments: &responseToolCallFragments,
                             emittedKeys: &emittedResponseToolCallKeys
                         ) {
                             continuation.yield(.toolCall(toolCall))
-                            continue
+                            return
                         }
                         let parsed = Self.parseResponsesStreamEvent(
                             message.data,
@@ -892,31 +1037,71 @@ public struct OpenAICompatibleProvider: AIProvider {
                             continuation.yield(.toolCall(call))
                         case let .webCitations(citations):
                             continuation.yield(.webCitations(citations))
+                        case .providerContinuation:
+                            break
                         case .done:
                             if let usage = Self.responsesUsage(from: message.data) {
-                                continuation.yield(.usage(input: usage.input, output: usage.output))
+                                continuation.yield(.usage(
+                                    input: usage.input,
+                                    output: usage.output,
+                                    cacheRead: usage.cacheRead,
+                                    cacheCreation: usage.cacheCreation,
+                                    reasoning: usage.reasoning
+                                ))
                             }
-                            continuation.yield(.completed)
-                            continuation.finish()
-                            return
+                            finish(termination: sawRefusal
+                                ? AIStreamTermination(kind: .refused, rawReason: "refusal")
+                                : .completed)
+                        case let .terminated(termination):
+                            if let usage = Self.responsesUsage(from: message.data) {
+                                continuation.yield(.usage(
+                                    input: usage.input,
+                                    output: usage.output,
+                                    cacheRead: usage.cacheRead,
+                                    cacheCreation: usage.cacheCreation,
+                                    reasoning: usage.reasoning
+                                ))
+                            }
+                            finish(termination: termination)
                         case let .failed(detail):
-                            throw AIProviderError.malformedResponse(
+                            continuation.finish(throwing: AIProviderError.malformedResponse(
                                 detail: String(localized: "服务返回错误：\(detail)", bundle: .module),
                                 retryable: false
-                            )
+                            ))
+                            ended = true
                         case .ignore:
                             break
                         }
                     }
-                    // 网关不发 [DONE] / response.completed 也视为正常结束（沿用 Chat 路径行为）。
-                    guard responseToolCallFragments.isEmpty else {
-                        throw AIProviderError.malformedResponse(
-                            detail: String(localized: "Responses 流在工具调用参数完成前中断", bundle: .module),
-                            retryable: true
-                        )
+
+                    for try await byte in bytes {
+                        pendingLine.append(byte)
+                        guard byte == 0x0A else { continue }
+                        // 保留真实 SSE 事件边界，支持 event:/id: 与多段 data:。
+                        for message in parser.append(pendingLine) { consume(message) }
+                        pendingLine.removeAll(keepingCapacity: true)
+                        if ended { break }
                     }
-                    continuation.yield(.completed)
-                    continuation.finish()
+                    // 末尾若没有空行，仍处理最后一个完整 SSE 事件。
+                    if !ended, !pendingLine.isEmpty {
+                        for message in parser.append(pendingLine) { consume(message) }
+                    }
+                    if !ended {
+                        for message in parser.finish() { consume(message) }
+                    }
+                    if !ended {
+                        // 流在工具调用参数完成前中断：未闭合的参数不能执行。
+                        guard responseToolCallFragments.isEmpty else {
+                            throw AIProviderError.malformedResponse(
+                                detail: String(localized: "Responses 流在工具调用参数完成前中断", bundle: .module),
+                                retryable: true
+                            )
+                        }
+                        // 没有任何显式终止信号的 EOF 不是「正常完成」。
+                        finish(termination: configuration.assumesImplicitStreamTermination
+                            ? .completed
+                            : AIStreamTermination(kind: .transportInterrupted, rawReason: "eof_without_terminal_signal"))
+                    }
                 } catch {
                     continuation.finish(throwing: error)
                 }
@@ -1281,11 +1466,22 @@ public struct OpenAICompatibleProvider: AIProvider {
     }
 
     /// Chat Completions 请求体：`{model, messages, temperature, max_tokens, stream?, tools?}`。
+    /// 匹配 vendor 的续接条目（reasoning_content）回放到对应 assistant 消息上；
+    /// 其它 vendor 的条目（换了模型/端点）在此被丢弃，绝不混入。
     private func chatRequestBody(_ request: AICompletionRequest, stream: Bool) -> [String: Any] {
         let transcript = request.transcript
+        let continuations = transcript.continuationsByAssistantMessageIndex(vendor: .openAIChat, scope: configuration.continuationScope(model: request.model))
+        let wireMessages = transcript.messages.enumerated().map { index, message in
+            Self.encodeMessage(
+                message,
+                reasoningContent: continuations[index]?
+                    .compactMap { $0.chatReasoningContent }
+                    .joined()
+            )
+        }
         var body: [String: Any] = [
             "model": request.model,
-            "messages": transcript.messages.map(Self.encodeMessage),
+            "messages": wireMessages,
             "temperature": request.temperature,
             "max_tokens": request.maxTokens,
         ]
@@ -1360,14 +1556,35 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// Responses API 请求体：`{model, input:[...], temperature, max_output_tokens, stream?, tools?}`。
     /// `max_output_tokens` 使用请求的 maxTokens（默认 `auralisDefaultMaxOutputTokens`），
     /// 与 Chat 版的 `max_tokens` 对齐，避免长回答被截断。
+    /// 匹配 vendor 的续接条目（原生 reasoning output items，含 encrypted_content）
+    /// 按原始顺序回放在对应 assistant 条目前；其它 vendor 的条目被丢弃。
     private func responsesRequestBody(_ request: AICompletionRequest, stream: Bool) -> [String: Any] {
         let transcript = request.transcript
+        let continuations = transcript.continuationsByAssistantMessageIndex(vendor: .openAIResponses, scope: configuration.continuationScope(model: request.model))
+        var inputItems: [[String: Any]] = []
+        for (index, message) in transcript.messages.enumerated() {
+            if let native = continuations[index]?.first, case .array = native.payload,
+               let raw = try? JSONSerialization.jsonObject(with: native.payload.jsonData) as? [[String: Any]] {
+                inputItems.append(contentsOf: raw)
+                continue
+            }
+            for continuation in continuations[index] ?? [] {
+                if let raw = try? JSONSerialization.jsonObject(with: continuation.payload.jsonData) as? [String: Any] {
+                    inputItems.append(raw)
+                }
+            }
+            inputItems.append(contentsOf: Self.encodeResponsesInputItems(message))
+        }
         var body: [String: Any] = [
             "model": request.model,
-            "input": transcript.messages.flatMap(Self.encodeResponsesInputItems),
+            "input": inputItems,
+            "store": false,
             "temperature": request.temperature,
             "max_output_tokens": request.maxTokens,
         ]
+        if configuration.supportsReasoningControl {
+            body["include"] = ["reasoning.encrypted_content"]
+        }
         if stream { body["stream"] = true }
         if let output = Self.encodeResponsesOutputFormat(request.outputFormat) {
             body["text"] = ["format": output]
@@ -1517,7 +1734,9 @@ public struct OpenAICompatibleProvider: AIProvider {
     }
 
     /// 按角色编码 Chat 消息：`.tool` 携带 tool_call_id / name；`.assistant` 携带原生 tool_calls。
-    private static func encodeMessage(_ message: AIMessage) -> [String: Any] {
+    /// `reasoningContent` 是本端点此前捕获的续接状态（DeepSeek 思考模式要求
+    /// 带 tools 的续接请求保留 reasoning_content），只附加在 assistant 消息上。
+    private static func encodeMessage(_ message: AIMessage, reasoningContent: String? = nil) -> [String: Any] {
         var result: [String: Any] = ["role": message.role.rawValue]
         switch message.role {
         case .tool:
@@ -1526,6 +1745,9 @@ public struct OpenAICompatibleProvider: AIProvider {
             if let name = message.name, !name.isEmpty { result["name"] = name }
         case .assistant:
             result["content"] = message.content
+            if let reasoningContent, !reasoningContent.isEmpty {
+                result["reasoning_content"] = reasoningContent
+            }
             if let calls = message.toolCalls, !calls.isEmpty {
                 result["tool_calls"] = calls.map { call in
                     [
@@ -1617,7 +1839,7 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// 3. 请求的是非流式，服务端却回了 SSE（`data: {...}`）→ 就地把 delta 拼起来；
     /// 4. HTTP 200 但 body 里塞了 `{"error": {...}}` → 把服务端原文透出；
     /// 5. 其余（HTML 错误页、截断 JSON）→ 附响应体前 240 字节，便于定位。
-    static func parseCompletion(data: Data, fallbackModel: String) throws -> AICompletionResponse {
+    static func parseCompletion(data: Data, fallbackModel: String, requestID: String? = nil) throws -> AICompletionResponse {
         guard !data.isEmpty else {
             throw AIProviderError.malformedResponse(detail: String(localized: "服务返回了空响应体", bundle: .module), retryable: true)
         }
@@ -1627,15 +1849,32 @@ public struct OpenAICompatibleProvider: AIProvider {
         if let object = jsonObject as? [String: Any] {
             if let content = extractContent(from: object) {
                 let usage = object["usage"] as? [String: Any]
+                // OpenAI prompt_tokens 通常已包含 cached_tokens（cache 是
+                // 子集明细，不重复相加）。
+                let promptDetails = usage?["prompt_tokens_details"] as? [String: Any]
+                let completionDetails = usage?["completion_tokens_details"] as? [String: Any]
+                var continuations: [AIProviderContinuation] = []
+                // DeepSeek 思考模式要求带 tools 的续接请求保留 reasoning_content。
+                if let reasoning = reasoningContent(from: object), !reasoning.isEmpty {
+                    continuations.append(AIProviderContinuation(
+                        vendor: .openAIChat,
+                        ordinal: 0,
+                        payload: .object(["reasoning_content": .string(reasoning)])
+                    ))
+                }
                 return AICompletionResponse(
                     model: object["model"] as? String ?? fallbackModel,
                     content: content,
                     reasoning: reasoningContent(from: object),
                     inputTokens: usage?["prompt_tokens"] as? Int,
                     outputTokens: usage?["completion_tokens"] as? Int,
+                    cacheReadTokens: promptDetails?["cached_tokens"] as? Int,
+                    reasoningTokens: completionDetails?["reasoning_tokens"] as? Int,
+                    requestID: requestID,
                     finishReason: finishReason(from: object),
                     toolCalls: toolCalls(from: object),
-                    webCitations: nil
+                    webCitations: nil,
+                    continuations: continuations.isEmpty ? nil : continuations
                 )
             }
             if let message = errorMessage(from: object) {
@@ -1815,7 +2054,11 @@ public struct OpenAICompatibleProvider: AIProvider {
         case unknownDelta(String)
         case toolCall(AIToolCall)
         case webCitations([AIWebCitation])
+        /// 原生 reasoning output item（含 encrypted_content），供续接回放。
+        case providerContinuation(AIProviderContinuation)
         case done
+        /// 非正常终止：incomplete（截断或其它原因）。
+        case terminated(AIStreamTermination)
         case failed(String)
         case ignore
     }
@@ -1854,6 +2097,8 @@ public struct OpenAICompatibleProvider: AIProvider {
         let isArgumentDelta = type == "response.function_call_arguments.delta"
         let isArgumentDone = type == "response.function_call_arguments.done"
         guard isAdded || isOutputDone || isArgumentDelta || isArgumentDone else { return nil }
+        if (isAdded || isOutputDone), item?["type"] as? String != "function_call" { return nil }
+        guard !emittedKeys.contains(key) else { return nil }
 
         var fragment = fragments[key] ?? ResponsesToolCallFragment()
         if let item {
@@ -1896,7 +2141,7 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// 3. 请求的是非流式，服务端却回了 SSE（`data: {...}`）→ 就地把 delta 拼起来；
     /// 4. HTTP 200 但 body 里塞了 `{"error": {...}}` → 把服务端原文透出；
     /// 5. 其余（HTML 错误页、截断 JSON）→ 附响应体前 240 字节，便于定位。
-    static func parseResponsesCompletion(data: Data, fallbackModel: String) throws -> AICompletionResponse {
+    static func parseResponsesCompletion(data: Data, fallbackModel: String, requestID: String? = nil) throws -> AICompletionResponse {
         guard !data.isEmpty else {
             throw AIProviderError.malformedResponse(detail: String(localized: "服务返回了空响应体", bundle: .module), retryable: true)
         }
@@ -1906,15 +2151,21 @@ public struct OpenAICompatibleProvider: AIProvider {
         if let object = jsonObject as? [String: Any] {
             if let content = responsesText(from: object) {
                 let usage = object["usage"] as? [String: Any]
+                let inputDetails = usage?["input_tokens_details"] as? [String: Any]
+                let outputDetails = usage?["output_tokens_details"] as? [String: Any]
                 return AICompletionResponse(
                     model: object["model"] as? String ?? fallbackModel,
                     content: content,
                     reasoning: responsesReasoning(from: object),
                     inputTokens: (usage?["input_tokens"] as? Int) ?? (usage?["prompt_tokens"] as? Int),
                     outputTokens: (usage?["output_tokens"] as? Int) ?? (usage?["completion_tokens"] as? Int),
+                    cacheReadTokens: inputDetails?["cached_tokens"] as? Int,
+                    reasoningTokens: outputDetails?["reasoning_tokens"] as? Int,
+                    requestID: requestID,
                     finishReason: finishReason(fromResponses: object),
                     toolCalls: responsesToolCalls(from: object),
-                    webCitations: responsesWebCitations(from: object)
+                    webCitations: responsesWebCitations(from: object),
+                    continuations: responsesContinuations(from: object)
                 )
             }
             if let message = errorMessage(from: object) {
@@ -1951,10 +2202,28 @@ public struct OpenAICompatibleProvider: AIProvider {
             if let content = item["content"] as? String {
                 if !content.isEmpty { parts.append(content) }
             } else if let content = item["content"] as? [[String: Any]] {
-                parts.append(contentsOf: content.compactMap { $0["text"] as? String })
+                parts.append(contentsOf: content.compactMap { part in
+                    if let text = part["text"] as? String { return text }
+                    if (part["type"] as? String) == "refusal" { return part["refusal"] as? String }
+                    return nil
+                })
             }
         }
         return parts.joined()
+    }
+
+    /// A Responses refusal is a message content part even when status is "completed".
+    static func responsesRefusal(from object: [String: Any]) -> String? {
+        guard let output = object["output"] as? [[String: Any]] else { return nil }
+        var parts: [String] = []
+        for item in output where (item["type"] as? String) == "message" {
+            guard let content = item["content"] as? [[String: Any]] else { continue }
+            for part in content where (part["type"] as? String) == "refusal" {
+                if let refusal = part["refusal"] as? String, !refusal.isEmpty { parts.append(refusal) }
+            }
+        }
+        let joined = parts.joined()
+        return joined.isEmpty ? nil : joined
     }
 
     /// Extract only provider-neutral URL citation fields from Responses
@@ -2016,6 +2285,15 @@ public struct OpenAICompatibleProvider: AIProvider {
         return joined.isEmpty ? nil : joined
     }
 
+    /// 提取 Responses 响应 `output` 中的原生 reasoning 条目（含
+    /// encrypted_content），作为续接回放状态原样保留。条目按 output 顺序。
+    static func responsesContinuations(from object: [String: Any]) -> [AIProviderContinuation]? {
+        guard let output = object["output"] as? [[String: Any]] else { return nil }
+        guard !output.isEmpty, let data = try? JSONSerialization.data(withJSONObject: output),
+              let payload = try? AIJSONValue(jsonData: data) else { return nil }
+        return [AIProviderContinuation(vendor: .openAIResponses, ordinal: 0, payload: payload)]
+    }
+
     /// 解析 Responses 响应 `output` 中的 function_call 条目。
     static func responsesToolCalls(from object: [String: Any]) -> [AIToolCall]? {
         guard let output = object["output"] as? [[String: Any]] else { return nil }
@@ -2034,6 +2312,7 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// Responses 的 finishReason：优先读网关透传的 `finish_reason`，
     /// 否则把 `status` 映射为 Chat 风格（completed→"stop"、超长截断→"length" 等）。
     static func finishReason(fromResponses object: [String: Any]) -> String? {
+        if responsesRefusal(from: object) != nil { return "content_filter" }
         if let direct = object["finish_reason"] as? String { return direct }
         guard let status = object["status"] as? String else { return nil }
         switch status {
@@ -2085,6 +2364,11 @@ public struct OpenAICompatibleProvider: AIProvider {
             if let delta = object["delta"] as? String, !delta.isEmpty { return .answer(delta) }
             if let text = object["text"] as? String, !text.isEmpty { return .answer(text) }
             return .ignore
+        case "response.refusal.delta":
+            if let delta = object["delta"] as? String, !delta.isEmpty { return .answer(delta) }
+            return .ignore
+        case "response.refusal.done":
+            return .ignore
         case "response.output_item.done":
             // OpenAI 原生 Responses API 的流式事件把「完整条目」放在 `item` 字段
             // （`{"type":"response.output_item.done","item":{...}}`），不是 `output`。
@@ -2095,6 +2379,17 @@ public struct OpenAICompatibleProvider: AIProvider {
             guard let item else { return .ignore }
             if (item["type"] as? String) == "message" {
                 return .webCitations(webCitations(from: item) ?? [])
+            }
+            // 原生 reasoning item（含 encrypted_content）是续接请求的必需
+            // 状态；完整保留原始 JSON，回放时原样塞进 input。
+            if (item["type"] as? String) == "reasoning",
+               let data = try? JSONSerialization.data(withJSONObject: item),
+               let payload = try? AIJSONValue(jsonData: data) {
+                return .providerContinuation(AIProviderContinuation(
+                    vendor: .openAIResponses,
+                    ordinal: object["output_index"] as? Int ?? 0,
+                    payload: payload
+                ))
             }
             guard (item["type"] as? String) == "function_call",
                   let name = item["name"] as? String, !name.isEmpty else { return .ignore }
@@ -2107,8 +2402,18 @@ public struct OpenAICompatibleProvider: AIProvider {
             guard let item,
                   (item["type"] as? String) == "message" else { return .ignore }
             return .webCitations(webCitations(from: item) ?? [])
-        case "response.completed", "response.incomplete":
+        case "response.completed":
             return .done
+        case "response.incomplete":
+            // incomplete 不是完成：max_output_tokens 是截断；其它原因（如
+            // 服务端中断）一律按连接中断处理，绝不映射为 done。
+            let response = object["response"] as? [String: Any]
+            let details = response?["incomplete_details"] as? [String: Any]
+            let reason = details?["reason"] as? String
+            if reason == "max_output_tokens" {
+                return .terminated(AIStreamTermination(kind: .truncated, rawReason: reason))
+            }
+            return .terminated(AIStreamTermination(kind: .transportInterrupted, rawReason: reason ?? "incomplete"))
         case "response.failed":
             return .failed(responseErrorMessage(from: object) ?? String(localized: "响应流失败", bundle: .module))
         case "error":
@@ -2212,19 +2517,31 @@ public struct OpenAICompatibleProvider: AIProvider {
     }
 
     /// 从 Chat Completions 流式 chunk 提取 usage（多数网关在最后一个 chunk 带 `usage`）。
-    nonisolated static func streamUsage(from data: String) -> (input: Int, output: Int)? {
+    /// cache 明细读 `prompt_tokens_details.cached_tokens`；推理 token 读
+    /// `completion_tokens_details.reasoning_tokens`；未提供时保持 nil。
+    nonisolated static func streamUsage(
+        from data: String
+    ) -> (input: Int, output: Int, cacheRead: Int?, cacheCreation: Int?, reasoning: Int?)? {
         guard let payload = data.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
               let usage = object["usage"] as? [String: Any]
         else { return nil }
         let input = usage["prompt_tokens"] as? Int
         let output = usage["completion_tokens"] as? Int
-        guard input != nil || output != nil else { return nil }
-        return (input ?? 0, output ?? 0)
+        let promptDetails = usage["prompt_tokens_details"] as? [String: Any]
+        let completionDetails = usage["completion_tokens_details"] as? [String: Any]
+        let cacheRead = promptDetails?["cached_tokens"] as? Int
+        let reasoning = completionDetails?["reasoning_tokens"] as? Int
+        guard input != nil || output != nil || cacheRead != nil || reasoning != nil else { return nil }
+        return (input ?? 0, output ?? 0, cacheRead, nil, reasoning)
     }
 
     /// 从 Responses 流式事件提取 usage（挂在 `response.usage` 下）。
-    nonisolated static func responsesUsage(from data: String) -> (input: Int, output: Int)? {
+    /// cache 明细读 `input_tokens_details.cached_tokens`；推理 token 读
+    /// `output_tokens_details.reasoning_tokens`；未提供时保持 nil。
+    nonisolated static func responsesUsage(
+        from data: String
+    ) -> (input: Int, output: Int, cacheRead: Int?, cacheCreation: Int?, reasoning: Int?)? {
         guard let payload = data.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
               let response = object["response"] as? [String: Any],
@@ -2232,8 +2549,12 @@ public struct OpenAICompatibleProvider: AIProvider {
         else { return nil }
         let input = (usage["input_tokens"] as? Int) ?? (usage["prompt_tokens"] as? Int)
         let output = (usage["output_tokens"] as? Int) ?? (usage["completion_tokens"] as? Int)
-        guard input != nil || output != nil else { return nil }
-        return (input ?? 0, output ?? 0)
+        let inputDetails = usage["input_tokens_details"] as? [String: Any]
+        let outputDetails = usage["output_tokens_details"] as? [String: Any]
+        let cacheRead = inputDetails?["cached_tokens"] as? Int
+        let reasoning = outputDetails?["reasoning_tokens"] as? Int
+        guard input != nil || output != nil || cacheRead != nil || reasoning != nil else { return nil }
+        return (input ?? 0, output ?? 0, cacheRead, nil, reasoning)
     }
 
     /// 解析一条 Chat Completions SSE chunk 里的 `choices[0].delta.tool_calls` 分片。

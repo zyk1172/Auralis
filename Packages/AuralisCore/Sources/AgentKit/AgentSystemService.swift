@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+import AIKit
 import Domain
 import Foundation
 
@@ -828,12 +829,49 @@ public protocol AgentMemoryService: Sendable {
     func agentMemories() async -> [AgentMemoryEntry]
     func searchMemories(query: String) async -> [AgentMemoryEntry]
     func saveMemory(key: String, value: String) async -> Bool
+    /// 带来源元数据的保存。category 非空时，对应披露类别被撤销后该记忆
+    /// 不再注入模型上下文；expiresAt 过期后不再主动召回。
+    func saveMemory(
+        key: String,
+        value: String,
+        source: AgentMemorySource,
+        category: AIPrivacyCategory?,
+        expiresAt: Date?
+    ) async -> Bool
+    func saveMemory(key: String, value: String, source: AgentMemorySource, category: AIPrivacyCategory?, expiresAt: Date?, disclosureCategories: Set<AIPrivacyCategory>) async -> Bool
+    func createSkill(name: String, instructions: String, source: AgentSkillSource, disclosureCategories: Set<AIPrivacyCategory>) async -> AgentSkillEntry?
     func deleteMemory(key: String) async -> Bool
     func clearMemories() async -> Int
     func agentSkills() async -> [AgentSkillEntry]
     func createSkill(name: String, instructions: String) async -> AgentSkillEntry?
     func readSkill(name: String) async -> AgentSkillEntry?
     func deleteSkill(name: String) async -> Bool
+}
+
+public extension AgentMemoryService {
+    // Older adapters may store ordinary user preferences, but must not lose
+    // provenance when they cannot persist the richer representation.
+    func saveMemory(key: String, value: String, source: AgentMemorySource, category: AIPrivacyCategory?, expiresAt: Date?, disclosureCategories: Set<AIPrivacyCategory>) async -> Bool {
+        guard disclosureCategories.isEmpty else { return false }
+        return await saveMemory(key: key, value: value, source: source, category: category, expiresAt: expiresAt)
+    }
+
+    func createSkill(name: String, instructions: String, source: AgentSkillSource, disclosureCategories: Set<AIPrivacyCategory>) async -> AgentSkillEntry? {
+        guard source == .userCreated, disclosureCategories.isEmpty else { return nil }
+        return await createSkill(name: name, instructions: instructions)
+    }
+
+    /// 旧适配器只能保存普通用户偏好；缺少元数据支持时拒绝受限来源。
+    func saveMemory(
+        key: String,
+        value: String,
+        source: AgentMemorySource,
+        category: AIPrivacyCategory?,
+        expiresAt: Date?
+    ) async -> Bool {
+        guard source == .userAsserted, category == nil, expiresAt == nil else { return false }
+        return await saveMemory(key: key, value: value)
+    }
 }
 
 /// AppShell 可继续提供一个组合适配器；AgentKit 内部依赖上面的领域协议。

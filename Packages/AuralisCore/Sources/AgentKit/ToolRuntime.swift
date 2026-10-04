@@ -298,6 +298,23 @@ public struct ToolRuntime {
             capabilityEnvironment: capabilityEnvironment
         )
         let executorMilliseconds = milliseconds(since: executorStarted)
+        if result.success {
+            // 披露登记：与 execute 内部一致的权限解析。结果被掩码（类别未允许）
+            // 时 record 内部不计数；只记录类别事实，不记录参数或结果内容。
+            var resolvedPrivacy = privacyPermissions ?? AIPrivacyPermissions()
+            if privacyPermissions == nil {
+                resolvedPrivacy.allowsLyrics = allowsLyrics
+                resolvedPrivacy.allowsFavoritesAndRatings = allowsFavoritesAndRatings
+            }
+            if call.name.hasPrefix("library_"), resolvedPrivacy.allowsFavoritesAndRatings {
+                await AgentRunDisclosureRegistry.shared.record(runID: runID ?? executionLease.runID, categories: [.favoritesAndRatings])
+            }
+            await AgentRunDisclosureRegistry.shared.record(
+                runID: runID ?? executionLease.runID,
+                toolName: call.name,
+                permissions: resolvedPrivacy
+            )
+        }
         if let metricsCollector {
             await metricsCollector.record(ToolExecutionMetrics(
                 runID: runID ?? executionLease.runID,
