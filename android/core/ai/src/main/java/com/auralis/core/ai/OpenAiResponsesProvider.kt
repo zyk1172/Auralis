@@ -348,12 +348,18 @@ class OpenAiResponsesProvider(
         response.continuation?.let { emit(AiStreamEvent.Continuation(it)) }
         response.reasoning?.let { emit(AiStreamEvent.ReasoningDelta(it)) }
         if (response.content.isNotEmpty()) emit(AiStreamEvent.AnswerDelta(response.content))
-        response.toolCalls.orEmpty().forEach { emit(AiStreamEvent.ToolCall(it)) }
+        if (response.termination.kind != AiStreamTerminationKind.Refused) {
+            response.toolCalls.orEmpty().forEach { emit(AiStreamEvent.ToolCall(it)) }
+        }
         response.webCitations?.let { emit(AiStreamEvent.WebCitations(it)) }
         if (response.inputTokens != null || response.outputTokens != null) {
             emit(AiStreamEvent.Usage(response.inputTokens ?: 0, response.outputTokens ?: 0))
         }
-        emit(AiStreamEvent.Completed)
+        when (response.termination.kind) {
+            AiStreamTerminationKind.Completed, AiStreamTerminationKind.ToolCallsReady ->
+                emit(AiStreamEvent.Completed)
+            else -> emit(AiStreamEvent.Terminated(response.termination))
+        }
     }
 
     private fun responsesStream(request: AiCompletionRequest): Flow<AiStreamEvent> = flow {
