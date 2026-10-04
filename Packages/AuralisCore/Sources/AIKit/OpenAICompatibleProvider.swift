@@ -968,6 +968,7 @@ public struct OpenAICompatibleProvider: AIProvider {
                     var responseToolCallFragments: [String: ResponsesToolCallFragment] = [:]
                     var emittedResponseToolCallKeys = Set<String>()
                     var nativeOutput: [Int: [String: Any]] = [:]
+                    var sawRefusal = false
                     var ended = false
 
                     func finish(termination: AIStreamTermination) {
@@ -995,15 +996,22 @@ public struct OpenAICompatibleProvider: AIProvider {
                     func consume(_ message: SSEMessage) {
                         guard !ended else { return }
                         if message.data == "[DONE]" {
-                            finish(termination: .completed)
+                            finish(termination: sawRefusal
+                                ? AIStreamTermination(kind: .refused, rawReason: "refusal")
+                                : .completed)
                             return
                         }
                         if let data = message.data.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                            if object["type"] as? String == "response.output_item.done", let item = object["item"] as? [String: Any] {
+                            let eventType = object["type"] as? String
+                            if eventType == "response.refusal.delta" || eventType == "response.refusal.done" { sawRefusal = true }
+                            if eventType == "response.output_item.done", let item = object["item"] as? [String: Any] {
                                 nativeOutput[object["output_index"] as? Int ?? nativeOutput.count] = item
                             }
-                            if object["type"] as? String == "response.completed", let response = object["response"] as? [String: Any], let output = response["output"] as? [[String: Any]], !output.isEmpty {
-                                nativeOutput = Dictionary(uniqueKeysWithValues: output.enumerated().map { ($0.offset, $0.element) })
+                            if eventType == "response.completed", let response = object["response"] as? [String: Any] {
+                                if Self.responsesRefusal(from: response) != nil { sawRefusal = true }
+                                if let output = response["output"] as? [[String: Any]], !output.isEmpty {
+                                    nativeOutput = Dictionary(uniqueKeysWithValues: output.enumerated().map { ($0.offset, $0.element) })
+                                }
                             }
                         }
                         if let toolCall = Self.consumeResponsesToolCallEvent(
@@ -1041,7 +1049,9 @@ public struct OpenAICompatibleProvider: AIProvider {
                                     reasoning: usage.reasoning
                                 ))
                             }
-                            finish(termination: .completed)
+                            finish(termination: sawRefusal
+                                ? AIStreamTermination(kind: .refused, rawReason: "refusal")
+                                : .completed)
                         case let .terminated(termination):
                             if let usage = Self.responsesUsage(from: message.data) {
                                 continuation.yield(.usage(
@@ -2192,10 +2202,28 @@ public struct OpenAICompatibleProvider: AIProvider {
             if let content = item["content"] as? String {
                 if !content.isEmpty { parts.append(content) }
             } else if let content = item["content"] as? [[String: Any]] {
-                parts.append(contentsOf: content.compactMap { $0["text"] as? String })
+                parts.append(contentsOf: content.compactMap { part in
+                    if let text = part["text"] as? String { return text }
+                    if (part["type"] as? String) == "refusal" { return part["refusal"] as? String }
+                    return nil
+                })
             }
         }
         return parts.joined()
+    }
+
+    /// A Responses refusal is a message content part even when status is "completed".
+    static func responsesRefusal(from object: [String: Any]) -> String? {
+        guard let output = object["output"] as? [[String: Any]] else { return nil }
+        var parts: [String] = []
+        for item in output where (item["type"] as? String) == "message" {
+            guard let content = item["content"] as? [[String: Any]] else { continue }
+            for part in content where (part["type"] as? String) == "refusal" {
+                if let refusal = part["refusal"] as? String, !refusal.isEmpty { parts.append(refusal) }
+            }
+        }
+        let joined = parts.joined()
+        return joined.isEmpty ? nil : joined
     }
 
     /// Extract only provider-neutral URL citation fields from Responses
@@ -2284,6 +2312,7 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// Responses 的 finishReason：优先读网关透传的 `finish_reason`，
     /// 否则把 `status` 映射为 Chat 风格（completed→"stop"、超长截断→"length" 等）。
     static func finishReason(fromResponses object: [String: Any]) -> String? {
+        if responsesRefusal(from: object) != nil { return "content_filter" }
         if let direct = object["finish_reason"] as? String { return direct }
         guard let status = object["status"] as? String else { return nil }
         switch status {
@@ -2334,6 +2363,11 @@ public struct OpenAICompatibleProvider: AIProvider {
         case "response.output_text.delta":
             if let delta = object["delta"] as? String, !delta.isEmpty { return .answer(delta) }
             if let text = object["text"] as? String, !text.isEmpty { return .answer(text) }
+            return .ignore
+        case "response.refusal.delta":
+            if let delta = object["delta"] as? String, !delta.isEmpty { return .answer(delta) }
+            return .ignore
+        case "response.refusal.done":
             return .ignore
         case "response.output_item.done":
             // OpenAI 原生 Responses API 的流式事件把「完整条目」放在 `item` 字段

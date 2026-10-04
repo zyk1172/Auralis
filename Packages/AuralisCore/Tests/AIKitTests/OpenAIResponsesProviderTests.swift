@@ -1174,4 +1174,35 @@ struct OpenAIResponsesNetworkTests {
             return false
         })
     }
+
+    @Test func parsesResponsesRefusalAsVisibleRefusedContent() throws {
+        let response = try parse(#"{"id":"resp_refused","object":"response","model":"test-model","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"refusal","refusal":"不能处理该请求"}]}]}"#)
+        #expect(response.content == "不能处理该请求")
+        #expect(response.finishReason == "content_filter")
+    }
+
+    @Test func streamsResponsesRefusalAsRefusedTerminal() async throws {
+        let sse = """
+        data: {"type":"response.refusal.delta","delta":"不能"}
+
+        data: {"type":"response.refusal.delta","delta":"处理该请求"}
+
+        data: {"type":"response.refusal.done","refusal":"不能处理该请求"}
+
+        data: {"type":"response.completed","response":{"model":"test-model","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"refusal","refusal":"不能处理该请求"}]}]}}
+
+        data: [DONE]
+        """
+        AIKitMockURLProtocol.reset(stubs: [.response(statusCode: 200, headers: ["Content-Type": "text/event-stream"], data: Data(sse.utf8))])
+        let provider = makeProvider(session: makeMockSession())
+        var events: [AIStreamEvent] = []
+        for try await event in provider.stream(AICompletionRequest(model: "test-model", messages: [AIMessage(role: .user, content: "hi")])) {
+            events.append(event)
+        }
+        #expect(events.contains(.answerDelta("不能")))
+        #expect(events.contains(.answerDelta("处理该请求")))
+        #expect(events.last == .terminated(AIStreamTermination(kind: .refused, rawReason: "refusal")))
+        #expect(!events.contains(.completed))
+    }
+
 }

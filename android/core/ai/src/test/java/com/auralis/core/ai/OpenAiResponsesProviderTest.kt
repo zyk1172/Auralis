@@ -244,4 +244,45 @@ class OpenAiResponsesProviderTest {
         org.junit.Assert.assertNull(events)
         assertTrue("流式读取必须可中断（实际 ${elapsed}ms）", elapsed < 5_000)
     }
+
+    @Test
+    fun `Responses 非流式 refusal 可见且保持拒绝终止语义`() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"model":"gpt-test","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"refusal","refusal":"不能处理该请求"}]}]}""",
+        ))
+        val response = provider(streaming = false).complete(
+            AiCompletionRequest("gpt-test", listOf(AiMessage(AiMessage.Role.User, "hi"))),
+        )
+        assertEquals("不能处理该请求", response.content)
+        assertEquals(AiStreamTerminationKind.Refused, response.termination.kind)
+
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"model":"gpt-test","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"refusal","refusal":"不能处理该请求"}]}]}""",
+        ))
+        val events = provider(streaming = false).stream(
+            AiCompletionRequest("gpt-test", listOf(AiMessage(AiMessage.Role.User, "hi"))),
+        ).toList()
+        assertTrue(events.any { it is AiStreamEvent.AnswerDelta && it.text == "不能处理该请求" })
+        assertEquals(AiStreamTerminationKind.Refused, (events.last() as AiStreamEvent.Terminated).termination.kind)
+    }
+
+    @Test
+    fun `Responses 流式 refusal delta 最终以拒绝终止`() = runBlocking {
+        val sse = buildString {
+            append("data: {\"type\":\"response.refusal.delta\",\"delta\":\"不能\"}\n\n")
+            append("data: {\"type\":\"response.refusal.delta\",\"delta\":\"处理该请求\"}\n\n")
+            append("data: {\"type\":\"response.refusal.done\",\"refusal\":\"不能处理该请求\"}\n\n")
+            append("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"refusal\",\"refusal\":\"不能处理该请求\"}]}]}}\n\n")
+            append("data: [DONE]\n\n")
+        }
+        server.enqueue(MockResponse().setResponseCode(200).setBody(sse))
+        val events = provider(streaming = true).stream(
+            AiCompletionRequest("gpt-test", listOf(AiMessage(AiMessage.Role.User, "hi"))),
+        ).toList()
+        assertTrue(events.any { it is AiStreamEvent.AnswerDelta && it.text == "不能" })
+        assertTrue(events.any { it is AiStreamEvent.AnswerDelta && it.text == "处理该请求" })
+        assertEquals(AiStreamTerminationKind.Refused, (events.last() as AiStreamEvent.Terminated).termination.kind)
+        assertTrue(events.none { it is AiStreamEvent.Completed })
+    }
+
 }

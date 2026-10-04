@@ -228,6 +228,13 @@ class OpenAiResponsesProvider(
         }
 
         val output = root["output"]?.jsonArray.orEmpty()
+        val hasRefusal = output.any { element ->
+            val item = element as? JsonObject ?: return@any false
+            if (item["type"]?.jsonPrimitive?.contentOrNull != "message") return@any false
+            runCatching { item["content"]?.jsonArray }.getOrNull().orEmpty().any { part ->
+                (part as? JsonObject)?.get("type")?.jsonPrimitive?.contentOrNull == "refusal"
+            }
+        }
         val answer = buildString {
             output.forEach { element ->
                 val item = element as? JsonObject ?: return@forEach
@@ -237,7 +244,11 @@ class OpenAiResponsesProvider(
                     is JsonPrimitive -> append(content.contentOrNull.orEmpty())
                     else -> runCatching { content?.jsonArray }.getOrNull()?.forEach { partElement ->
                         val part = partElement as? JsonObject ?: return@forEach
-                        part["text"]?.jsonPrimitive?.contentOrNull?.let(::append)
+                        if (part["type"]?.jsonPrimitive?.contentOrNull == "refusal") {
+                            part["refusal"]?.jsonPrimitive?.contentOrNull?.let(::append)
+                        } else {
+                            part["text"]?.jsonPrimitive?.contentOrNull?.let(::append)
+                        }
                     }
                 }
             }
@@ -275,7 +286,9 @@ class OpenAiResponsesProvider(
             reasoning = reasoning,
             inputTokens = inputTokens,
             outputTokens = outputTokens,
-            finishReason = when (status) {
+            finishReason = if (hasRefusal) {
+                "content_filter"
+            } else when (status) {
                 "completed" -> "stop"
                 "incomplete" -> "length"
                 else -> status
@@ -321,6 +334,8 @@ class OpenAiResponsesProvider(
         var name: String? = null,
         var arguments: String = "",
     )
+
+    private data class ResponsesStreamState(var refusalSeen: Boolean = false)
 
     override fun stream(request: AiCompletionRequest): Flow<AiStreamEvent> {
         if (!configuration.usesStreaming) return nonStreamingProjection(request)
@@ -368,6 +383,7 @@ class OpenAiResponsesProvider(
             val fragments = linkedMapOf<String, ResponseToolFragment>()
             val emitted = mutableSetOf<String>()
             val native = sortedMapOf<Int, JsonObject>()
+            val state = ResponsesStreamState()
             var data = StringBuilder()
             var completed = false
             while (true) {
@@ -376,7 +392,7 @@ class OpenAiResponsesProvider(
                     if (data.isNotEmpty()) {
                         val payload = data.toString()
                         data = StringBuilder()
-                        if (handleStreamPayload(payload, fragments, emitted, native, request.model) { emit(it) }) {
+                        if (handleStreamPayload(payload, fragments, emitted, native, state, request.model) { emit(it) }) {
                             completed = true
                             break
                         }
@@ -389,13 +405,17 @@ class OpenAiResponsesProvider(
                 }
             }
             if (data.isNotEmpty() && !completed) {
-                completed = handleStreamPayload(data.toString(), fragments, emitted, native, request.model) { emit(it) }
+                completed = handleStreamPayload(data.toString(), fragments, emitted, native, state, request.model) { emit(it) }
             }
             if (!completed) {
                 if (configuration.assumesImplicitStreamTermination && fragments.isEmpty()) {
                     if (native.isNotEmpty()) emit(AiStreamEvent.Continuation(AiProviderContinuation(
                         AiProviderToolMode.OpenAiResponses, configuration.continuationScope(request.model), native.values.toList())))
-                    emit(AiStreamEvent.Completed)
+                    if (state.refusalSeen) {
+                        emit(AiStreamEvent.Terminated(AiStreamTermination(AiStreamTerminationKind.Refused, "refusal")))
+                    } else {
+                        emit(AiStreamEvent.Completed)
+                    }
                 } else emit(AiStreamEvent.Terminated(AiStreamTermination(AiStreamTerminationKind.Interrupted, "EOF")))
             }
         }
@@ -406,6 +426,7 @@ class OpenAiResponsesProvider(
         fragments: MutableMap<String, ResponseToolFragment>,
         emitted: MutableSet<String>,
         native: MutableMap<Int, JsonObject>,
+        state: ResponsesStreamState,
         model: String,
         emit: suspend (AiStreamEvent) -> Unit,
     ): Boolean {
@@ -416,7 +437,11 @@ class OpenAiResponsesProvider(
             }
             if (native.isNotEmpty()) emit(AiStreamEvent.Continuation(AiProviderContinuation(
                 AiProviderToolMode.OpenAiResponses, configuration.continuationScope(model), native.toSortedMap().values.toList())))
-            emit(AiStreamEvent.Completed)
+            if (state.refusalSeen) {
+                emit(AiStreamEvent.Terminated(AiStreamTermination(AiStreamTerminationKind.Refused, "refusal")))
+            } else {
+                emit(AiStreamEvent.Completed)
+            }
             return true
         }
         val root = runCatching { json.parseToJsonElement(payload).jsonObject }.getOrElse {
@@ -427,6 +452,14 @@ class OpenAiResponsesProvider(
         when (type) {
             "response.output_text.delta" -> root["delta"]?.jsonPrimitive?.contentOrNull
                 ?.takeIf { it.isNotEmpty() }?.let { emit(AiStreamEvent.AnswerDelta(it)) }
+
+            "response.refusal.delta" -> {
+                state.refusalSeen = true
+                root["delta"]?.jsonPrimitive?.contentOrNull
+                    ?.takeIf { it.isNotEmpty() }?.let { emit(AiStreamEvent.AnswerDelta(it)) }
+            }
+
+            "response.refusal.done" -> state.refusalSeen = true
 
             "response.reasoning_text.delta", "response.reasoning_summary_text.delta" ->
                 root["delta"]?.jsonPrimitive?.contentOrNull
@@ -487,9 +520,21 @@ class OpenAiResponsesProvider(
                 }
                 val items = responseObj?.get("output")?.jsonArray?.mapNotNull { it as? JsonObject }
                     ?: native.toSortedMap().values.toList()
+                if (items.any { item ->
+                    item["type"]?.jsonPrimitive?.contentOrNull == "message" &&
+                        runCatching { item["content"]?.jsonArray }.getOrNull().orEmpty().any { part ->
+                            (part as? JsonObject)?.get("type")?.jsonPrimitive?.contentOrNull == "refusal"
+                        }
+                }) {
+                    state.refusalSeen = true
+                }
                 if (items.isNotEmpty()) emit(AiStreamEvent.Continuation(AiProviderContinuation(
                     AiProviderToolMode.OpenAiResponses, configuration.continuationScope(model), items)))
-                emit(AiStreamEvent.Completed)
+                if (state.refusalSeen) {
+                    emit(AiStreamEvent.Terminated(AiStreamTermination(AiStreamTerminationKind.Refused, "refusal")))
+                } else {
+                    emit(AiStreamEvent.Completed)
+                }
                 return true
             }
 
