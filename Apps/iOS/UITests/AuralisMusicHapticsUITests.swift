@@ -113,6 +113,47 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         )
     }
 
+    func testNowPlayingTransportAndBottomTogglesAreInteractive() throws {
+        launchSmokeApp(with: "-auralis-ui-smoke-now-playing")
+
+        let title = app.descendants(matching: .any)["auralis.nowPlaying.trackTitle"].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 15), "Now Playing track title is missing")
+        XCTAssertEqual(title.label, "Now Playing Smoke A")
+
+        let next = app.buttons["auralis.nowPlaying.next"].firstMatch
+        XCTAssertTrue(next.waitForExistence(timeout: 10), "Next button is missing")
+        XCTAssertTrue(next.isEnabled, "Next button must be enabled for a three-track queue")
+        next.tap()
+        XCTAssertTrue(
+            NSPredicate(format: "label == %@", "Now Playing Smoke B")
+                .evaluate(with: title),
+            "A single tap on Next must synchronously advance to the next queue item"
+        )
+
+        let previous = app.buttons["auralis.nowPlaying.previous"].firstMatch
+        XCTAssertTrue(previous.waitForExistence(timeout: 5), "Previous button is missing")
+        previous.tap()
+        XCTAssertTrue(
+            NSPredicate(format: "label == %@", "Now Playing Smoke A")
+                .evaluate(with: title),
+            "Previous must return to the prior queue item when playback position is at the start"
+        )
+
+        let lyrics = app.buttons["auralis.nowPlaying.lyrics"].firstMatch
+        XCTAssertTrue(lyrics.waitForExistence(timeout: 5), "Lyrics button is missing")
+        lyrics.tap()
+        XCTAssertEqual(lyrics.value as? String, "已打开")
+        lyrics.tap()
+        XCTAssertEqual(lyrics.value as? String, "未打开")
+
+        let queue = app.buttons["auralis.nowPlaying.queue"].firstMatch
+        XCTAssertTrue(queue.waitForExistence(timeout: 5), "Queue button is missing")
+        queue.tap()
+        XCTAssertEqual(queue.value as? String, "已打开")
+        queue.tap()
+        XCTAssertEqual(queue.value as? String, "未打开")
+    }
+
     func testAssistantSessionSheetSurvivesColdBootstrap() throws {
         launchSmokeApp(with: "-auralis-ui-smoke-assistant")
 
