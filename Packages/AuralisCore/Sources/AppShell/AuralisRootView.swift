@@ -328,6 +328,16 @@ public struct AuralisRootView: View {
 /// - 浮动控件（Bottom Dock / AI 输入框）在 iPad 宽屏不铺满，居中、最大约 760pt；
 /// - 可读内容宽度上限约 960pt；
 /// - 播放页内容宽度上限约 680pt（与 NowPlayingView 既有策略一致）。
+/// 一级页面自定义顶部 Chrome。三页使用同一左边距和标题基线；
+/// 首页标题可随向上滚动离场，音乐库 / AI 助手保持固定。
+enum IOSTopLevelChromeMetrics {
+    static let horizontalPadding: CGFloat = AuralisSpacing.large
+    static let verticalPadding: CGFloat = AuralisSpacing.small
+    static let titleOnlyHeight: CGFloat = 60
+    static let titleWithSubtitleHeight: CGFloat = 76
+    static let scopeVerticalPadding: CGFloat = 6
+}
+
 enum IOSLayoutMetrics {
     /// 底部浮动控件（Dock / 输入框）在宽屏的最大宽度。
     static let floatingChromeMaxWidth: CGFloat = 760
@@ -441,11 +451,12 @@ private struct IOSMusicShell: View {
                         reduceMotion: reduceMotion
                     )
                 }
-                // 一级页面统一交给系统 Large Title 管理。标题属于 NavigationBar，
-                // 不参与 ScrollView 的橡皮筋位移：向下拉时内容与标题分离，松手后由
-                // UIKit/SwiftUI 原生回弹；向上滚动时系统标题自然收拢。
-                .navigationTitle(model.selectedSection.title)
-                .navigationBarTitleDisplayMode(.large)
+                // Home / Library / Assistant 使用自己的顶部 Chrome，完全关闭
+                // 系统 NavigationBar，避免 Large Title 预留大片空白，也避免上滑后
+                // 自动生成 inline 小标题。Search / Settings 仍保留系统导航栏。
+                .navigationTitle(usesCustomTopLevelChrome ? "" : model.selectedSection.title)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar(usesCustomTopLevelChrome ? .hidden : .visible, for: .navigationBar)
         }
         // Dock 切换的是应用一级分区；若当前停在设置/资料库的二级 NavigationLink，
         // 必须丢弃旧路径并回到新分区根页，不能让二级页面“悬在”新的根内容之上。
@@ -499,6 +510,15 @@ private struct IOSMusicShell: View {
                     Text(message)
                 }
             }
+        }
+    }
+
+    private var usesCustomTopLevelChrome: Bool {
+        switch model.selectedSection {
+        case .home, .library, .assistant:
+            true
+        case .search, .settings:
+            false
         }
     }
 
@@ -1647,6 +1667,8 @@ struct BrowseDetailSheet: View {
         content
             .navigationTitle(title)
             #if os(iOS)
+            // 一级页面隐藏系统栏，但 push 进入详情后必须恢复系统返回栏。
+            .toolbar(.visible, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
