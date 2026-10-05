@@ -73,7 +73,7 @@ final class HomeStore: ObservableObject {
             .filter { track in
                 !dislikedTrackIDs.contains(GlobalID(serverID: track.serverID, remoteID: track.id.rawValue))
             }
-            .shuffled().prefix(18))
+            .shuffled().prefix(24))
     }
 
     /// 应用后台已算好的随机采样：直接写入采样结果，避免在主线程二次 filter/shuffle，
@@ -87,7 +87,7 @@ final class HomeStore: ObservableObject {
             .filter { track in
                 track.isFavorite && !dislikedTrackIDs.contains(GlobalID(serverID: track.serverID, remoteID: track.id.rawValue))
             }
-            .shuffled().prefix(18))
+            .shuffled().prefix(24))
     }
 
     func refresh(
