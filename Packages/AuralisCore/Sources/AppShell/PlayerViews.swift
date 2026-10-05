@@ -956,12 +956,14 @@ struct NowPlayingView: View {
                     color: theme.colorTokens.primaryText.color,
                     height: 30
                 )
+                .accessibilityIdentifier("auralis.nowPlaying.trackTitle")
                 OneShotMarqueeText(
                     text: model.currentTrack.artistName,
                     font: .subheadline,
                     color: theme.colorTokens.secondaryText.color,
                     height: 22
                 )
+                .accessibilityIdentifier("auralis.nowPlaying.artistName")
             }
             .padding(.horizontal, 56)
             .frame(maxWidth: .infinity)
@@ -1162,6 +1164,7 @@ struct NowPlayingView: View {
         .frame(width: 44, height: 44)
         .contentShape(Rectangle())
         .accessibilityLabel(model.currentTrack.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
+        .accessibilityIdentifier("auralis.nowPlaying.favorite")
     }
 
     /// “不喜欢”按钮：与收藏按钮严格镜像。只影响未来自动推荐，
@@ -1183,6 +1186,7 @@ struct NowPlayingView: View {
         .accessibilityLabel(isDisliked ? String(localized: "取消不喜欢", bundle: .module) : String(localized: "不喜欢", bundle: .module))
         .accessibilityHint(String(localized: "不喜欢的歌曲不会再出现在自动推荐中。", bundle: .module))
         .accessibilityValue(isDisliked ? String(localized: "已标记不喜欢", bundle: .module) : String(localized: "未标记不喜欢", bundle: .module))
+        .accessibilityIdentifier("auralis.nowPlaying.dislike")
     }
 
     private func transportControls(playButtonSize: CGFloat) -> some View {
@@ -1203,6 +1207,7 @@ struct NowPlayingView: View {
                 }
                 .buttonStyle(HapticPlainButtonStyle())
                 .accessibilityLabel(String(localized: "播放模式：\(model.playMode.title)", bundle: .module))
+                .accessibilityIdentifier("auralis.nowPlaying.playMode")
             }
             transportItem {
                 Button(action: model.previous) {
@@ -1213,7 +1218,9 @@ struct NowPlayingView: View {
                 }
                 .buttonStyle(HapticPlainButtonStyle())
                 .disabled(!model.canGoPrevious)
+                .opacity(model.canGoPrevious ? 1 : 0.32)
                 .accessibilityLabel(String(localized: "上一首", bundle: .module))
+                .accessibilityIdentifier("auralis.nowPlaying.previous")
             }
             transportItem {
                 Button(action: model.togglePlayback) {
@@ -1233,6 +1240,7 @@ struct NowPlayingView: View {
                     value: mainControlPresentation
                 )
                 .accessibilityLabel(mainControlPresentation.accessibilityLabel)
+                .accessibilityIdentifier("auralis.nowPlaying.playPause")
             }
             transportItem {
                 Button(action: model.next) {
@@ -1243,7 +1251,11 @@ struct NowPlayingView: View {
                 }
                 .buttonStyle(HapticPlainButtonStyle())
                 .disabled(!model.canGoNext)
+                // 自定义 HapticPlainButtonStyle 不会自动绘制 disabled 外观。
+                // 必须明确变淡，否则“没有下一首”时看起来仍像一个可用按钮。
+                .opacity(model.canGoNext ? 1 : 0.32)
                 .accessibilityLabel(String(localized: "下一首", bundle: .module))
+                .accessibilityIdentifier("auralis.nowPlaying.next")
             }
             transportItem {
                 moreMenu
@@ -1280,6 +1292,7 @@ struct NowPlayingView: View {
             bottomNavigationButton(
                 systemImage: page == .lyrics ? "quote.bubble.fill" : "quote.bubble",
                 title: String(localized: "歌词", bundle: .module),
+                identifier: "auralis.nowPlaying.lyrics",
                 isSelected: page == .lyrics
             ) {
                 setPageFromBottomNavigation(.lyrics)
@@ -1291,12 +1304,14 @@ struct NowPlayingView: View {
                 .frame(width: 52, height: 44)
                 .contentShape(Rectangle())
                 .accessibilityLabel(String(localized: "隔空播放", bundle: .module))
+                .accessibilityIdentifier("auralis.nowPlaying.airPlay")
 
             Spacer(minLength: 0)
 
             bottomNavigationButton(
                 systemImage: "list.bullet",
                 title: String(localized: "队列", bundle: .module),
+                identifier: "auralis.nowPlaying.queue",
                 isSelected: page == .queue
             ) {
                 setPageFromBottomNavigation(.queue)
@@ -1308,6 +1323,7 @@ struct NowPlayingView: View {
     private func bottomNavigationButton(
         systemImage: String,
         title: String,
+        identifier: String,
         isSelected: Bool,
         action: @escaping () -> Void
     ) -> some View {
@@ -1329,6 +1345,7 @@ struct NowPlayingView: View {
             value: isSelected
         )
         .accessibilityLabel(title)
+        .accessibilityIdentifier(identifier)
         .accessibilityValue(
             isSelected
                 ? String(localized: "已打开", bundle: .module)
