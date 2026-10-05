@@ -59,6 +59,17 @@ struct IOSLayoutMetricsTests {
         #expect(IOSLayoutMetrics.readableContentWidth(containerWidth: -1) == 0)
     }
 
+    @Test("首页标题下拉固定、上滑最多离场一个标题高度")
+    func homeHeaderSeparatesPullDownFromUpwardScroll() {
+        #expect(HomeTopHeaderPolicy.offset(for: -120) == 0)
+        #expect(HomeTopHeaderPolicy.offset(for: 0) == 0)
+        #expect(HomeTopHeaderPolicy.offset(for: 24) == 24)
+        #expect(
+            HomeTopHeaderPolicy.offset(for: 500)
+                == IOSTopLevelChromeMetrics.titleOnlyHeight
+        )
+    }
+
     @Test("播放页内容宽度 token 与浮动控件上限一致（不铺满宽屏）")
     func playerAndFloatingTokensStayBounded() {
         #expect(IOSLayoutMetrics.playerContentMaxWidth < IOSLayoutMetrics.readableContentMaxWidth)
