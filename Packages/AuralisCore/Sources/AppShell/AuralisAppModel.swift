@@ -2752,6 +2752,35 @@ public final class AuralisAppModel: ObservableObject {
         reconcileLibraryAddedDates(tracks: tracks, serverID: serverID)
         refreshHomeSnapshots()
     }
+
+    /// Now Playing 控件 UI smoke：构造一个无需网络/音频引擎即可切换的三首队列。
+    /// 只验证 UI → AppModel → QueueStore 的同步控制路径。
+    func installNowPlayingControlsUISmokeFixture() {
+        let serverID: ServerID = "now-playing-smoke"
+        let albumID: AlbumID = "now-playing-smoke-album"
+        let artistID: ArtistID = "now-playing-smoke-artist"
+        let tracks = ["A", "B", "C"].map { suffix in
+            Track(
+                id: TrackID(rawValue: "now-playing-smoke-\(suffix.lowercased())"),
+                serverID: serverID,
+                albumID: albumID,
+                artistID: artistID,
+                title: "Now Playing Smoke \(suffix)",
+                artistName: "Smoke Artist",
+                albumTitle: "Smoke Album",
+                duration: 180
+            )
+        }
+
+        largeLogicalContext = nil
+        largeLogicalWindowStart = nil
+        largeLogicalNextIndex = nil
+        queue = tracks
+        currentTrack = tracks[0]
+        playbackPosition = 0
+        playbackState = .paused
+    }
+
 #endif
 
     /// 测试钩子：确定性等待 apply() 排队的后台派生（首页货架 / 随机音乐 /
