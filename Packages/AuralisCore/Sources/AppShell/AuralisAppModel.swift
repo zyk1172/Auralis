@@ -2219,7 +2219,7 @@ public final class AuralisAppModel: ObservableObject {
     /// 随机播放指定数量的歌曲。整库随机属于自动发现：必须排除“不喜欢”的歌曲。
     /// 返回真正加入队列的数量，供 Agent 只在播放器已收到歌曲时报告成功。
     @discardableResult
-    public func playRandom(limit: Int = 30) -> Int {
+    public func playRandom(limit: Int = 24) -> Int {
         let candidates = catalog.tracks.filter { !isDisliked($0) }
         let tracks = Array(candidates.shuffled().prefix(max(1, limit)))
         guard !tracks.isEmpty else { return 0 }
