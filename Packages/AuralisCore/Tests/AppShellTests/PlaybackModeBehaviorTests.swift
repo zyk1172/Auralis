@@ -138,6 +138,25 @@ struct PlaybackModeBehaviorTests {
         #expect(model.canGoNext)
     }
 
+    @Test("中等上下文后台准备不能覆盖用户随后编辑的队列")
+    @MainActor
+    func staleMediumPreparationCannotOverwriteQueueEdit() async {
+        let tracks = (0..<200).map { track("medium-edit-\($0)") }
+        let extra = track("medium-edit-extra")
+        let model = makeModel(tracks: tracks + [extra])
+
+        model.playTrack(tracks[90], in: tracks)
+        model.appendToQueue(extra)
+
+        for _ in 0..<200 {
+            await Task.yield()
+        }
+
+        #expect(model.queue.count == tracks.count + 1)
+        #expect(model.queue.last?.id.rawValue == "medium-edit-extra")
+        #expect(model.currentTrack.id.rawValue == "medium-edit-90")
+    }
+
     // MARK: - 顺序（repeat-off）
 
     @Test("repeatOff：队尾自然播完暂停，不切歌")
