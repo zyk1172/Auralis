@@ -427,11 +427,12 @@ private struct IOSMusicShell: View {
                         reduceMotion: reduceMotion
                     )
                 }
-                .navigationTitle(model.selectedSection.title)
-                // 顶部标题用系统大标题：字体大、与正文内容有明显区分（Apple Music 风格）。
-                // 不覆盖系统导航栏材质。iOS 26+ 会为标准导航栏自动采用 Liquid Glass；
-                // 之前把这里强制涂成主题纯色，导致顶部仍是旧式、不透明的导航栏。
-                .navigationBarTitleDisplayMode(.large)
+                // 首页不再使用系统 Large Title。iOS 26 的大标题导航栏会在首屏
+                // 预留过高的固定区域；首页标题改由 HomeView 放进 ScrollView，
+                // 这样首屏更紧凑，并且标题会像 Apple Music 一样随内容上滑离场。
+                // 其它一级页面保持现有系统导航标题行为。
+                .navigationTitle(model.selectedSection == .home ? "" : model.selectedSection.title)
+                .navigationBarTitleDisplayMode(model.selectedSection == .home ? .inline : .large)
         }
         // Dock 切换的是应用一级分区；若当前停在设置/资料库的二级 NavigationLink，
         // 必须丢弃旧路径并回到新分区根页，不能让二级页面“悬在”新的根内容之上。
@@ -445,15 +446,16 @@ private struct IOSMusicShell: View {
             dockOverlay
                 .ignoresSafeArea(.keyboard, edges: .bottom)
         }
-        .sheet(isPresented: nowPlayingBinding) {
+        // 正在播放页必须真正覆盖整块屏幕。iOS 26 的 large sheet 会保留
+        // 明显的顶部外露区域和圆角，视觉上仍像半屏卡片；改为 fullScreenCover，
+        // 背景可延伸到状态栏，关闭手势由 NowPlayingView 自己的顶部拖拽柄承担。
+        .fullScreenCover(isPresented: nowPlayingBinding) {
             NowPlayingView(model: model, theme: themeStore.current)
                 .auralisZoomNavigationTransition(
                     sourceID: IOSNowPlayingTransitionID.player,
                     in: nowPlayingTransitionNamespace,
                     reduceMotion: reduceMotion
                 )
-                .presentationDragIndicator(.visible)
-                .presentationDetents([.large])
         }
         .sheet(isPresented: $model.shouldPresentServerSetup) {
             ServerConnectionSheet(model: model, theme: themeStore.current)
