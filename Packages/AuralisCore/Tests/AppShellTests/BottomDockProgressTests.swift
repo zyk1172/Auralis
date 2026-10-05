@@ -85,6 +85,23 @@ struct BottomDockProgressTests {
     }
 }
 
+
+@Suite("歌词页沉浸 Chrome")
+struct LyricsChromePolicyTests {
+    @Test("5 秒无操作后自动隐藏")
+    func autoHideDelayIsFiveSeconds() {
+        #expect(LyricsChromePolicy.autoHideDelay == .seconds(5))
+    }
+
+    @Test("向上滑隐藏、向下滑显示，短划和横划不触发")
+    func verticalGestureChoosesLyricsChromeTerminalState() {
+        #expect(LyricsChromePolicy.terminalHidden(for: .init(width: 2, height: -44)) == true)
+        #expect(LyricsChromePolicy.terminalHidden(for: .init(width: 2, height: 80)) == false)
+        #expect(LyricsChromePolicy.terminalHidden(for: .init(width: 1, height: -43)) == nil)
+        #expect(LyricsChromePolicy.terminalHidden(for: .init(width: 80, height: -20)) == nil)
+    }
+}
+
 @Suite("播放页标题滚动判断")
 struct MarqueeLayoutPolicyTests {
     @Test("能原样或轻微缩小完整显示的名称不滚动")
