@@ -37,6 +37,18 @@ struct BottomDockProgressReducer: Sendable {
         Int(floor(max(zeroBasedOffset, 0) / minimumVerticalSwipeDistance))
     }
 
+    /// 同时裁掉底部 rubber-band。ScrollView 到达内容末尾后继续拖动时，
+    /// contentOffset 会短暂超过正常最大值；若直接量化，回弹过程会跨桶，
+    /// 被误判成一次“向回滚”，从而让 Dock 展开后又再次收拢。
+    static func scrollBucket(
+        for zeroBasedOffset: CGFloat,
+        maximumOffset: CGFloat
+    ) -> Int {
+        let clampedMaximum = max(maximumOffset, 0)
+        let clampedOffset = min(max(zeroBasedOffset, 0), clampedMaximum)
+        return Int(floor(clampedOffset / minimumVerticalSwipeDistance))
+    }
+
     /// 内容向下推进（offset 桶增大）时收拢 Dock；用户向回滚（桶减小）时展开。
     /// 同一桶内的高频滚动完全不发布状态变化。
     static func terminalProgress(oldScrollBucket: Int, newScrollBucket: Int) -> CGFloat? {
@@ -665,8 +677,18 @@ struct BottomDockScrollReportingModifier: ViewModifier {
             // 读取量化后的滚动距离；每跨过一个 44pt 桶最多更新一次 Dock，
             // 横向货架、List 惯性和顶部 rubber-band 都不会再被竞争手势打断。
             .onScrollGeometryChange(for: Int.self) { geometry in
-                BottomDockProgressReducer.scrollBucket(
-                    for: geometry.contentOffset.y + geometry.contentInsets.top
+                let zeroBasedOffset =
+                    geometry.contentOffset.y + geometry.contentInsets.top
+                let maximumOffset = max(
+                    geometry.contentSize.height
+                        - geometry.containerSize.height
+                        + geometry.contentInsets.top
+                        + geometry.contentInsets.bottom,
+                    0
+                )
+                return BottomDockProgressReducer.scrollBucket(
+                    for: zeroBasedOffset,
+                    maximumOffset: maximumOffset
                 )
             } action: { oldBucket, newBucket in
                 guard let terminal = BottomDockProgressReducer.terminalProgress(
