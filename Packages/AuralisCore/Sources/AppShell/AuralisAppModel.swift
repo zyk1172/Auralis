@@ -2052,6 +2052,13 @@ public final class AuralisAppModel: ObservableObject {
                 prepared: provisionalPrepared,
                 preparedWindowStart: selectedIndex
             )
+            // 新上下文 = 新一轮随机语义。deferred selectAndPlay 当时没有 entry，
+            // 因此必须在窗口安装后补记当前 occurrence。
+            shufflePlayedEntryIDs.removeAll()
+            shufflePlayedLogicalIDs.removeAll()
+            if isShuffled {
+                shufflePlayedLogicalIDs.insert(selectedIndex)
+            }
 
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -2097,6 +2104,11 @@ public final class AuralisAppModel: ObservableObject {
             selectedTrackID: expectedID
         )
         queueStore.installPreparedQueue(prepared)
+        shufflePlayedEntryIDs.removeAll()
+        shufflePlayedLogicalIDs.removeAll()
+        if isShuffled, let entryID = queueStore.currentEntryID {
+            shufflePlayedEntryIDs.insert(entryID)
+        }
         syncRemoteCommandCapabilities()
         schedulePlaybackSessionPersistence()
         schedulePreparedNext()
