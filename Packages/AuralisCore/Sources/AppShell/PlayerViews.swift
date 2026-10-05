@@ -355,7 +355,7 @@ private struct LyricCharacterFlowLayout: Layout {
                 subviews[index].place(
                     at: CGPoint(x: x + size.width / 2, y: y + row.height / 2),
                     anchor: .center,
-                    proposal: ProposedViewSize(size)
+                    proposal: ProposedViewSize(width: size.width, height: size.height)
                 )
                 x += size.width + horizontalSpacing
             }
