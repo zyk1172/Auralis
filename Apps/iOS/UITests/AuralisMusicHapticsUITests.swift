@@ -63,9 +63,10 @@ final class AuralisMusicHapticsUITests: XCTestCase {
     func testNowPlayingExposesMusicHapticsToggle() throws {
         launchSmokeApp(with: "-auralis-ui-smoke-now-playing")
 
-        XCTAssertTrue(app.staticTexts["正在播放"].waitForExistence(timeout: 15), "Now Playing sheet did not open from the deterministic smoke-test route")
+        // iOS Now Playing no longer has the old top segmented "正在播放" label;
+        // the stable more-actions identifier proves the full player is on screen.
         let more = app.buttons["auralis.nowPlaying.moreActions"].firstMatch
-        XCTAssertTrue(more.waitForExistence(timeout: 10), "Now Playing more-actions entry is missing")
+        XCTAssertTrue(more.waitForExistence(timeout: 15), "Now Playing sheet did not open from the deterministic smoke-test route")
         more.tap()
 
         // SwiftUI renders a Menu Toggle as a menu control rather than an
@@ -90,12 +91,11 @@ final class AuralisMusicHapticsUITests: XCTestCase {
     func testNowPlayingMoreMenuActionFiresOnFirstTap() throws {
         launchSmokeApp(with: "-auralis-ui-smoke-now-playing")
 
+        let more = app.buttons["auralis.nowPlaying.moreActions"].firstMatch
         XCTAssertTrue(
-            app.staticTexts["正在播放"].waitForExistence(timeout: 15),
+            more.waitForExistence(timeout: 15),
             "Now Playing sheet did not open from the deterministic smoke-test route"
         )
-        let more = app.buttons["auralis.nowPlaying.moreActions"].firstMatch
-        XCTAssertTrue(more.waitForExistence(timeout: 10), "Now Playing more-actions entry is missing")
         more.tap()
 
         // This regression used to require reopening/tapping the system Menu
