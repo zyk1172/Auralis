@@ -72,6 +72,62 @@ struct BottomDockProgressTests {
         )
     }
 
+    @Test("底部临界值 settling 不会反向展开 Dock")
+    func bottomBoundarySettlingUsesHysteresis() {
+        // 177→175 会跨过旧的 44pt bucket 边界（4→3），但并不是用户回滚。
+        let collapsed = BottomDockProgressReducer.hysteresisStep(
+            anchor: 177,
+            offset: 175,
+            collapseProgress: 1
+        )
+        #expect(collapsed.terminalProgress == nil)
+        #expect(collapsed.anchor == 177)
+
+        // 只有从实际最大值反向移动满 44pt 才展开。
+        let expanded = BottomDockProgressReducer.hysteresisStep(
+            anchor: collapsed.anchor,
+            offset: 133,
+            collapseProgress: 1
+        )
+        #expect(expanded.terminalProgress == 0)
+        #expect(expanded.anchor == 133)
+    }
+
+    @Test("展开态也要求真实向下滚满 44pt 才收拢")
+    func expandedDockRequiresFullForwardTravel() {
+        let shortMove = BottomDockProgressReducer.hysteresisStep(
+            anchor: 100,
+            offset: 143,
+            collapseProgress: 0
+        )
+        #expect(shortMove.terminalProgress == nil)
+        #expect(shortMove.anchor == 100)
+
+        let collapse = BottomDockProgressReducer.hysteresisStep(
+            anchor: shortMove.anchor,
+            offset: 144,
+            collapseProgress: 0
+        )
+        #expect(collapse.terminalProgress == 1)
+        #expect(collapse.anchor == 144)
+    }
+
+    @Test("滚动采样同时裁掉顶部和底部 rubber-band")
+    func clampedScrollSampleRemovesRubberBand() {
+        #expect(
+            BottomDockProgressReducer.clampedScrollSample(
+                zeroBasedOffset: -30,
+                maximumOffset: 177.8
+            ) == 0
+        )
+        #expect(
+            BottomDockProgressReducer.clampedScrollSample(
+                zeroBasedOffset: 999,
+                maximumOffset: 177.8
+            ) == 177
+        )
+    }
+
     @Test("播放器可视胶囊使用独立宽度几何")
     func playerWidthUsesVisibleCapsuleGeometry() {
         let fullWidth: CGFloat = 760
