@@ -195,6 +195,9 @@ public final class AuralisAppModel: ObservableObject {
     private func mutateLargeLogicalQueue(_ mutation: (inout [(token: Int, track: Track)], inout Int) -> Void) -> Bool {
         guard let logical = largeLogicalContext,
               let current = largeLogicalCurrentIndex else { return false }
+        // 逻辑队列发生真实编辑后，任何基于编辑前 snapshot 的后台 prepare 都必须失效，
+        // 否则完成较晚的旧结果会把“下一首播放 / 删除 / 移动”等用户操作覆盖掉。
+        contextPreparationGeneration &+= 1
         var items = logical.enumerated().map { (token: $0.offset, track: $0.element) }
         var currentToken = current
         mutation(&items, &currentToken)
@@ -2089,9 +2092,11 @@ public final class AuralisAppModel: ObservableObject {
                 }.value
                 let prepareMs = self.durationMs(prepareStarted.duration(to: .now))
                 AuralisLog.playback.debug("LARGE_WINDOW_PREPARED logicalCount=\(result.1.count, privacy: .public) windowCount=\(result.0.entries.count, privacy: .public) duration_ms=\(prepareMs, privacy: .public)")
-                // 如果用户已经点了“下一首”，当前曲目已变；保留即时窗口，
-                // 不允许后台旧结果把队列指针退回刚才那首歌。
-                guard self.queueIdentity(self.currentTrack) == expectedID else { return }
+                // 如果开始了新的上下文、或用户已经编辑过逻辑队列，旧 snapshot
+                // 绝不能再覆盖；若只是点了“下一首”，当前曲目变化也保留即时窗口。
+                guard self.contextPreparationGeneration == preparationGeneration,
+                      self.queueIdentity(self.currentTrack) == expectedID
+                else { return }
                 let installStarted = ContinuousClock.now
                 self.installLargeLogicalContext(
                     result.1,
