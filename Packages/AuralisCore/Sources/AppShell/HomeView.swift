@@ -37,6 +37,7 @@ struct HomeView: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: AuralisSpacing.xLarge) {
+                homeHeader
                 quickEntriesSection
                 ForEach(visibleContentModules) { module in
                     moduleSection(module)
@@ -53,6 +54,16 @@ struct HomeView: View {
         }
         .reportsBottomDockScroll(source: .home)
         .background(ambientBackground)
+    }
+
+    /// 首页标题属于滚动内容本身，而不是 NavigationStack 的 Large Title。
+    /// 这样首屏不会被系统大标题预留出过高空间，向上滚动时标题也会自然离场。
+    private var homeHeader: some View {
+        Text(String(localized: "首页", bundle: .module))
+            .font(.largeTitle.bold())
+            .foregroundStyle(colors.primaryText.color)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("auralis.home.title")
     }
 
     // MARK: - 模块可见性（用户开启 + 有数据）
