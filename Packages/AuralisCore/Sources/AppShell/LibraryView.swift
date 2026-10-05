@@ -32,39 +32,24 @@ struct LibraryView: View {
     }
 
     var body: some View {
-        // 让真实 List/ScrollView 直接占据页面根区域，NavigationStack 才能用系统
-        // scroll-edge 行为收拢大标题并保留原生 rubber-band。Scope 控件作为顶部
-        // safe-area chrome 固定，不再用外层 VStack 截断滚动容器与导航栏的联动。
-        scopeContent
-            .id(scope)
-            .transition(.opacity)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .safeAreaInset(edge: .top, spacing: 0) {
-                VStack(spacing: 0) {
-                    libraryScopeNavigation
-                        .padding(.horizontal, AuralisSpacing.large)
-                        .padding(.vertical, AuralisSpacing.small)
-                    Divider()
-                }
-                .background(theme.colorTokens.background.color)
-            }
-        .background(theme.colorTokens.background.color)
-#if os(iOS)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    model.selectTopLevelSection(.settings)
-                } label: {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(theme.colorTokens.accent.color)
-                        .frame(width: 44, height: 44)
-                }
-                .buttonStyle(HapticPlainButtonStyle())
-                .accessibilityLabel(String(localized: "设置", bundle: .module))
-            }
+        // 音乐库的标题行与页内选择栏都属于固定 Chrome：
+        // 它们不随内容滚动，也不依赖系统 NavigationBar，因此不会产生顶部大片空白
+        // 或上滑后的 inline 小标题。
+        VStack(spacing: 0) {
+            libraryTopHeader
+
+            libraryScopeNavigation
+                .padding(.horizontal, IOSTopLevelChromeMetrics.horizontalPadding)
+                .padding(.vertical, IOSTopLevelChromeMetrics.scopeVerticalPadding)
+
+            Divider()
+
+            scopeContent
+                .id(scope)
+                .transition(.opacity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-#endif
+        .background(theme.colorTokens.background.color)
         .sheet(item: $playlistTarget) { track in
             AddToPlaylistSheet(model: model, theme: theme, track: track)
         }
@@ -110,6 +95,38 @@ struct LibraryView: View {
         } message: {
             Text(String(localized: "服务器上的歌单也会被删除，此操作不可撤销。", bundle: .module))
         }
+    }
+
+    private var libraryTopHeader: some View {
+        HStack(spacing: AuralisSpacing.medium) {
+            Text(String(localized: "音乐库", bundle: .module))
+                .font(.largeTitle.bold())
+                .foregroundStyle(theme.colorTokens.primaryText.color)
+                .lineLimit(1)
+                .accessibilityAddTraits(.isHeader)
+
+            Spacer(minLength: 0)
+
+            Button {
+                model.selectTopLevelSection(.settings)
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(theme.colorTokens.accent.color)
+                    .frame(
+                        width: IOSLayoutMetrics.minimumTouchTargetHeight,
+                        height: IOSLayoutMetrics.minimumTouchTargetHeight
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(HapticPlainButtonStyle())
+            .accessibilityLabel(String(localized: "设置", bundle: .module))
+        }
+        .padding(.horizontal, IOSTopLevelChromeMetrics.horizontalPadding)
+        .frame(height: IOSTopLevelChromeMetrics.titleOnlyHeight)
+        .frame(maxWidth: IOSLayoutMetrics.readableContentMaxWidth)
+        .frame(maxWidth: .infinity)
+        .accessibilityIdentifier("auralis.library.header")
     }
 
     private var libraryScopeNavigation: some View {
