@@ -16,6 +16,9 @@ import UIKit
 struct MiniPlayerContent: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject private var playbackStore: PlaybackStore
+    /// canGoNext / canGoPrevious 由队列状态决定；只观察 AppModel/PlaybackStore
+    /// 无法感知“当前歌曲不变但队列被追加/替换”的情况。
+    @ObservedObject private var queueStore: PlaybackQueuePresentationStore
     let theme: BuiltInTheme
     var height: CGFloat = 56
     /// 展开态为 1；收拢为底部中间胶囊时连续收至 0。
@@ -38,6 +41,7 @@ struct MiniPlayerContent: View {
     ) {
         self.model = model
         self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
+        self._queueStore = ObservedObject(wrappedValue: model.queueStore)
         self.theme = theme
         self.height = height
         self.skipControlsVisibility = skipControlsVisibility
