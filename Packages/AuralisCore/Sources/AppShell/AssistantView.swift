@@ -1129,6 +1129,7 @@ private struct AssistantDockInputBarLayout: View {
     let focused: Bool
     let metrics: BottomChromeMetrics
     let collapseProgress: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         DockAssistantInputBar(model: model, agent: agent, theme: theme, focus: focus)
@@ -1161,7 +1162,7 @@ private struct AssistantDockInputBarLayout: View {
             // vertical offset 与横向收窄都只是输入栏自身的视觉变化；
             // safeAreaInset 的测量高度保持不变，因此聊天 ScrollView 不会因 Dock 动画重排。
             .animation(
-                BottomDockMotion.animation(reduceMotion: false),
+                BottomDockMotion.animation(reduceMotion: reduceMotion),
                 value: collapseProgress
             )
     }
