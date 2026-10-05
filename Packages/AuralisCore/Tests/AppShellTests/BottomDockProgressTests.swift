@@ -32,6 +32,19 @@ struct BottomDockProgressTests {
         #expect(BottomDockProgressReducer.terminalProgress(for: .init(width: 2, height: 320)) == 0)
     }
 
+    @Test("原生滚动观察按 44pt 量化且顶部回弹不误触发")
+    func nativeScrollBucketsIgnoreRubberBand() {
+        #expect(BottomDockProgressReducer.scrollBucket(for: -120) == 0)
+        #expect(BottomDockProgressReducer.scrollBucket(for: 0) == 0)
+        #expect(BottomDockProgressReducer.scrollBucket(for: 43.9) == 0)
+        #expect(BottomDockProgressReducer.scrollBucket(for: 44) == 1)
+        #expect(BottomDockProgressReducer.scrollBucket(for: 95) == 2)
+
+        #expect(BottomDockProgressReducer.terminalProgress(oldScrollBucket: 0, newScrollBucket: 1) == 1)
+        #expect(BottomDockProgressReducer.terminalProgress(oldScrollBucket: 2, newScrollBucket: 1) == 0)
+        #expect(BottomDockProgressReducer.terminalProgress(oldScrollBucket: 1, newScrollBucket: 1) == nil)
+    }
+
     @Test("播放器可视胶囊使用独立宽度几何")
     func playerWidthUsesVisibleCapsuleGeometry() {
         let fullWidth: CGFloat = 760
