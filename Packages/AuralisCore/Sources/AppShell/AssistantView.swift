@@ -129,12 +129,10 @@ struct AssistantView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-#if os(iOS)
             // AI 助手标题固定在与首页 / 音乐库相同的左上层级；
             // Provider 状态放在标题下方，不再用系统导航栏制造顶部空白。
             header
             Divider()
-#endif
 
             // iPhone 与 iPad 统一：会话列表始终以 sheet 呈现（不再有 regular-width 的
             // 桌面式 Sidebar 分支）；宽屏只通过可用宽度约束布局，不切换 UI 架构。

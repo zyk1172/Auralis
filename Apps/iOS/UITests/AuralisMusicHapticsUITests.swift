@@ -161,6 +161,13 @@ final class AuralisMusicHapticsUITests: XCTestCase {
             message: "A single tap on Next must advance to the next queue item"
         )
 
+        // Previous restarts the current song after three seconds. Stop playback and
+        // seek to the beginning so this assertion specifically checks queue navigation.
+        app.buttons["auralis.nowPlaying.playPause"].firstMatch.tap()
+        let progress = app.descendants(matching: .any)["播放进度"].firstMatch
+        XCTAssertTrue(progress.waitForExistence(timeout: 5))
+        progress.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).tap()
+
         let previous = app.buttons["auralis.nowPlaying.previous"].firstMatch
         XCTAssertTrue(previous.waitForExistence(timeout: 5), "Previous button is missing")
         previous.tap()

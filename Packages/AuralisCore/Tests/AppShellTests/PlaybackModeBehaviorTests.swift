@@ -138,6 +138,29 @@ struct PlaybackModeBehaviorTests {
         #expect(model.canGoNext)
     }
 
+    @Test("中等上下文转为完整队列后保留随机已播放 occurrence")
+    @MainActor
+    func mediumPreparationPreservesShuffleHistory() async {
+        let tracks = (0..<65).map { track("medium-shuffle-\($0)") }
+        let model = makeModel(tracks: tracks)
+        model.setShuffle(true)
+        model.setRepeatMode(.off)
+        model.playTrack(tracks[30], in: tracks)
+        for _ in 0..<500 {
+            if model.queue.count == tracks.count { break }
+            await Task.yield()
+        }
+        #expect(model.queue.count == tracks.count)
+        var visited: Set<TrackID> = [model.currentTrack.id]
+        for _ in 1..<tracks.count {
+            #expect(model.canGoNext)
+            model.next()
+            #expect(visited.insert(model.currentTrack.id).inserted)
+        }
+        #expect(!model.canGoNext)
+        #expect(visited.count == tracks.count)
+    }
+
     @Test("中等上下文后台准备不能覆盖用户随后编辑的队列")
     @MainActor
     func staleMediumPreparationCannotOverwriteQueueEdit() async {

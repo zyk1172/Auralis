@@ -2201,6 +2201,12 @@ public final class AuralisAppModel: ObservableObject {
                 indexByEntryID: prepared.indexByEntryID,
                 firstIndexByGlobalID: prepared.firstIndexByGlobalID
             )
+            // The provisional queue tracks shuffle history by logical occurrence.
+            // Translate it before replacing the window with fresh entry UUIDs.
+            self.shufflePlayedEntryIDs = Set(self.shufflePlayedLogicalIDs.compactMap { index in
+                prepared.entries.indices.contains(index) ? prepared.entries[index].id : nil
+            })
+            self.shufflePlayedLogicalIDs.removeAll()
             self.largeLogicalContext = nil
             self.largeLogicalWindowStart = nil
             self.largeLogicalNextIndex = nil
@@ -2868,6 +2874,32 @@ public final class AuralisAppModel: ObservableObject {
         let serverID: ServerID = "now-playing-smoke"
         let albumID: AlbumID = "now-playing-smoke-album"
         let artistID: ArtistID = "now-playing-smoke-artist"
+        // Transport actions use the real engine. A nil stream URL raises a playback
+        // alert over the player, so supply deterministic local audio as well as metadata.
+        let audioURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("auralis-now-playing-smoke.wav")
+        let sampleCount: UInt32 = 8_000 * 180
+        var wave = Data("RIFF".utf8)
+        func appendUInt32(_ value: UInt32) {
+            var littleEndian = value.littleEndian
+            withUnsafeBytes(of: &littleEndian) { wave.append(contentsOf: $0) }
+        }
+        appendUInt32(36 + sampleCount)
+        wave.append(Data("WAVEfmt ".utf8))
+        appendUInt32(16)
+        wave.append(contentsOf: [1, 0, 1, 0]) // PCM, mono
+        appendUInt32(8_000)
+        appendUInt32(8_000)
+        wave.append(contentsOf: [1, 0, 8, 0]) // block alignment, 8-bit samples
+        wave.append(Data("data".utf8))
+        appendUInt32(sampleCount)
+        wave.append(Data(repeating: 128, count: Int(sampleCount)))
+        do {
+            try wave.write(to: audioURL, options: .atomic)
+        } catch {
+            assertionFailure("Unable to install Now Playing smoke audio: \(error)")
+            return
+        }
         let tracks = ["A", "B", "C"].map { suffix in
             Track(
                 id: TrackID(rawValue: "now-playing-smoke-\(suffix.lowercased())"),
@@ -2877,7 +2909,8 @@ public final class AuralisAppModel: ObservableObject {
                 title: "Now Playing Smoke \(suffix)",
                 artistName: "Smoke Artist",
                 albumTitle: "Smoke Album",
-                duration: 180
+                duration: 180,
+                streamURL: audioURL
             )
         }
 

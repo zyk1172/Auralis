@@ -705,6 +705,7 @@ struct BottomDockScrollReportingModifier: ViewModifier {
     /// 当前滚动方向的极值锚点。它只在真实反向移动满 44pt 后翻转，
     /// 因此底部 settling / rubber-band 不会让 Dock 连续弹跳。
     @State private var scrollHysteresisAnchor: CGFloat?
+    @State private var isUserScrolling = false
     let source: HomeChromeScrollSource
 
     init(source: HomeChromeScrollSource = .home) {
@@ -727,6 +728,13 @@ struct BottomDockScrollReportingModifier: ViewModifier {
             // 不再向 ScrollView 叠加 DragGesture。原生 ScrollGeometry 只提供
             // 裁掉 rubber-band 后的整点 offset；真正的方向变化由 44pt hysteresis
             // 判定。这样 177→175 这类底部 settling 不会被当成“用户向回滚”。
+            .onScrollPhaseChange { _, phase in
+                // Lazy content measurement and deceleration settling can move the
+                // reported offset without a new user gesture. Only deliberate drag
+                // travel may select a Dock endpoint.
+                isUserScrolling = phase == .interacting
+                if !isUserScrolling { scrollHysteresisAnchor = nil }
+            }
             .onScrollGeometryChange(for: Int.self) { geometry in
                 let zeroBasedOffset =
                     geometry.contentOffset.y + geometry.contentInsets.top
@@ -743,6 +751,10 @@ struct BottomDockScrollReportingModifier: ViewModifier {
                 )
             } action: { oldSample, newSample in
                 guard let coordinator else { return }
+                guard isUserScrolling else {
+                    scrollHysteresisAnchor = CGFloat(newSample)
+                    return
+                }
                 let oldOffset = CGFloat(oldSample)
                 let newOffset = CGFloat(newSample)
                 let step = BottomDockProgressReducer.hysteresisStep(
