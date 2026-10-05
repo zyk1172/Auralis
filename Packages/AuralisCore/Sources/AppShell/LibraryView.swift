@@ -250,7 +250,7 @@ struct LibraryView: View {
                         .accessibilityLabel(String(localized: "播放《\(track.title)》，艺术家 \(track.artistName)", bundle: .module))
                         .accessibilityIdentifier("auralis.library.track.\(track.id.rawValue)")
                         .contextMenu {
-                            Button(String(localized: "立即播放", bundle: .module)) { model.selectAndPlay(track) }
+                            Button(String(localized: "立即播放", bundle: .module)) { model.playTrack(track, in: model.catalog.tracks) }
                             Button(String(localized: "下一首播放", bundle: .module)) { insertNext(track) }
                             Button(String(localized: "加入队列", bundle: .module)) {
                                 // R05：queueStore.append 直调，不重建 entry UUID——
@@ -727,7 +727,7 @@ struct LibraryView: View {
                         .buttonStyle(HapticPlainButtonStyle())
                         .accessibilityLabel(String(localized: "播放《\(track.title)》，艺术家 \(track.artistName)", bundle: .module))
                         .contextMenu {
-                            Button(String(localized: "立即播放", bundle: .module)) { model.selectAndPlay(track) }
+                            Button(String(localized: "立即播放", bundle: .module)) { model.playTrack(track, in: model.favoriteTracks) }
                             Button(String(localized: "下一首播放", bundle: .module)) { insertNext(track) }
                             Button(track.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module)) { model.toggleFavorite(track) }
                         }
