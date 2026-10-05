@@ -195,6 +195,26 @@ struct CompactMiniPlayerContent: View {
     }
 }
 
+
+/// iOS 正在播放页的响应式布局规则。只根据当前容器几何决定横/竖布局，
+/// 不读取 UIDevice.orientation，因此旋转、iPad 分屏和台前调度都能随实际窗口实时重排。
+struct NowPlayingLayoutPolicy: Sendable {
+    static let minimumLandscapeWidth: CGFloat = 600
+
+    static func usesLandscapeLayout(containerSize: CGSize) -> Bool {
+        guard containerSize.width > 0, containerSize.height > 0 else { return false }
+        return containerSize.width > containerSize.height
+            && containerSize.width >= minimumLandscapeWidth
+    }
+
+    static func landscapeArtworkSide(containerSize: CGSize, isPad: Bool) -> CGFloat {
+        let maximum: CGFloat = isPad ? 520 : 360
+        let widthShare = containerSize.width * (isPad ? 0.40 : 0.42)
+        let heightShare = containerSize.height * 0.78
+        return max(220, min(maximum, widthShare, heightShare))
+    }
+}
+
 struct NowPlayingView: View {
     static let musicHapticsMenuIdentifier = "auralis.nowPlaying.musicHaptics"
     static let moreActionsButtonIdentifier = "auralis.nowPlaying.moreActions"
@@ -273,31 +293,25 @@ struct NowPlayingView: View {
     }
 
     var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [theme.colorTokens.accent.color.opacity(0.42), theme.colorTokens.background.color, theme.colorTokens.accentSecondary.color.opacity(0.22)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-            VStack(spacing: AuralisSpacing.large) {
+        GeometryReader { outer in
+            ZStack {
+                LinearGradient(
+                    colors: [theme.colorTokens.accent.color.opacity(0.42), theme.colorTokens.background.color, theme.colorTokens.accentSecondary.color.opacity(0.22)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+
 #if os(iOS)
-                dismissHandle
+                if NowPlayingLayoutPolicy.usesLandscapeLayout(containerSize: outer.size) {
+                    landscapeBody(in: outer.size)
+                } else {
+                    portraitBody
+                }
+#else
+                portraitBody
 #endif
-                header
-                Picker(String(localized: "播放页面", bundle: .module), selection: $page) {
-                    ForEach(NowPlayingPage.allCases) { page in Text(page.title).tag(page) }
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 460)
-                GeometryReader { geo in
-                    playbackContent(in: geo)
-                }
             }
-            .padding(AuralisSpacing.large)
-            // 900pt 只是大尺寸 iPad 的内容上限；较小 iPad、分屏和台前调度窗口
-            // 会由 SwiftUI 根据实际可用宽度自然收缩，不依赖具体设备型号。
-            .frame(maxWidth: nowPlayingContentMaxWidth)
         }
         .foregroundStyle(theme.colorTokens.primaryText.color)
         .sheet(isPresented: $isPlaylistSheetPresented) {
@@ -311,6 +325,118 @@ struct NowPlayingView: View {
             pendingSeek = nil
         }
     }
+
+    private var portraitBody: some View {
+        VStack(spacing: AuralisSpacing.large) {
+#if os(iOS)
+            dismissHandle
+#endif
+            header
+            pagePicker
+            GeometryReader { geo in
+                playbackContent(in: geo)
+            }
+        }
+        .padding(AuralisSpacing.large)
+        // 900pt 只是大尺寸 iPad 的内容上限；较小 iPad、分屏和台前调度窗口
+        // 会由 SwiftUI 根据实际可用宽度自然收缩，不依赖具体设备型号。
+        .frame(maxWidth: nowPlayingContentMaxWidth)
+    }
+
+    private var pagePicker: some View {
+        Picker(String(localized: "播放页面", bundle: .module), selection: $page) {
+            ForEach(NowPlayingPage.allCases) { page in Text(page.title).tag(page) }
+        }
+        .pickerStyle(.segmented)
+        .frame(maxWidth: 460)
+    }
+
+#if os(iOS)
+    /// 横屏采用与 Apple Music 同类的左右双栏：封面固定在左，右侧承载播放信息、
+    /// 歌词或队列。旋转时只重排视图，不重建播放状态、队列或当前页面选择。
+    private func landscapeBody(in size: CGSize) -> some View {
+        let artworkSide = NowPlayingLayoutPolicy.landscapeArtworkSide(
+            containerSize: size,
+            isPad: isPad
+        )
+        let horizontalPadding: CGFloat = isPad ? 28 : 16
+        let columnSpacing: CGFloat = isPad ? 36 : 24
+        let compactLandscape = size.height < 460
+        let controlsSpacing: CGFloat = compactLandscape ? 7 : 11
+        let playButtonSize: CGFloat = compactLandscape ? 48 : 56
+
+        return VStack(spacing: compactLandscape ? 2 : AuralisSpacing.xSmall) {
+            dismissHandle
+
+            HStack(spacing: columnSpacing) {
+                landscapeArtwork(side: artworkSide)
+                    .frame(width: artworkSide, maxHeight: .infinity)
+
+                VStack(spacing: compactLandscape ? 8 : AuralisSpacing.medium) {
+                    pagePicker
+                        .frame(maxWidth: 420)
+
+                    landscapePageContent(
+                        sectionSpacing: controlsSpacing,
+                        playButtonSize: playButtonSize
+                    )
+                }
+                .frame(maxWidth: 600, maxHeight: .infinity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .padding(.horizontal, horizontalPadding)
+        .padding(.top, 2)
+        .padding(.bottom, compactLandscape ? 6 : AuralisSpacing.small)
+    }
+
+    private func landscapeArtwork(side: CGFloat) -> some View {
+        ZStack {
+            NowPlayingArtworkGlowView(
+                isPlaying: model.playbackState == .playing,
+                artworkKey: model.currentTrack.artworkKey,
+                colors: theme.colorTokens,
+                size: side,
+                serverID: model.currentTrack.serverID,
+                maxCanvasSize: side * 1.16
+            )
+            ArtworkView(
+                title: model.currentTrack.albumTitle,
+                artworkKey: model.currentTrack.artworkKey,
+                colors: theme.colorTokens,
+                size: side,
+                serverID: model.currentTrack.serverID
+            )
+            .shadow(color: Color.black.opacity(0.24), radius: 14, x: 0, y: 3)
+        }
+        .frame(width: side, height: side)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(String(localized: "专辑封面，\(model.currentTrack.albumTitle)", bundle: .module))
+    }
+
+    @ViewBuilder
+    private func landscapePageContent(
+        sectionSpacing: CGFloat,
+        playButtonSize: CGFloat
+    ) -> some View {
+        switch page {
+        case .player:
+            playbackControls(
+                sectionSpacing: sectionSpacing,
+                playButtonSize: playButtonSize
+            )
+            .frame(maxWidth: 560)
+            .frame(maxHeight: .infinity, alignment: .center)
+            .fixedSize(horizontal: false, vertical: true)
+        case .lyrics:
+            lyrics
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .queue:
+            queue
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+#endif
 
 #if os(iOS)
     /// Full-screen cover 不提供 sheet 自带的拖拽柄；在安全区内保留一个轻量入口，
