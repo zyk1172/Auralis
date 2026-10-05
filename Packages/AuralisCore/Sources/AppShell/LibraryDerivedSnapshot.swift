@@ -30,7 +30,7 @@ enum LibraryDerivedBuilder {
                 !dislikedTrackIDs.contains(GlobalID(serverID: track.serverID, remoteID: track.id.rawValue))
             }
             .shuffled()
-            .prefix(18))
+            .prefix(24))
         return LibraryDerivedSnapshot(
             tracker: tracker,
             addedDatesChanged: addedDatesChanged,
