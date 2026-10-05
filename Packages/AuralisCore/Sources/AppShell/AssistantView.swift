@@ -39,15 +39,34 @@ struct AssistantDockInputLayout {
         return (metrics.dockHeight + metrics.spacing) * normalized(collapseProgress)
     }
 
+    /// safeAreaInset 的真实布局高度必须稳定，不能随着 Dock 展开/收拢变化。
+    /// 否则聊天列表位于底部时，viewport 高度会变化约一个 Dock 高度，
+    /// 反过来再次触发 scroll geometry，形成“回弹 → 展开 → 收拢”的反馈环。
     static func bottomPadding(
         focused: Bool,
         metrics: BottomChromeMetrics,
         collapseProgress: CGFloat,
         focusedBottomPadding: CGFloat = AuralisSpacing.small
     ) -> CGFloat {
-        guard !focused else { return focusedBottomPadding }
-        return metrics.bottomPadding
-            + (metrics.spacing + metrics.dockHeight) * (1 - normalized(collapseProgress))
+        _ = collapseProgress
+        return focused ? focusedBottomPadding : metrics.bottomPadding
+    }
+
+    /// 视觉上仍保持原布局：展开态输入栏位于主 Dock 上方，紧凑态降到底部。
+    /// 用 offset 完成这段位移，offset 不参与 safeAreaInset 测量。
+    static func verticalLift(
+        focused: Bool,
+        metrics: BottomChromeMetrics,
+        collapseProgress: CGFloat
+    ) -> CGFloat {
+        guard !focused else { return 0 }
+        return (metrics.spacing + metrics.dockHeight) * (1 - normalized(collapseProgress))
+    }
+
+    /// 聊天内容末尾保留一段恒定、可滚动的净空，保证展开态输入栏不会覆盖最后消息。
+    /// 这是 content padding，不改变 ScrollView viewport，因此不会参与 Dock 反馈环。
+    static func scrollBottomClearance(metrics: BottomChromeMetrics) -> CGFloat {
+        metrics.spacing + metrics.dockHeight
     }
 
     private static func normalized(_ progress: CGFloat) -> CGFloat {
@@ -488,6 +507,16 @@ struct AssistantView: View {
                         .id(Self.conversationEndID)
                 }
                 .padding(AuralisSpacing.large)
+#if os(iOS)
+                // 固定的可滚动末尾净空：输入栏展开/收拢只改变视觉 offset，
+                // 不再改变 ScrollView 的 viewport 高度。
+                .padding(
+                    .bottom,
+                    AssistantDockInputLayout.scrollBottomClearance(
+                        metrics: bottomDockScroll?.metrics ?? .standard
+                    )
+                )
+#endif
                 .background {
                     GeometryReader { geometry in
                         Color.clear.preference(
@@ -1122,11 +1151,19 @@ private struct AssistantDockInputBarLayout: View {
                     collapseProgress: collapseProgress
                 )
             )
-            // 输入框的 safe-area 布局直接切换端点，不参与 Dock 的逐帧 layout
-            // 动画；Dock 自身仍保持 morph。这样聊天 ScrollView 不会在滚动中被反复重排。
-            .transaction { transaction in
-                transaction.animation = nil
-            }
+            .offset(
+                y: -AssistantDockInputLayout.verticalLift(
+                    focused: focused,
+                    metrics: metrics,
+                    collapseProgress: collapseProgress
+                )
+            )
+            // vertical offset 与横向收窄都只是输入栏自身的视觉变化；
+            // safeAreaInset 的测量高度保持不变，因此聊天 ScrollView 不会因 Dock 动画重排。
+            .animation(
+                BottomDockMotion.animation(reduceMotion: false),
+                value: collapseProgress
+            )
     }
 }
 #endif
