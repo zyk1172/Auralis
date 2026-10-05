@@ -238,7 +238,10 @@ struct LibraryView: View {
             } else {
                 List(model.catalog.tracks) { track in
                     Button {
-                        model.selectAndPlay(track)
+                        // 直接点“歌曲”列表必须建立可继续播放的上下文。
+                        // 之前这里只 selectAndPlay 单曲，队列可能只有当前一首，
+                        // 播放页“下一首”因此看起来有按钮却无法切歌。
+                        model.playTrack(track, in: model.catalog.tracks)
                     } label: {
                         TrackRow(track: track, isCurrent: track.isSame(as: model.currentTrack), isDownloaded: model.isDownloaded(track), theme: theme)
                             .contentShape(Rectangle())
@@ -715,7 +718,8 @@ struct LibraryView: View {
             } else {
                 List(model.favoriteTracks) { track in
                     Button {
-                        model.selectAndPlay(track)
+                        // 收藏列表同样作为一个真实播放上下文，下一首沿收藏顺序推进。
+                        model.playTrack(track, in: model.favoriteTracks)
                     } label: {
                         TrackRow(track: track, isCurrent: track.isSame(as: model.currentTrack), theme: theme)
                             .contentShape(Rectangle())
