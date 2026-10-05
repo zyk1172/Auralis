@@ -286,7 +286,7 @@ func regenerateFavoriteRandomResamplesLocally() async throws {
     let serverID = ServerID(rawValue: "test-server")
     let artist = Artist(id: "artist-1", serverID: serverID, name: "A1", albumCount: 1)
     let album = Album(id: "album-1", serverID: serverID, artistID: artist.id, title: "B1", artistName: "A1")
-    let tracks = (0..<10).map { index in
+    let tracks = (0..<30).map { index in
         track("fav-\(index)", serverID: serverID, album: album, artist: artist, favorite: true)
     }
     let result = ServerConnectionResult(
@@ -313,9 +313,13 @@ func regenerateFavoriteRandomResamplesLocally() async throws {
     // apply() 的首页货架派生是后台任务（首屏只等 catalog）；测试确定性等待其完成。
     await model.awaitPendingApplyDerivations()
     let firstSample = model.homeFavoriteRandomTracks
+    #expect(firstSample.count == 24)
+    #expect(model.randomTracks.count == 24)
+
     model.regenerateFavoriteRandomMusic()
     let secondSample = model.homeFavoriteRandomTracks
     #expect(secondSample.allSatisfy { $0.isFavorite })
+    #expect(secondSample.count == 24)
     #expect(secondSample.count == firstSample.count)
     #expect(Set(secondSample.map(\.id)).isSubset(of: Set(tracks.map(\.id))))
 }
