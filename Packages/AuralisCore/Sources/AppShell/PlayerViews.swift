@@ -1324,26 +1324,101 @@ struct NowPlayingView: View {
         model.currentLyrics?.id
     }
 
+    private func lyricLineProgress(
+        document: LyricsDocument,
+        index: Int
+    ) -> Double? {
+        guard document.isSynced,
+              document.lines.indices.contains(index)
+        else { return nil }
+
+        let line = document.lines[index]
+        let nextStart = document.lines
+            .dropFirst(index + 1)
+            .compactMap { $0.startTime }
+            .first
+
+        return LyricCharacterAnimationPolicy.lineProgress(
+            position: playbackStore.position,
+            lineStart: line.startTime,
+            nextLineStart: nextStart
+        )
+    }
+
+    @ViewBuilder
+    private func lyricLineView(
+        document: LyricsDocument,
+        index: Int,
+        activeIndex: Int?
+    ) -> some View {
+        let line = document.lines[index]
+        let isCurrent = index == activeIndex
+        let progress = isCurrent ? lyricLineProgress(document: document, index: index) : nil
+
+        if isCurrent, !reduceMotion, let progress {
+            let characters = Array(line.text)
+            let animatedIndices = characters.indices.filter { index in
+                !String(characters[index]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            let animatedOrdinals = Dictionary(
+                uniqueKeysWithValues: animatedIndices.enumerated().map { ($0.element, $0.offset) }
+            )
+
+            LyricCharacterFlowLayout(horizontalSpacing: 0, verticalSpacing: 4) {
+                ForEach(characters.indices, id: \.self) { characterIndex in
+                    let ordinal = animatedOrdinals[characterIndex]
+                    let scale = ordinal.map {
+                        LyricCharacterAnimationPolicy.scale(
+                            unitIndex: $0,
+                            unitCount: animatedIndices.count,
+                            progress: progress
+                        )
+                    } ?? 1
+
+                    Text(String(characters[characterIndex]))
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(theme.colorTokens.accent.color)
+                        .scaleEffect(scale)
+                        .animation(
+                            .smooth(duration: 0.42, extraBounce: 0),
+                            value: scale
+                        )
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .opacity(1)
+        } else {
+            Text(line.text)
+                .font(.title2.weight(isCurrent ? .bold : .semibold))
+                // 无下一行时间戳时无法可靠估算逐字位置：只把当前整句轻微放大到 1.05×。
+                .scaleEffect(isCurrent && !reduceMotion ? LyricCharacterAnimationPolicy.maximumScale : 1)
+                .opacity(isCurrent ? 1 : 0.62)
+                .foregroundStyle(
+                    isCurrent
+                        ? theme.colorTokens.accent.color
+                        : theme.colorTokens.secondaryText.color
+                )
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .animation(
+                    reduceMotion ? nil : .smooth(duration: 0.22, extraBounce: 0),
+                    value: isCurrent
+                )
+        }
+    }
+
     private var lyrics: some View {
         let activeIndex = currentLyricIndex
         return ScrollView {
             LazyVStack(alignment: .center, spacing: AuralisSpacing.large) {
                 if let document = model.currentLyrics {
                     ForEach(document.lines.indices, id: \.self) { index in
-                        let line = document.lines[index]
-                        let isCurrent = index == activeIndex
-                        Text(line.text)
-                            .font(.title3.weight(.semibold))
-                            .scaleEffect(isCurrent ? 1 : 0.92)
-                            .opacity(isCurrent ? 1 : 0.62)
-                            .foregroundStyle(isCurrent ? theme.colorTokens.accent.color : theme.colorTokens.secondaryText.color)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .animation(
-                                reduceMotion ? nil : .smooth(duration: 0.22, extraBounce: 0),
-                                value: isCurrent
-                            )
-                            .id(index)
+                        lyricLineView(
+                            document: document,
+                            index: index,
+                            activeIndex: activeIndex
+                        )
+                        .id(index)
                     }
                 } else {
                     AuralisEmptyState(
