@@ -30,6 +30,20 @@ struct BottomDockProgressReducer: Sendable {
         else { return nil }
         return translation.height < 0 ? 1 : 0
     }
+
+    /// 将连续 scroll offset 量化为低频桶值。顶部 rubber-band 的负 offset
+    /// 始终归零，因此松手回弹不会反向触发 Dock 动画。
+    static func scrollBucket(for zeroBasedOffset: CGFloat) -> Int {
+        Int(floor(max(zeroBasedOffset, 0) / minimumVerticalSwipeDistance))
+    }
+
+    /// 内容向下推进（offset 桶增大）时收拢 Dock；用户向回滚（桶减小）时展开。
+    /// 同一桶内的高频滚动完全不发布状态变化。
+    static func terminalProgress(oldScrollBucket: Int, newScrollBucket: Int) -> CGFloat? {
+        if newScrollBucket > oldScrollBucket { return 1 }
+        if newScrollBucket < oldScrollBucket { return 0 }
+        return nil
+    }
 }
 
 /// Dock 本体、页面预留空间和 AI 输入框共用同一套固定节奏。
@@ -427,12 +441,11 @@ private struct IOSMusicShell: View {
                         reduceMotion: reduceMotion
                     )
                 }
-                // 首页不再使用系统 Large Title。iOS 26 的大标题导航栏会在首屏
-                // 预留过高的固定区域；首页标题改由 HomeView 放进 ScrollView，
-                // 这样首屏更紧凑，并且标题会像 Apple Music 一样随内容上滑离场。
-                // 其它一级页面保持现有系统导航标题行为。
-                .navigationTitle(model.selectedSection == .home ? "" : model.selectedSection.title)
-                .navigationBarTitleDisplayMode(model.selectedSection == .home ? .inline : .large)
+                // 一级页面统一交给系统 Large Title 管理。标题属于 NavigationBar，
+                // 不参与 ScrollView 的橡皮筋位移：向下拉时内容与标题分离，松手后由
+                // UIKit/SwiftUI 原生回弹；向上滚动时系统标题自然收拢。
+                .navigationTitle(model.selectedSection.title)
+                .navigationBarTitleDisplayMode(.large)
         }
         // Dock 切换的是应用一级分区；若当前停在设置/资料库的二级 NavigationLink，
         // 必须丢弃旧路径并回到新分区根页，不能让二级页面“悬在”新的根内容之上。
@@ -569,16 +582,13 @@ private struct IOSMusicShell: View {
 /// 将 Dock clearance 订阅限制在真正的滚动容器上，避免 NavigationStack、
 /// 当前页面和非滚动内容因 collapseProgress 变化而整体重新求值。
 private struct BottomDockScrollClearanceHost: View {
-    @ObservedObject var coordinator: HomeChromeState
+    let metrics: BottomChromeMetrics
 
     var body: some View {
+        // 始终预留展开态的最大空间。Dock 自身仍可做视觉 morph，但滚动容器的
+        // safe-area 高度不再跟着 0→1 动画逐帧改变，避免每帧重新 layout/measure。
         Color.clear
-            .frame(
-                height: coordinator.metrics.reservedHeight(
-                    hasAccessory: true,
-                    collapseProgress: coordinator.collapseProgress
-                )
-            )
+            .frame(height: metrics.expandedReservation)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
@@ -609,8 +619,7 @@ private enum DockPresentation: Equatable {
 /// 应加在真正可纵向滚动的 ScrollView 或 List 上。手势与系统滚动同时识别，
 /// 只读取纵向位移来驱动 Dock，不接管列表点击和横向货架。
 struct BottomDockScrollReportingModifier: ViewModifier {
-    /// 普通 Environment 值只传递引用，不会订阅 objectWillChange；滚动内容自身不应因
-    /// Dock 的每次进度发布而重新计算。只有下方 ProgressHost 负责重绘。
+    /// 只持有协调器引用；不以 @ObservedObject 订阅每一帧动画。
     @Environment(\.homeChromeState) private var coordinator
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let source: HomeChromeScrollSource
@@ -621,13 +630,32 @@ struct BottomDockScrollReportingModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            // clearance 必须附着在实际的 ScrollView/List 上，才能把最后一项
-            // 的可滚动范围延伸到 compact Dock 上方；AssistantView 的输入框
-            // 已经拥有自己的 safeAreaInset，不能在这里再算一层。
+            // 始终使用系统 ScrollView/List 的原生橡皮筋。即使内容不足一屏，
+            // 向下拉也会与导航标题分离，松手由系统自动回弹。
+            .scrollBounceBehavior(.always, axes: .vertical)
+            // clearance 必须附着在实际滚动容器上；高度保持稳定，不能再把
+            // Dock 的动画进度喂给 safeAreaInset 触发逐帧重排。
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if let coordinator,
                    BottomDockReservationPolicy.scrollOwnsReservation(for: source) {
-                    BottomDockScrollClearanceHost(coordinator: coordinator)
+                    BottomDockScrollClearanceHost(metrics: coordinator.metrics)
+                }
+            }
+            // 不再向 ScrollView 叠加 DragGesture。用 iOS 18+ 原生 ScrollGeometry
+            // 读取量化后的滚动距离；每跨过一个 44pt 桶最多更新一次 Dock，
+            // 横向货架、List 惯性和顶部 rubber-band 都不会再被竞争手势打断。
+            .onScrollGeometryChange(for: Int.self) { geometry in
+                BottomDockProgressReducer.scrollBucket(
+                    for: geometry.contentOffset.y + geometry.contentInsets.top
+                )
+            } action: { oldBucket, newBucket in
+                guard let terminal = BottomDockProgressReducer.terminalProgress(
+                    oldScrollBucket: oldBucket,
+                    newScrollBucket: newBucket
+                ) else { return }
+                coordinator?.beginInteraction(source: source)
+                withAnimation(BottomDockMotion.animation(reduceMotion: reduceMotion)) {
+                    coordinator?.setCollapseProgress(terminal)
                 }
             }
             .onAppear {
@@ -636,19 +664,6 @@ struct BottomDockScrollReportingModifier: ViewModifier {
             .onDisappear {
                 coordinator?.endInteraction(source: source)
             }
-            .simultaneousGesture(
-                DragGesture(minimumDistance: BottomDockProgressReducer.minimumVerticalSwipeDistance)
-                    .onChanged { value in
-                        guard BottomDockProgressReducer.terminalProgress(for: value.translation) != nil else { return }
-                        coordinator?.beginInteraction(source: source)
-                    }
-                    .onEnded { value in
-                        guard BottomDockProgressReducer.terminalProgress(for: value.translation) != nil else { return }
-                        withAnimation(BottomDockMotion.animation(reduceMotion: reduceMotion)) {
-                            coordinator?.finishInteraction(source: source, translation: value.translation)
-                        }
-                    }
-            )
     }
 }
 
