@@ -217,7 +217,8 @@ struct SearchView: View {
                     ForEach(model.serverSearchResults) { track in
                         Button {
                                 model.recordSearch(query)
-                                model.selectAndPlay(track)
+                                // 在线搜索结果形成自己的播放上下文，下一首按当前搜索结果推进。
+                                model.playTrack(track, in: model.serverSearchResults)
                         } label: {
                             TrackRow(track: track, isCurrent: track.isSame(as: model.currentTrack), theme: theme)
                                 .contentShape(Rectangle())
@@ -232,7 +233,8 @@ struct SearchView: View {
                     ForEach(results.songs) { track in
                         Button {
                                 model.recordSearch(query)
-                                model.selectAndPlay(track)
+                                // 本地搜索结果同样建立队列上下文，避免播放页下一首无操作。
+                                model.playTrack(track, in: results.songs)
                         } label: {
                             TrackRow(track: track, isCurrent: track.isSame(as: model.currentTrack), theme: theme)
                                 .contentShape(Rectangle())
