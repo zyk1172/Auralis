@@ -45,6 +45,33 @@ struct BottomDockProgressTests {
         #expect(BottomDockProgressReducer.terminalProgress(oldScrollBucket: 1, newScrollBucket: 1) == nil)
     }
 
+    @Test("底部 rubber-band 不产生额外 Dock 桶变化")
+    func bottomRubberBandIsClampedToMaximumScrollOffset() {
+        let maximum: CGFloat = 176
+
+        let atBottom = BottomDockProgressReducer.scrollBucket(
+            for: maximum,
+            maximumOffset: maximum
+        )
+        let overscrolled = BottomDockProgressReducer.scrollBucket(
+            for: maximum + 120,
+            maximumOffset: maximum
+        )
+        let bouncingBack = BottomDockProgressReducer.scrollBucket(
+            for: maximum + 18,
+            maximumOffset: maximum
+        )
+
+        #expect(atBottom == overscrolled)
+        #expect(atBottom == bouncingBack)
+        #expect(
+            BottomDockProgressReducer.terminalProgress(
+                oldScrollBucket: overscrolled,
+                newScrollBucket: bouncingBack
+            ) == nil
+        )
+    }
+
     @Test("播放器可视胶囊使用独立宽度几何")
     func playerWidthUsesVisibleCapsuleGeometry() {
         let fullWidth: CGFloat = 760
