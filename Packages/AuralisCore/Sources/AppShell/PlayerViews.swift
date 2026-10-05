@@ -268,7 +268,11 @@ enum LyricsChromeMotion {
 /// 当前歌词的轻量逐字强调。歌词源目前只有“逐行”时间戳，因此不能伪装成
 /// 真正的逐字 timing；这里仅在当前行与下一行之间做均匀插值。
 struct LyricCharacterAnimationPolicy: Sendable {
-    static let maximumScale: CGFloat = 1.05
+    /// 当前句整体先轻微放大，正在唱到的字符再形成更明显的 1.12× 波峰。
+    /// 之前 1.05× 配合 0.5s 的进度 tick 肉眼几乎不可见。
+    static let currentLineBaseScale: CGFloat = 1.02
+    static let maximumScale: CGFloat = 1.12
+    static let fallbackLineScale: CGFloat = 1.06
 
     static func lineProgress(
         position: TimeInterval,
@@ -288,13 +292,15 @@ struct LyricCharacterAnimationPolicy: Sendable {
         progress: Double?
     ) -> CGFloat {
         guard unitCount > 0 else { return 1 }
-        guard let progress else { return maximumScale }
+        guard let progress else { return fallbackLineScale }
 
         let lastIndex = max(unitCount - 1, 0)
         let cursor = progress * Double(lastIndex)
         let distance = abs(Double(unitIndex) - cursor)
+        // 相邻字符之间连续交叉淡入缩放，形成从左到右移动的轻量“波峰”。
         let influence = max(0, 1 - distance)
-        return 1 + (maximumScale - 1) * CGFloat(influence)
+        return currentLineBaseScale
+            + (maximumScale - currentLineBaseScale) * CGFloat(influence)
     }
 }
 
@@ -427,6 +433,10 @@ struct NowPlayingView: View {
     @State private var showsTrackInformation = false
     @State private var lyricScrollTarget: Int?
     @State private var lyricTimeline: [LyricsIndexResolver.TimedLine] = []
+    /// PlaybackStore 为避免全局重绘只每 0.5s 发布一次 position。
+    /// 歌词逐字动画在本地用时间锚点插值到约 30fps，不提高全局播放进度发布频率。
+    @State private var lyricPositionAnchorDate = Date()
+    @State private var lyricPositionAnchorValue: TimeInterval = 0
     /// 歌词页 5 秒无操作后进入沉浸态：保留歌曲名 + 歌手，其余 Chrome 向下收缩消失。
     @State private var lyricsChromeHidden = false
     @State private var lyricsChromeAutoHideTask: Task<Void, Never>?
@@ -536,12 +546,23 @@ struct NowPlayingView: View {
         }
         .onChange(of: page) { oldPage, newPage in
             if newPage == .lyrics {
+                syncLyricPositionAnchor()
                 showLyricsChromeAndScheduleAutoHide()
             } else if oldPage == .lyrics {
                 lyricsChromeAutoHideTask?.cancel()
                 lyricsChromeAutoHideTask = nil
                 lyricsChromeHidden = false
             }
+        }
+        .onChange(of: playbackStore.position) { _, newPosition in
+            lyricPositionAnchorValue = newPosition
+            lyricPositionAnchorDate = Date()
+        }
+        .onChange(of: playbackStore.state) { _, _ in
+            syncLyricPositionAnchor()
+        }
+        .onAppear {
+            syncLyricPositionAnchor()
         }
         .onDisappear {
             lyricsChromeAutoHideTask?.cancel()
@@ -1428,9 +1449,25 @@ struct NowPlayingView: View {
         model.currentLyrics?.id
     }
 
+    private func syncLyricPositionAnchor() {
+        lyricPositionAnchorValue = playbackStore.position
+        lyricPositionAnchorDate = Date()
+    }
+
+    /// PlaybackStore 只每 0.5 秒发布一次进度。逐字动画不能直接吃这个离散值，
+    /// 否则会每半秒跳一两个字，看起来像“没有动画”。这里仅在歌词视图内部做时间插值。
+    private func interpolatedLyricPosition(at date: Date) -> TimeInterval {
+        guard playbackStore.state == .playing else {
+            return playbackStore.position
+        }
+        let elapsed = min(max(date.timeIntervalSince(lyricPositionAnchorDate), 0), 0.75)
+        return lyricPositionAnchorValue + elapsed * Double(model.playbackRate)
+    }
+
     private func lyricLineProgress(
         document: LyricsDocument,
-        index: Int
+        index: Int,
+        position: TimeInterval
     ) -> Double? {
         guard document.isSynced,
               document.lines.indices.contains(index)
@@ -1443,10 +1480,44 @@ struct NowPlayingView: View {
             .first
 
         return LyricCharacterAnimationPolicy.lineProgress(
-            position: playbackStore.position,
+            position: position,
             lineStart: line.startTime,
             nextLineStart: nextStart
         )
+    }
+
+    @ViewBuilder
+    private func animatedLyricCharacters(
+        text: String,
+        progress: Double
+    ) -> some View {
+        let characters = Array(text)
+        let animatedIndices = characters.indices.filter { index in
+            !String(characters[index]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        let animatedOrdinals = Dictionary(
+            uniqueKeysWithValues: animatedIndices.enumerated().map { ($0.element, $0.offset) }
+        )
+
+        LyricCharacterFlowLayout(horizontalSpacing: 0, verticalSpacing: 4) {
+            ForEach(characters.indices, id: \.self) { characterIndex in
+                let ordinal = animatedOrdinals[characterIndex]
+                let scale = ordinal.map {
+                    LyricCharacterAnimationPolicy.scale(
+                        unitIndex: $0,
+                        unitCount: animatedIndices.count,
+                        progress: progress
+                    )
+                } ?? 1
+
+                Text(String(characters[characterIndex]))
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(theme.colorTokens.accent.color)
+                    .scaleEffect(scale)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .opacity(1)
     }
 
     @ViewBuilder
@@ -1457,45 +1528,31 @@ struct NowPlayingView: View {
     ) -> some View {
         let line = document.lines[index]
         let isCurrent = index == activeIndex
-        let progress = isCurrent ? lyricLineProgress(document: document, index: index) : nil
 
-        if isCurrent, !reduceMotion, let progress {
-            let characters = Array(line.text)
-            let animatedIndices = characters.indices.filter { index in
-                !String(characters[index]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if isCurrent, !reduceMotion,
+           lyricLineProgress(
+               document: document,
+               index: index,
+               position: playbackStore.position
+           ) != nil {
+            // 只给当前歌词行开 30fps 本地 Timeline；不会提高整个 App 的 playback tick。
+            TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { context in
+                let progress = lyricLineProgress(
+                    document: document,
+                    index: index,
+                    position: interpolatedLyricPosition(at: context.date)
+                ) ?? 0
+                animatedLyricCharacters(text: line.text, progress: progress)
             }
-            let animatedOrdinals = Dictionary(
-                uniqueKeysWithValues: animatedIndices.enumerated().map { ($0.element, $0.offset) }
-            )
-
-            LyricCharacterFlowLayout(horizontalSpacing: 0, verticalSpacing: 4) {
-                ForEach(characters.indices, id: \.self) { characterIndex in
-                    let ordinal = animatedOrdinals[characterIndex]
-                    let scale = ordinal.map {
-                        LyricCharacterAnimationPolicy.scale(
-                            unitIndex: $0,
-                            unitCount: animatedIndices.count,
-                            progress: progress
-                        )
-                    } ?? 1
-
-                    Text(String(characters[characterIndex]))
-                        .font(.title2.weight(.bold))
-                        .foregroundStyle(theme.colorTokens.accent.color)
-                        .scaleEffect(scale)
-                        .animation(
-                            .smooth(duration: 0.42, extraBounce: 0),
-                            value: scale
-                        )
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .center)
-            .opacity(1)
         } else {
             Text(line.text)
                 .font(.title2.weight(isCurrent ? .bold : .semibold))
-                // 无下一行时间戳时无法可靠估算逐字位置：只把当前整句轻微放大到 1.05×。
-                .scaleEffect(isCurrent && !reduceMotion ? LyricCharacterAnimationPolicy.maximumScale : 1)
+                // 缺少下一行时间戳时不伪造逐字 timing，只保留明显但克制的整句强调。
+                .scaleEffect(
+                    isCurrent && !reduceMotion
+                        ? LyricCharacterAnimationPolicy.fallbackLineScale
+                        : 1
+                )
                 .opacity(isCurrent ? 1 : 0.62)
                 .foregroundStyle(
                     isCurrent
