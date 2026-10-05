@@ -93,4 +93,5 @@
     <string name="assistant_tool_search_artists">搜索艺人</string>
     <string name="assistant_tool_get_lyrics">获取歌词</string>
     <string name="assistant_tool_view_queue">查看队列</string>
+    <string name="assistant_page_title">AI 助手</string>
 </resources>

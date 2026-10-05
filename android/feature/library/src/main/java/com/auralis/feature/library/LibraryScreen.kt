@@ -125,7 +125,8 @@ fun LibraryScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = AuralisSpacing.large, end = 16.dp, top = 6.dp, bottom = 2.dp),
+                .padding(horizontal = AuralisSpacing.large)
+                .height(60.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(

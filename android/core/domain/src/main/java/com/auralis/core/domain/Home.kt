@@ -26,8 +26,8 @@ enum class HomeModuleId(
     ;
 
     companion object {
-        /** 「换一批」的本地重采样样本量，对齐 Apple 的 shuffle 取 18。 */
-        const val RESHUFFLE_SAMPLE = 18
+        /** 「换一批」的本地重采样样本量，对齐 Apple 的 shuffle 取 24。 */
+        const val RESHUFFLE_SAMPLE = 24
     }
 }
 

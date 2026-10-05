@@ -73,4 +73,7 @@
     <string name="player_track_info_lyrics_none">无</string>
     <!-- 添加到歌单对话框（共享词在 core:designsystem；此处仅播放页独有提示） -->
     <string name="player_new_playlist_hint">《%1$s》将加入新歌单。</string>
+    <string name="player_page_open">已打开</string>
+    <string name="player_page_closed">未打开</string>
+    <string name="player_audio_output">音频输出</string>
 </resources>

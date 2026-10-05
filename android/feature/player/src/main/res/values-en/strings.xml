@@ -70,4 +70,7 @@
     <string name="player_track_info_lyrics_none">None</string>
     <!-- Add to playlist dialog (shared copy lives in core:designsystem; only the player-specific hint stays here) -->
     <string name="player_new_playlist_hint">“%1$s” will be added to the new playlist.</string>
+    <string name="player_page_open">Open</string>
+    <string name="player_page_closed">Closed</string>
+    <string name="player_audio_output">Audio output</string>
 </resources>

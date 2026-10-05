@@ -63,7 +63,7 @@ object AuralisChrome {
 }
 
 object AuralisMotion {
-    const val DOCK_DURATION_MS = 560
+    const val DOCK_DURATION_MS = 500
     const val DOCK_REDUCED_DURATION_MS = 180
     const val CARD_DURATION_MS = 220
 }

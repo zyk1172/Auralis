@@ -1,0 +1,117 @@
+// SPDX-License-Identifier: GPL-3.0-only
+package com.auralis.feature.player
+
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.dp
+import com.auralis.core.designsystem.AuralisTheme
+import com.google.common.truth.Truth.assertThat
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.LooperMode
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+@LooperMode(LooperMode.Mode.PAUSED)
+class NowPlayingLayoutTest {
+    @get:Rule val compose = createComposeRule()
+
+    @Test
+    @Config(qualifiers = "w390dp-h844dp-port")
+    fun `portrait player has dismiss handle and usable controls`() {
+        var closed = false
+        compose.setContent {
+            AuralisTheme {
+                NowPlayingChromeLayout(
+                    page = PlayerTab.Player,
+                    chromeHidden = false,
+                    onClose = { closed = true },
+                    artwork = { Text("Artwork") },
+                    pageContent = { Box(Modifier.fillMaxSize().testTag("page")) },
+                    controls = { _, _ -> Text("Controls", Modifier.testTag("controls")) },
+                )
+            }
+        }
+        compose.onNodeWithTag("player.portrait").assertIsDisplayed()
+        compose.onNodeWithTag("controls").assertIsDisplayed()
+        compose.onNodeWithTag("player.dismiss").performClick()
+        assertThat(closed).isTrue()
+    }
+
+    @Test
+    @Config(qualifiers = "w844dp-h390dp-land")
+    fun `landscape places artwork left of lyrics and controls without overlap`() {
+        compose.setContent {
+            AuralisTheme {
+                NowPlayingChromeLayout(
+                    page = PlayerTab.Lyrics,
+                    chromeHidden = false,
+                    onClose = {},
+                    artwork = { Box(Modifier.fillMaxSize()) },
+                    pageContent = { Text("Lyrics", Modifier.testTag("lyricsContent")) },
+                    controls = { _, _ ->
+                        Box(Modifier.fillMaxWidth().height(180.dp).testTag("controls"))
+                    },
+                )
+            }
+        }
+        compose.onNodeWithTag("player.landscape").assertIsDisplayed()
+        val artwork = compose.onNodeWithTag("player.artwork").fetchSemanticsNode().boundsInRoot
+        val lyrics = compose.onNodeWithTag("lyricsContent").fetchSemanticsNode().boundsInRoot
+        val controls = compose.onNodeWithTag("controls").fetchSemanticsNode().boundsInRoot
+        assertThat(artwork.right).isAtMost(lyrics.left)
+        assertThat(lyrics.bottom).isAtMost(controls.top)
+        compose.onNodeWithTag("controls").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w844dp-h390dp-land")
+    fun `immersive lyrics keeps landscape artwork and hides dismiss handle`() {
+        compose.setContent {
+            AuralisTheme {
+                NowPlayingChromeLayout(
+                    page = PlayerTab.Lyrics,
+                    chromeHidden = true,
+                    onClose = {},
+                    artwork = { Box(Modifier.fillMaxSize()) },
+                    pageContent = { Text("Lyrics") },
+                    controls = { _, _ -> Text("Track identity") },
+                )
+            }
+        }
+        compose.onNodeWithTag("player.artwork").assertIsDisplayed()
+        compose.onNodeWithTag("player.dismiss").assertDoesNotExist()
+    }
+
+    @Test
+    fun `bottom buttons toggle to artwork on second tap`() {
+        compose.setContent {
+            AuralisTheme {
+                var page by remember { mutableStateOf(PlayerTab.Player) }
+                PlayerBottomNavigation(page) { page = NowPlayingUiPolicy.togglePage(page, it) }
+            }
+        }
+        for (tag in listOf("player.lyrics", "player.queue")) {
+            compose.onNodeWithTag(tag).performClick().assertIsSelected()
+            compose.onNodeWithTag(tag).performClick().assertIsNotSelected()
+        }
+    }
+}
