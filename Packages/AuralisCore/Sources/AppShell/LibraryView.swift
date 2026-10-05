@@ -32,16 +32,22 @@ struct LibraryView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            libraryScopeNavigation
-                .padding(.horizontal, AuralisSpacing.large)
-                .padding(.vertical, AuralisSpacing.small)
-            Divider()
-            scopeContent
-                .id(scope)
-                .transition(.opacity)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
+        // 让真实 List/ScrollView 直接占据页面根区域，NavigationStack 才能用系统
+        // scroll-edge 行为收拢大标题并保留原生 rubber-band。Scope 控件作为顶部
+        // safe-area chrome 固定，不再用外层 VStack 截断滚动容器与导航栏的联动。
+        scopeContent
+            .id(scope)
+            .transition(.opacity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                VStack(spacing: 0) {
+                    libraryScopeNavigation
+                        .padding(.horizontal, AuralisSpacing.large)
+                        .padding(.vertical, AuralisSpacing.small)
+                    Divider()
+                }
+                .background(theme.colorTokens.background.color)
+            }
         .background(theme.colorTokens.background.color)
 #if os(iOS)
         .toolbar {
