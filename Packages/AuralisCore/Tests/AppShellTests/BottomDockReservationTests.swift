@@ -14,7 +14,7 @@ struct BottomDockReservationTests {
         #expect(!BottomDockReservationPolicy.scrollOwnsReservation(for: .assistant))
     }
 
-    @Test("输入栏在展开与收拢端点分别避让 Dock")
+    @Test("输入栏端点只改变视觉位置，不改变 safe-area 高度")
     func inputBarMatchesDockEndpoints() {
         let metrics = BottomChromeMetrics.standard
 
@@ -30,7 +30,14 @@ struct BottomDockReservationTests {
                 focused: false,
                 metrics: metrics,
                 collapseProgress: 0
-            ) == metrics.bottomPadding + metrics.spacing + metrics.dockHeight
+            ) == metrics.bottomPadding
+        )
+        #expect(
+            AssistantDockInputLayout.verticalLift(
+                focused: false,
+                metrics: metrics,
+                collapseProgress: 0
+            ) == metrics.spacing + metrics.dockHeight
         )
 
         #expect(
@@ -46,6 +53,17 @@ struct BottomDockReservationTests {
                 metrics: metrics,
                 collapseProgress: 1
             ) == metrics.bottomPadding
+        )
+        #expect(
+            AssistantDockInputLayout.verticalLift(
+                focused: false,
+                metrics: metrics,
+                collapseProgress: 1
+            ) == 0
+        )
+        #expect(
+            AssistantDockInputLayout.scrollBottomClearance(metrics: metrics)
+                == metrics.spacing + metrics.dockHeight
         )
     }
 
@@ -67,6 +85,13 @@ struct BottomDockReservationTests {
                 collapseProgress: 1
             ) == AuralisSpacing.small
         )
+        #expect(
+            AssistantDockInputLayout.verticalLift(
+                focused: true,
+                metrics: metrics,
+                collapseProgress: 1
+            ) == 0
+        )
     }
 
     @Test("输入栏布局会限制异常进度")
@@ -85,6 +110,20 @@ struct BottomDockReservationTests {
                 focused: false,
                 metrics: metrics,
                 collapseProgress: -1
+            ) == 0
+        )
+        #expect(
+            AssistantDockInputLayout.verticalLift(
+                focused: false,
+                metrics: metrics,
+                collapseProgress: -1
+            ) == metrics.spacing + metrics.dockHeight
+        )
+        #expect(
+            AssistantDockInputLayout.verticalLift(
+                focused: false,
+                metrics: metrics,
+                collapseProgress: 2
             ) == 0
         )
     }
