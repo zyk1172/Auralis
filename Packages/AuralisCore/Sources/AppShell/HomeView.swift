@@ -21,6 +21,8 @@ struct HomeView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     let browseTransitionNamespace: Namespace.ID?
+    /// 首页标题只跟随向上的真实滚动离场；顶部下拉 overscroll 不移动标题。
+    @State private var topHeaderScrollOffset: CGFloat = 0
 
     init(
         model: AuralisAppModel,
@@ -35,24 +37,61 @@ struct HomeView: View {
     private var colors: ThemeColors { theme.colorTokens }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: AuralisSpacing.xLarge) {
-                quickEntriesSection
-                ForEach(visibleContentModules) { module in
-                    moduleSection(module)
+        ZStack(alignment: .top) {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: AuralisSpacing.xLarge) {
+                    quickEntriesSection
+                    ForEach(visibleContentModules) { module in
+                        moduleSection(module)
+                    }
+                    librarySummary
                 }
-                librarySummary
+                .padding(.horizontal, AuralisSpacing.large)
+                // 标题占位是固定值，不跟随滚动动画改 layout。
+                // 下拉时只有内容被橡皮筋拉开；向上滚动时标题与内容同步向上，直到标题完全离场。
+                .padding(.top, IOSTopLevelChromeMetrics.titleOnlyHeight + AuralisSpacing.small)
+                .padding(.bottom, AuralisSpacing.large)
+                // iPad 宽屏：主内容限宽并居中（可读宽度），卡片仍是固定 140pt，
+                // 宽屏只是自然多显示几张，不拉伸成超宽卡片。
+                .frame(maxWidth: IOSLayoutMetrics.readableContentMaxWidth)
+                .frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, AuralisSpacing.large)
-            .padding(.top, AuralisSpacing.medium)
-            .padding(.bottom, AuralisSpacing.large)
-            // iPad 宽屏：主内容限宽并居中（可读宽度），卡片仍是固定 140pt，
-            // 宽屏只是自然多显示几张，不拉伸成超宽卡片。
-            .frame(maxWidth: IOSLayoutMetrics.readableContentMaxWidth)
-            .frame(maxWidth: .infinity)
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                max(0, geometry.contentOffset.y + geometry.contentInsets.top)
+            } action: { _, offset in
+                topHeaderScrollOffset = min(
+                    offset,
+                    IOSTopLevelChromeMetrics.titleOnlyHeight
+                )
+            }
+            .reportsBottomDockScroll(source: .home)
+
+            homeTopHeader
+                .offset(y: -topHeaderScrollOffset)
+                .allowsHitTesting(topHeaderScrollOffset < IOSTopLevelChromeMetrics.titleOnlyHeight)
         }
-        .reportsBottomDockScroll(source: .home)
         .background(ambientBackground)
+    }
+
+    /// 首页标题位于状态栏下第一排。它不使用 NavigationBar：
+    /// - 下拉 overscroll 时标题固定、内容独立下拉并原生回弹；
+    /// - 上滑时整排向上离场；
+    /// - 离场后不会生成系统 inline 小标题。
+    private var homeTopHeader: some View {
+        HStack(spacing: AuralisSpacing.medium) {
+            Text(String(localized: "首页", bundle: .module))
+                .font(.largeTitle.bold())
+                .foregroundStyle(colors.primaryText.color)
+                .lineLimit(1)
+                .accessibilityAddTraits(.isHeader)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, IOSTopLevelChromeMetrics.horizontalPadding)
+        .frame(height: IOSTopLevelChromeMetrics.titleOnlyHeight)
+        .frame(maxWidth: IOSLayoutMetrics.readableContentMaxWidth)
+        .frame(maxWidth: .infinity)
+        .accessibilityIdentifier("auralis.home.title")
     }
 
     // MARK: - 模块可见性（用户开启 + 有数据）
