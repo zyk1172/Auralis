@@ -102,6 +102,65 @@ struct LyricsChromePolicyTests {
     }
 }
 
+@Suite("歌词逐字轻量强调")
+struct LyricCharacterAnimationPolicyTests {
+    @Test("逐行时间戳会换算为 0 到 1 的行内进度")
+    func lineProgressUsesAdjacentLineTimes() {
+        #expect(
+            LyricCharacterAnimationPolicy.lineProgress(
+                position: 12,
+                lineStart: 10,
+                nextLineStart: 14
+            ) == 0.5
+        )
+        #expect(
+            LyricCharacterAnimationPolicy.lineProgress(
+                position: 8,
+                lineStart: 10,
+                nextLineStart: 14
+            ) == 0
+        )
+        #expect(
+            LyricCharacterAnimationPolicy.lineProgress(
+                position: 20,
+                lineStart: 10,
+                nextLineStart: 14
+            ) == 1
+        )
+        #expect(
+            LyricCharacterAnimationPolicy.lineProgress(
+                position: 12,
+                lineStart: 10,
+                nextLineStart: nil
+            ) == nil
+        )
+    }
+
+    @Test("逐字强调最大只放大到 1.05 倍")
+    func characterScaleIsSubtleAndBounded() {
+        let active = LyricCharacterAnimationPolicy.scale(
+            unitIndex: 2,
+            unitCount: 5,
+            progress: 0.5
+        )
+        #expect(abs(active - 1.05) < 0.0001)
+
+        let distant = LyricCharacterAnimationPolicy.scale(
+            unitIndex: 0,
+            unitCount: 5,
+            progress: 0.5
+        )
+        #expect(distant == 1)
+
+        let fallback = LyricCharacterAnimationPolicy.scale(
+            unitIndex: 0,
+            unitCount: 5,
+            progress: nil
+        )
+        #expect(abs(fallback - 1.05) < 0.0001)
+    }
+}
+
 @Suite("播放页标题滚动判断")
 struct MarqueeLayoutPolicyTests {
     @Test("能原样或轻微缩小完整显示的名称不滚动")
