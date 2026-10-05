@@ -130,7 +130,7 @@ struct MiniPlayerContent: View {
                 .foregroundStyle(theme.colorTokens.primaryText.color)
         }
         .frame(width: 44 * normalizedSkipControlsVisibility, height: 44)
-        .opacity(normalizedSkipControlsVisibility)
+        .opacity(normalizedSkipControlsVisibility * (isEnabled ? 1 : 0.32))
         .scaleEffect(normalizedSkipControlsVisibility, anchor: systemImage == "backward.fill" ? .trailing : .leading)
         .disabled(!isEnabled || normalizedSkipControlsVisibility < 0.05)
         .allowsHitTesting(normalizedSkipControlsVisibility >= 0.05)
