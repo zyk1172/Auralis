@@ -333,7 +333,7 @@ struct NowPlayingView: View {
                         dismissNowPlaying()
                     }
             )
-            .accessibilityElement()
+            .accessibilityElement(children: .ignore)
             .accessibilityLabel(String(localized: "关闭播放页", bundle: .module))
             .accessibilityAddTraits(.isButton)
             .accessibilityAction {
