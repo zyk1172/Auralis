@@ -117,6 +117,27 @@ struct PlaybackModeBehaviorTests {
         #expect(model.currentTrack.id.rawValue == "large-context-511")
     }
 
+    @Test("中等上下文先提供即时下一首，再后台补齐完整队列")
+    @MainActor
+    func mediumContextKeepsImmediateNextAndCompletesQueue() async {
+        let tracks = (0..<200).map { track("medium-context-\($0)") }
+        let model = makeModel(tracks: tracks)
+
+        model.playTrack(tracks[90], in: tracks)
+        #expect(model.canGoNext)
+        model.next()
+        #expect(model.currentTrack.id.rawValue == "medium-context-91")
+
+        for _ in 0..<500 {
+            if model.queue.count == tracks.count { break }
+            await Task.yield()
+        }
+
+        #expect(model.queue.count == tracks.count)
+        #expect(model.currentTrack.id.rawValue == "medium-context-91")
+        #expect(model.canGoNext)
+    }
+
     // MARK: - 顺序（repeat-off）
 
     @Test("repeatOff：队尾自然播完暂停，不切歌")
