@@ -219,7 +219,7 @@ struct NowPlayingLayoutPolicy: Sendable {
 /// 歌词页 Chrome 使用和底部 Dock 相同的“终态吸附”思路：
 /// 手势只决定显示/隐藏，不把每一像素位移映射到布局，避免歌词 ScrollView 卡顿。
 struct LyricsChromePolicy: Sendable {
-    static let autoHideDelay: TimeInterval = 5
+    static let autoHideDelay: Duration = .seconds(5)
     static let minimumVerticalSwipeDistance: CGFloat = 44
 
     /// 向上滑隐藏，向下滑显示；横向翻页和短划不改变 Chrome。
@@ -880,7 +880,7 @@ struct NowPlayingView: View {
 
         lyricsChromeAutoHideTask = Task { @MainActor in
             do {
-                try await Task.sleep(for: .seconds(LyricsChromePolicy.autoHideDelay))
+                try await Task.sleep(for: LyricsChromePolicy.autoHideDelay)
             } catch {
                 return
             }
