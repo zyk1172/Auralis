@@ -388,6 +388,30 @@ private struct LyricCharacterFlowLayout: Layout {
     }
 }
 
+
+/// Apple Music 风格的播放态封面几何：播放时铺开，暂停/空闲时缩小。
+/// 只做 render transform，不改变父级测量尺寸，因此标题和控制区不会随暂停跳位。
+struct NowPlayingArtworkMotionPolicy: Sendable {
+    static let pausedScale: CGFloat = 0.82
+    static let activeScale: CGFloat = 1
+
+    static func scale(for state: PlaybackState) -> CGFloat {
+        switch PlaybackControlPresentation(state: state) {
+        case .pause, .loading:
+            activeScale
+        case .play:
+            pausedScale
+        }
+    }
+}
+
+/// 底部歌词 / 队列按钮采用 toggle 语义：当前已经打开时再点一次回到封面页。
+struct NowPlayingPageTogglePolicy: Sendable {
+    static func toggled(current: NowPlayingPage, target: NowPlayingPage) -> NowPlayingPage {
+        current == target ? .player : target
+    }
+}
+
 struct NowPlayingView: View {
     static let musicHapticsMenuIdentifier = "auralis.nowPlaying.musicHaptics"
     static let moreActionsButtonIdentifier = "auralis.nowPlaying.moreActions"
@@ -400,7 +424,6 @@ struct NowPlayingView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var page = NowPlayingPage.player
     @State private var isPlaylistSheetPresented = false
-    @State private var showsAudioTechnicalInfo = false
     @State private var showsTrackInformation = false
     @State private var lyricScrollTarget: Int?
     @State private var lyricTimeline: [LyricsIndexResolver.TimedLine] = []
@@ -427,6 +450,14 @@ struct NowPlayingView: View {
             actualPosition: playbackStore.position,
             duration: model.effectivePlaybackDuration
         )
+    }
+
+    private var mainControlPresentation: PlaybackControlPresentation {
+        PlaybackControlPresentation(state: playbackStore.state)
+    }
+
+    private var artworkPresentationScale: CGFloat {
+        NowPlayingArtworkMotionPolicy.scale(for: playbackStore.state)
     }
 
     /// 纯函数：供 UI 显示与回归测试共用。
@@ -529,10 +560,6 @@ struct NowPlayingView: View {
 #else
             header
 #endif
-            if !lyricsImmersiveMode {
-                pagePicker
-                    .transition(lyricsChromeTransition)
-            }
             GeometryReader { geo in
                 playbackContent(in: geo)
             }
@@ -551,14 +578,6 @@ struct NowPlayingView: View {
 #else
         AuralisSpacing.large
 #endif
-    }
-
-    private var pagePicker: some View {
-        Picker(String(localized: "播放页面", bundle: .module), selection: $page) {
-            ForEach(NowPlayingPage.allCases) { page in Text(page.title).tag(page) }
-        }
-        .pickerStyle(.segmented)
-        .frame(maxWidth: 460)
     }
 
     private var lyricsImmersiveMode: Bool {
@@ -600,29 +619,10 @@ struct NowPlayingView: View {
                     .frame(maxHeight: .infinity)
 
                 VStack(spacing: compactLandscape ? 8 : AuralisSpacing.medium) {
-                    if !lyricsImmersiveMode {
-                        pagePicker
-                            .frame(maxWidth: 420)
-                            .transition(lyricsChromeTransition)
-                    }
-
-                    if page == .lyrics {
-                        lyrics
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .contentShape(Rectangle())
-                            .simultaneousGesture(lyricsChromeSwipeGesture)
-                            .simultaneousGesture(lyricsActivityTapGesture)
-
-                        if lyricsImmersiveMode {
-                            lyricsTrackIdentityHeader(showActions: false)
-                                .frame(maxWidth: 560)
-                        }
-                    } else {
-                        landscapePageContent(
-                            sectionSpacing: controlsSpacing,
-                            playButtonSize: playButtonSize
-                        )
-                    }
+                    landscapePageContent(
+                        sectionSpacing: controlsSpacing,
+                        playButtonSize: playButtonSize
+                    )
                 }
                 .frame(maxWidth: 600, maxHeight: .infinity)
             }
@@ -654,6 +654,11 @@ struct NowPlayingView: View {
             .shadow(color: Color.black.opacity(0.24), radius: 14, x: 0, y: 3)
         }
         .frame(width: side, height: side)
+        .scaleEffect(artworkPresentationScale)
+        .animation(
+            reduceMotion ? nil : .smooth(duration: 0.42, extraBounce: 0),
+            value: artworkPresentationScale
+        )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(String(localized: "专辑封面，\(model.currentTrack.albumTitle)", bundle: .module))
     }
@@ -672,12 +677,31 @@ struct NowPlayingView: View {
             .frame(maxWidth: 560)
             .frame(maxHeight: .infinity, alignment: .center)
             .fixedSize(horizontal: false, vertical: true)
+
         case .lyrics:
-            lyrics
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: AuralisSpacing.small) {
+                lyrics
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(lyricsChromeSwipeGesture)
+                    .simultaneousGesture(lyricsActivityTapGesture)
+
+                if lyricsImmersiveMode {
+                    lyricsTrackIdentityHeader(showActions: false)
+                        .frame(maxWidth: 560)
+                } else {
+                    nowPlayingBottomNavigation
+                        .frame(maxWidth: 420)
+                }
+            }
+
         case .queue:
-            queue
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: AuralisSpacing.small) {
+                queue
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                nowPlayingBottomNavigation
+                    .frame(maxWidth: 420)
+            }
         }
     }
 #endif
@@ -881,8 +905,20 @@ struct NowPlayingView: View {
                     size: side,
                     serverID: model.currentTrack.serverID
                 )
-                .shadow(color: Color.black.opacity(0.22), radius: 12, x: 0, y: 2)
+                .shadow(
+                    color: Color.black.opacity(playbackStore.state == .playing ? 0.24 : 0.16),
+                    radius: playbackStore.state == .playing ? 14 : 9,
+                    x: 0,
+                    y: 2
+                )
             }
+            // Apple Music：播放时封面舒展，暂停时明显缩小；scaleEffect 不改布局尺寸，
+            // 因此下面歌曲信息不会跟着上下跳动。
+            .scaleEffect(artworkPresentationScale)
+            .animation(
+                reduceMotion ? nil : .smooth(duration: 0.42, extraBounce: 0),
+                value: artworkPresentationScale
+            )
             Spacer(minLength: AuralisSpacing.xSmall)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -971,7 +1007,7 @@ struct NowPlayingView: View {
 
                     transportControls(playButtonSize: playButtonSize)
                     volumeControl
-                    bottomInfo
+                    nowPlayingBottomNavigation
                 }
                 .transition(lyricsChromeTransition)
             }
@@ -1086,7 +1122,7 @@ struct NowPlayingView: View {
 
             transportControls(playButtonSize: playButtonSize)
             volumeControl
-            bottomInfo
+            nowPlayingBottomNavigation
         }
     }
 
@@ -1160,17 +1196,22 @@ struct NowPlayingView: View {
             }
             transportItem {
                 Button(action: model.togglePlayback) {
-                    Image(systemName: model.playbackState == .playing ? "pause.fill" : "play.fill")
-                        .font(.system(size: playButtonSize * 0.4, weight: .bold))
-                        .contentTransition(.symbolEffect(.replace))
-                        .frame(width: playButtonSize, height: playButtonSize)
-                        .background(theme.colorTokens.accent.color)
-                        .foregroundStyle(theme.colorTokens.background.color)
-                        .clipShape(Circle())
+                    PlaybackControlIndicator(
+                        presentation: mainControlPresentation,
+                        color: theme.colorTokens.background.color,
+                        fontSize: playButtonSize * 0.4
+                    )
+                    .frame(width: playButtonSize, height: playButtonSize)
+                    .background(theme.colorTokens.accent.color)
+                    .clipShape(Circle())
+                    .scaleEffect(mainControlPresentation == .pause ? 1 : 0.97)
                 }
                 .buttonStyle(HapticPlainButtonStyle())
-                .animation(AuralisMotion.micro(reduceMotion: reduceMotion), value: model.playbackState)
-                .accessibilityLabel(model.playbackState == .playing ? String(localized: "暂停", bundle: .module) : String(localized: "播放", bundle: .module))
+                .animation(
+                    reduceMotion ? nil : .smooth(duration: 0.28, extraBounce: 0),
+                    value: mainControlPresentation
+                )
+                .accessibilityLabel(mainControlPresentation.accessibilityLabel)
             }
             transportItem {
                 Button(action: model.next) {
@@ -1211,35 +1252,74 @@ struct NowPlayingView: View {
         .frame(maxWidth: 420)
     }
 
-    private var bottomInfo: some View {
-        HStack(spacing: AuralisSpacing.medium) {
-            Button {
-                withAnimation(AuralisMotion.quick(reduceMotion: reduceMotion)) {
-                    showsAudioTechnicalInfo.toggle()
-                }
-            } label: {
-                Label(audioTechnicalLabel, systemImage: "waveform")
-                    .font(.caption)
-                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+    /// Apple Music 式底部三入口：歌词 / AirPlay / 队列。
+    /// 歌词与队列都是 toggle：再次点击当前入口回到封面页。
+    private var nowPlayingBottomNavigation: some View {
+        HStack(spacing: 0) {
+            bottomNavigationButton(
+                systemImage: page == .lyrics ? "quote.bubble.fill" : "quote.bubble",
+                title: String(localized: "歌词", bundle: .module),
+                isSelected: page == .lyrics
+            ) {
+                setPageFromBottomNavigation(.lyrics)
             }
-            .buttonStyle(HapticPlainButtonStyle())
-            .accessibilityLabel(String(localized: "音频格式，点击切换采样率", bundle: .module))
-            Spacer()
+
+            Spacer(minLength: 0)
+
             RoutePickerView()
-                .frame(width: 44, height: 44)
-                .accessibilityLabel(String(localized: "AirPlay 输出设备", bundle: .module))
+                .frame(width: 52, height: 44)
+                .contentShape(Rectangle())
+                .accessibilityLabel(String(localized: "隔空播放", bundle: .module))
+
+            Spacer(minLength: 0)
+
+            bottomNavigationButton(
+                systemImage: "list.bullet",
+                title: String(localized: "队列", bundle: .module),
+                isSelected: page == .queue
+            ) {
+                setPageFromBottomNavigation(.queue)
+            }
         }
         .frame(maxWidth: 420)
     }
 
-    private var audioTechnicalLabel: String {
-        guard showsAudioTechnicalInfo else {
-            return model.currentTrack.effectiveCodec?.uppercased() ?? String(localized: "未知", bundle: .module)
+    private func bottomNavigationButton(
+        systemImage: String,
+        title: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 21, weight: .medium))
+                .foregroundStyle(
+                    isSelected
+                        ? theme.colorTokens.accent.color
+                        : theme.colorTokens.secondaryText.color
+                )
+                .frame(width: 52, height: 44)
+                .contentShape(Rectangle())
+                .scaleEffect(isSelected ? 1.06 : 1)
         }
-        let info = model.currentTrack.sourceInfo
-        let sampleRate = info.sampleRate.map { "\($0 / 1_000) kHz" } ?? String(localized: "采样率未知", bundle: .module)
-        if let bitDepth = info.bitDepth { return "\(bitDepth)-bit · \(sampleRate)" }
-        return sampleRate
+        .buttonStyle(HapticPlainButtonStyle())
+        .animation(
+            reduceMotion ? nil : .smooth(duration: 0.24, extraBounce: 0),
+            value: isSelected
+        )
+        .accessibilityLabel(title)
+        .accessibilityValue(
+            isSelected
+                ? String(localized: "已打开", bundle: .module)
+                : String(localized: "未打开", bundle: .module)
+        )
+    }
+
+    private func setPageFromBottomNavigation(_ target: NowPlayingPage) {
+        let next = NowPlayingPageTogglePolicy.toggled(current: page, target: target)
+        withAnimation(reduceMotion ? nil : .smooth(duration: 0.34, extraBounce: 0)) {
+            page = next
+        }
     }
 
     /// 传输区按钮的等宽容器，保证五键严格对称。
@@ -1526,7 +1606,7 @@ struct NowPlayingView: View {
     }
 }
 
-private enum NowPlayingPage: String, CaseIterable, Identifiable {
+enum NowPlayingPage: String, CaseIterable, Identifiable {
     case lyrics, player, queue
     var id: String { rawValue }
     var title: String {
