@@ -22,6 +22,14 @@ struct HomeTopHeaderPolicy: Sendable {
             IOSTopLevelChromeMetrics.titleOnlyHeight
         )
     }
+
+    static func visibleHeight(for zeroBasedScrollOffset: CGFloat) -> CGFloat {
+        max(
+            IOSTopLevelChromeMetrics.titleOnlyHeight
+                - offset(for: zeroBasedScrollOffset),
+            0
+        )
+    }
 }
 
 /// 首页：由模块注册表驱动，不再写死 `if showX` 分支。
@@ -76,9 +84,19 @@ struct HomeView: View {
             }
             .reportsBottomDockScroll(source: .home)
 
-            homeTopHeader
-                .offset(y: -topHeaderScrollOffset)
-                .allowsHitTesting(topHeaderScrollOffset < IOSTopLevelChromeMetrics.titleOnlyHeight)
+            // 用固定高度 viewport 裁掉已经被向上推出的标题。
+            // 之前只做 offset、没有 clip，标题虽然离开内容区仍会继续画进状态栏，
+            // 看起来像“吸附”在最顶层。现在滑满一个标题高度后会完全消失。
+            Color.clear
+                .frame(height: IOSTopLevelChromeMetrics.titleOnlyHeight)
+                .overlay(alignment: .top) {
+                    homeTopHeader
+                        .offset(y: -topHeaderScrollOffset)
+                }
+                .clipped()
+                .allowsHitTesting(
+                    HomeTopHeaderPolicy.visibleHeight(for: topHeaderScrollOffset) > 0
+                )
         }
         .background(ambientBackground)
     }
