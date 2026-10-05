@@ -11,21 +11,6 @@ import ThemeEngine
 import UIKit
 #endif
 
-private extension View {
-    @ViewBuilder
-    func iPadNowPlayingPresentationSizing(_ enabled: Bool) -> some View {
-#if os(iOS)
-        if enabled {
-            self.presentationSizing(.page)
-        } else {
-            self
-        }
-#else
-        self
-#endif
-    }
-}
-
 /// 迷你播放条内部内容（不含背景与外壳）。iOS 双层 Dock 共用同一套布局，
 /// 外层尺寸、玻璃材质与边距由调用方（BottomGlassBarShell）统一决定。
 struct MiniPlayerContent: View {
@@ -296,6 +281,9 @@ struct NowPlayingView: View {
             )
             .ignoresSafeArea()
             VStack(spacing: AuralisSpacing.large) {
+#if os(iOS)
+                dismissHandle
+#endif
                 header
                 Picker(String(localized: "播放页面", bundle: .module), selection: $page) {
                     ForEach(NowPlayingPage.allCases) { page in Text(page.title).tag(page) }
@@ -312,9 +300,6 @@ struct NowPlayingView: View {
             .frame(maxWidth: nowPlayingContentMaxWidth)
         }
         .foregroundStyle(theme.colorTokens.primaryText.color)
-        // iOS 18+ 的默认 automatic sizing 在 iPad 会收敛为较窄的 form sheet。
-        // 仅 iPad 改为系统 page sizing，扩大播放页同时保留原生下拉关闭手势。
-        .iPadNowPlayingPresentationSizing(isPad)
         .sheet(isPresented: $isPlaylistSheetPresented) {
             AddToPlaylistSheet(model: model, theme: theme, track: model.currentTrack)
         }
@@ -326,6 +311,41 @@ struct NowPlayingView: View {
             pendingSeek = nil
         }
     }
+
+#if os(iOS)
+    /// Full-screen cover 不提供 sheet 自带的拖拽柄；在安全区内保留一个轻量入口，
+    /// 向下拖动或轻点即可关闭，避免为了铺满状态栏而丢失原来的退出路径。
+    private var dismissHandle: some View {
+        Capsule(style: .continuous)
+            .fill(theme.colorTokens.primaryText.color.opacity(0.34))
+            .frame(width: 48, height: 5)
+            .frame(maxWidth: .infinity, minHeight: 24)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                dismissNowPlaying()
+            }
+            .gesture(
+                DragGesture(minimumDistance: 10)
+                    .onEnded { value in
+                        guard value.translation.height > 60,
+                              abs(value.translation.height) > abs(value.translation.width)
+                        else { return }
+                        dismissNowPlaying()
+                    }
+            )
+            .accessibilityElement()
+            .accessibilityLabel(String(localized: "关闭播放页", bundle: .module))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction {
+                dismissNowPlaying()
+            }
+    }
+
+    private func dismissNowPlaying() {
+        model.isNowPlayingPresented = false
+        dismiss()
+    }
+#endif
 
     private var header: some View {
         HStack {
