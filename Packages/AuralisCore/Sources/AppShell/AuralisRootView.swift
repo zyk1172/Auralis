@@ -56,6 +56,53 @@ struct BottomDockProgressReducer: Sendable {
         if newScrollBucket < oldScrollBucket { return 0 }
         return nil
     }
+
+    /// Dock 的滚动方向判定不能直接依赖“相邻 bucket 增减”。到达底部后，
+    /// ScrollView settling 可能从 177pt 回到 175pt；旧实现会跨过 176pt
+    /// bucket 边界并误判成一次反向滚动。这里记录当前方向的极值，只有真正
+    /// 反向移动满一个 44pt 触控距离才允许切换终态。
+    struct HysteresisStep: Equatable, Sendable {
+        let anchor: CGFloat
+        let terminalProgress: CGFloat?
+    }
+
+    static func hysteresisStep(
+        anchor: CGFloat,
+        offset: CGFloat,
+        collapseProgress: CGFloat
+    ) -> HysteresisStep {
+        let clampedOffset = max(offset, 0)
+        let isCollapsed = collapseProgress >= 0.5
+
+        if isCollapsed {
+            // 收拢态持续向下滚时不断更新最大值；只有从这个最大值真正回滚
+            // minimumVerticalSwipeDistance 才展开。
+            let extreme = max(anchor, clampedOffset)
+            guard extreme - clampedOffset >= minimumVerticalSwipeDistance else {
+                return HysteresisStep(anchor: extreme, terminalProgress: nil)
+            }
+            return HysteresisStep(anchor: clampedOffset, terminalProgress: 0)
+        }
+
+        // 展开态持续向上（回滚）时不断更新最小值；只有从这个最小值真正
+        // 向内容末尾推进 minimumVerticalSwipeDistance 才收拢。
+        let extreme = min(anchor, clampedOffset)
+        guard clampedOffset - extreme >= minimumVerticalSwipeDistance else {
+            return HysteresisStep(anchor: extreme, terminalProgress: nil)
+        }
+        return HysteresisStep(anchor: clampedOffset, terminalProgress: 1)
+    }
+
+    /// 同时裁掉顶部与底部 rubber-band，并量化到整点，避免每个亚像素变化
+    /// 都触发 SwiftUI action。Hysteresis 再负责真正的 44pt 方向阈值。
+    static func clampedScrollSample(
+        zeroBasedOffset: CGFloat,
+        maximumOffset: CGFloat
+    ) -> Int {
+        let maximum = max(maximumOffset, 0)
+        let clamped = min(max(zeroBasedOffset, 0), maximum)
+        return Int(floor(clamped))
+    }
 }
 
 /// Dock 本体、页面预留空间和 AI 输入框共用同一套固定节奏。
@@ -655,6 +702,9 @@ struct BottomDockScrollReportingModifier: ViewModifier {
     /// 只持有协调器引用；不以 @ObservedObject 订阅每一帧动画。
     @Environment(\.homeChromeState) private var coordinator
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// 当前滚动方向的极值锚点。它只在真实反向移动满 44pt 后翻转，
+    /// 因此底部 settling / rubber-band 不会让 Dock 连续弹跳。
+    @State private var scrollHysteresisAnchor: CGFloat?
     let source: HomeChromeScrollSource
 
     init(source: HomeChromeScrollSource = .home) {
@@ -674,9 +724,9 @@ struct BottomDockScrollReportingModifier: ViewModifier {
                     BottomDockScrollClearanceHost(metrics: coordinator.metrics)
                 }
             }
-            // 不再向 ScrollView 叠加 DragGesture。用 iOS 18+ 原生 ScrollGeometry
-            // 读取量化后的滚动距离；每跨过一个 44pt 桶最多更新一次 Dock，
-            // 横向货架、List 惯性和顶部 rubber-band 都不会再被竞争手势打断。
+            // 不再向 ScrollView 叠加 DragGesture。原生 ScrollGeometry 只提供
+            // 裁掉 rubber-band 后的整点 offset；真正的方向变化由 44pt hysteresis
+            // 判定。这样 177→175 这类底部 settling 不会被当成“用户向回滚”。
             .onScrollGeometryChange(for: Int.self) { geometry in
                 let zeroBasedOffset =
                     geometry.contentOffset.y + geometry.contentInsets.top
@@ -687,24 +737,33 @@ struct BottomDockScrollReportingModifier: ViewModifier {
                         + geometry.contentInsets.bottom,
                     0
                 )
-                return BottomDockProgressReducer.scrollBucket(
-                    for: zeroBasedOffset,
+                return BottomDockProgressReducer.clampedScrollSample(
+                    zeroBasedOffset: zeroBasedOffset,
                     maximumOffset: maximumOffset
                 )
-            } action: { oldBucket, newBucket in
-                guard let terminal = BottomDockProgressReducer.terminalProgress(
-                    oldScrollBucket: oldBucket,
-                    newScrollBucket: newBucket
-                ) else { return }
-                coordinator?.beginInteraction(source: source)
+            } action: { oldSample, newSample in
+                guard let coordinator else { return }
+                let oldOffset = CGFloat(oldSample)
+                let newOffset = CGFloat(newSample)
+                let step = BottomDockProgressReducer.hysteresisStep(
+                    anchor: scrollHysteresisAnchor ?? oldOffset,
+                    offset: newOffset,
+                    collapseProgress: coordinator.collapseProgress
+                )
+                scrollHysteresisAnchor = step.anchor
+                guard let terminal = step.terminalProgress else { return }
+
+                coordinator.beginInteraction(source: source)
                 withAnimation(BottomDockMotion.animation(reduceMotion: reduceMotion)) {
-                    coordinator?.setCollapseProgress(terminal)
+                    coordinator.setCollapseProgress(terminal)
                 }
             }
             .onAppear {
+                scrollHysteresisAnchor = nil
                 coordinator?.beginInteraction(source: source)
             }
             .onDisappear {
+                scrollHysteresisAnchor = nil
                 coordinator?.endInteraction(source: source)
             }
     }
