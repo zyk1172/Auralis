@@ -215,6 +215,32 @@ struct NowPlayingLayoutPolicy: Sendable {
     }
 }
 
+
+/// 歌词页 Chrome 使用和底部 Dock 相同的“终态吸附”思路：
+/// 手势只决定显示/隐藏，不把每一像素位移映射到布局，避免歌词 ScrollView 卡顿。
+struct LyricsChromePolicy: Sendable {
+    static let autoHideDelay: TimeInterval = 5
+    static let minimumVerticalSwipeDistance: CGFloat = 44
+
+    /// 向上滑隐藏，向下滑显示；横向翻页和短划不改变 Chrome。
+    static func terminalHidden(for translation: CGSize) -> Bool? {
+        guard abs(translation.height) > abs(translation.width),
+              abs(translation.height) >= minimumVerticalSwipeDistance
+        else { return nil }
+        return translation.height < 0
+    }
+}
+
+enum LyricsChromeMotion {
+    static let duration: TimeInterval = 0.42
+
+    static func animation(reduceMotion: Bool) -> Animation {
+        reduceMotion
+            ? .linear(duration: 0.16)
+            : .smooth(duration: duration)
+    }
+}
+
 struct NowPlayingView: View {
     static let musicHapticsMenuIdentifier = "auralis.nowPlaying.musicHaptics"
     static let moreActionsButtonIdentifier = "auralis.nowPlaying.moreActions"
@@ -231,6 +257,9 @@ struct NowPlayingView: View {
     @State private var showsTrackInformation = false
     @State private var lyricScrollTarget: Int?
     @State private var lyricTimeline: [LyricsIndexResolver.TimedLine] = []
+    /// 歌词页 5 秒无操作后进入沉浸态：只保留歌曲名，其余 Chrome 向下收缩消失。
+    @State private var lyricsChromeHidden = false
+    @State private var lyricsChromeAutoHideTask: Task<Void, Never>?
     /// 拖动进度条时暂存的 seek 目标：松手才真正 seek（Apple Music 行为）。
     @State private var pendingSeek: Double?
 #if os(iOS)
@@ -323,19 +352,40 @@ struct NowPlayingView: View {
         // 切歌时旧歌曲的 pendingSeek 不能污染下一首歌（拖动中切歌保护）。
         .onChange(of: currentTrackIdentity) { _, _ in
             pendingSeek = nil
+            if page == .lyrics {
+                showLyricsChromeAndScheduleAutoHide()
+            }
+        }
+        .onChange(of: page) { oldPage, newPage in
+            if newPage == .lyrics {
+                showLyricsChromeAndScheduleAutoHide()
+            } else if oldPage == .lyrics {
+                lyricsChromeAutoHideTask?.cancel()
+                lyricsChromeAutoHideTask = nil
+                lyricsChromeHidden = false
+            }
+        }
+        .onDisappear {
+            lyricsChromeAutoHideTask?.cancel()
+            lyricsChromeAutoHideTask = nil
         }
     }
 
     private var portraitBody: some View {
         VStack(spacing: AuralisSpacing.medium) {
 #if os(iOS)
-            // iOS 与 Apple Music 一致：拖拽横条直接贴近顶部安全区，
-            // 不再在它下面重复显示“正在播放 / 专辑名”两行副标题。
-            dismissHandle
+            // 歌词沉浸态隐藏顶部 Chrome；向下滑后恢复。
+            if !lyricsImmersiveMode {
+                dismissHandle
+                    .transition(lyricsChromeTransition)
+            }
 #else
             header
 #endif
-            pagePicker
+            if !lyricsImmersiveMode {
+                pagePicker
+                    .transition(lyricsChromeTransition)
+            }
             GeometryReader { geo in
                 playbackContent(in: geo)
             }
@@ -364,6 +414,17 @@ struct NowPlayingView: View {
         .frame(maxWidth: 460)
     }
 
+    private var lyricsImmersiveMode: Bool {
+        page == .lyrics && lyricsChromeHidden
+    }
+
+    private var lyricsChromeTransition: AnyTransition {
+        .asymmetric(
+            insertion: .move(edge: .bottom).combined(with: .opacity),
+            removal: .move(edge: .bottom).combined(with: .opacity)
+        )
+    }
+
 #if os(iOS)
     /// 横屏采用与 Apple Music 同类的左右双栏：封面固定在左，右侧承载播放信息、
     /// 歌词或队列。旋转时只重排视图，不重建播放状态、队列或当前页面选择。
@@ -378,26 +439,42 @@ struct NowPlayingView: View {
         let controlsSpacing: CGFloat = compactLandscape ? 10 : 15
         let playButtonSize: CGFloat = compactLandscape ? 48 : 56
 
-        return VStack(spacing: compactLandscape ? 2 : AuralisSpacing.xSmall) {
-            dismissHandle
-
-            HStack(spacing: columnSpacing) {
-                landscapeArtwork(side: artworkSide)
-                    .frame(width: artworkSide)
-                    .frame(maxHeight: .infinity)
-
-                VStack(spacing: compactLandscape ? 8 : AuralisSpacing.medium) {
-                    pagePicker
-                        .frame(maxWidth: 420)
-
-                    landscapePageContent(
-                        sectionSpacing: controlsSpacing,
-                        playButtonSize: playButtonSize
-                    )
+        return Group {
+            if lyricsImmersiveMode {
+                // 横屏歌词沉浸态也遵守“只留歌曲名”：封面、顶部横条和分页控件退出，
+                // 歌词获得完整宽度，向下滑即可恢复双栏。
+                VStack(spacing: AuralisSpacing.small) {
+                    lyrics
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    lyricsPersistentTitle
+                        .padding(.horizontal, AuralisSpacing.large)
                 }
-                .frame(maxWidth: 600, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .simultaneousGesture(lyricsChromeSwipeGesture)
+                .simultaneousGesture(lyricsActivityTapGesture)
+            } else {
+                VStack(spacing: compactLandscape ? 2 : AuralisSpacing.xSmall) {
+                    dismissHandle
+
+                    HStack(spacing: columnSpacing) {
+                        landscapeArtwork(side: artworkSide)
+                            .frame(width: artworkSide)
+                            .frame(maxHeight: .infinity)
+
+                        VStack(spacing: compactLandscape ? 8 : AuralisSpacing.medium) {
+                            pagePicker
+                                .frame(maxWidth: 420)
+
+                            landscapePageContent(
+                                sectionSpacing: controlsSpacing,
+                                playButtonSize: playButtonSize
+                            )
+                        }
+                        .frame(maxWidth: 600, maxHeight: .infinity)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .padding(.horizontal, horizontalPadding)
         .padding(.top, 2)
@@ -445,6 +522,9 @@ struct NowPlayingView: View {
         case .lyrics:
             lyrics
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .simultaneousGesture(lyricsChromeSwipeGesture)
+                .simultaneousGesture(lyricsActivityTapGesture)
         case .queue:
             queue
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -569,8 +649,8 @@ struct NowPlayingView: View {
         .accessibilityIdentifier(Self.moreActionsButtonIdentifier)
     }
 
-    /// 三个页面只替换上方内容区；曲目信息、进度和控制区始终是同一套视图固定在底部。
-    /// 这样切到歌词 / 队列时不会把整个播放界面换走，布局也不会上下跳动。
+    /// 普通播放/队列保持完整底部控制；歌词页额外支持沉浸 Chrome：
+    /// 5 秒无操作或向上滑后只保留歌曲名，其余控制向下收缩退出。
     private func playbackContent(in geo: GeometryProxy) -> some View {
         // iPhone 保持既有按高度收紧的规则；iPad 额外根据当前窗口宽度判断。
         // 因此 iPad mini、Split View、台前调度窄窗口都会自动进入更紧凑的控制区。
@@ -592,6 +672,9 @@ struct NowPlayingView: View {
         return VStack(spacing: sectionSpacing) {
             TabView(selection: $page) {
                 lyrics
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(lyricsChromeSwipeGesture)
+                    .simultaneousGesture(lyricsActivityTapGesture)
                     .tag(NowPlayingPage.lyrics)
                 artworkHero(side: artworkSide, compactHeight: compactHeight, glowCanvasSize: glowCanvasSize)
                     .tag(NowPlayingPage.player)
@@ -605,10 +688,22 @@ struct NowPlayingView: View {
 #endif
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            playbackControls(sectionSpacing: sectionSpacing, playButtonSize: playButtonSize)
-                .frame(maxWidth: 560)
-                // 控制区贴近可用区域底部，不再用下方 Spacer 把它悬在页面中间。
-                .fixedSize(horizontal: false, vertical: true)
+            Group {
+                if page == .lyrics {
+                    lyricsPlaybackChrome(
+                        sectionSpacing: sectionSpacing,
+                        playButtonSize: playButtonSize
+                    )
+                } else {
+                    playbackControls(
+                        sectionSpacing: sectionSpacing,
+                        playButtonSize: playButtonSize
+                    )
+                }
+            }
+            .frame(maxWidth: 560)
+            // 控制区贴近可用区域底部，不再用下方 Spacer 把它悬在页面中间。
+            .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, AuralisSpacing.medium)
@@ -641,6 +736,157 @@ struct NowPlayingView: View {
             Spacer(minLength: AuralisSpacing.xSmall)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var lyricsPersistentTitle: some View {
+        OneShotMarqueeText(
+            text: model.currentTrack.title,
+            font: .title2.bold(),
+            color: theme.colorTokens.primaryText.color,
+            height: 30
+        )
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity)
+        .accessibilityLabel(model.currentTrack.title)
+    }
+
+    /// 歌词页完整态保留现有播放能力；沉浸态只留下歌曲名。
+    /// 额外控件使用 bottom transition，隐藏时向下收缩离场，歌词区域同步扩展。
+    private func lyricsPlaybackChrome(
+        sectionSpacing: CGFloat,
+        playButtonSize: CGFloat
+    ) -> some View {
+        VStack(spacing: sectionSpacing) {
+            lyricsPersistentTitle
+
+            if !lyricsChromeHidden {
+                VStack(spacing: sectionSpacing) {
+                    HStack(spacing: 0) {
+                        dislikeButton
+                        Spacer(minLength: 0)
+                        OneShotMarqueeText(
+                            text: model.currentTrack.artistName,
+                            font: .subheadline,
+                            color: theme.colorTokens.secondaryText.color,
+                            height: 22
+                        )
+                        .padding(.horizontal, 8)
+                        Spacer(minLength: 0)
+                        favoriteButton
+                    }
+
+                    VStack(spacing: AuralisSpacing.xSmall) {
+                        ThinSlider(
+                            value: model.playbackProgress,
+                            accent: theme.colorTokens.accent.color,
+                            track: theme.colorTokens.separator.color.opacity(0.4),
+                            thumb: Color.white,
+                            onEditingChanged: { editing in
+                                registerLyricsInteraction()
+                                if !editing, let pending = pendingSeek {
+                                    model.playbackProgress = pending
+                                    pendingSeek = nil
+                                }
+                            },
+                            onValueChanged: {
+                                registerLyricsInteraction()
+                                pendingSeek = $0
+                            },
+                            accessibilityStep: min(1, 5 / max(model.effectivePlaybackDuration, 1))
+                        )
+                        .accessibilityLabel(String(localized: "播放进度", bundle: .module))
+                        .accessibilityValue(Text("\(formatDuration(displayedPlaybackPosition)) / \(formatDuration(model.effectivePlaybackDuration))"))
+
+                        HStack {
+                            Text(formatDuration(displayedPlaybackPosition))
+                            Spacer()
+                            Text("-" + formatDuration(max(model.effectivePlaybackDuration - displayedPlaybackPosition, 0)))
+                        }
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    }
+
+                    transportControls(playButtonSize: playButtonSize)
+                    volumeControl
+                    bottomInfo
+                }
+                .transition(lyricsChromeTransition)
+            }
+        }
+        .animation(LyricsChromeMotion.animation(reduceMotion: reduceMotion), value: lyricsChromeHidden)
+        .simultaneousGesture(lyricsActivityTapGesture)
+    }
+
+    private var lyricsChromeSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { _ in
+                lyricsChromeAutoHideTask?.cancel()
+                lyricsChromeAutoHideTask = nil
+            }
+            .onEnded { value in
+                guard page == .lyrics else { return }
+                guard let shouldHide = LyricsChromePolicy.terminalHidden(for: value.translation) else {
+                    scheduleLyricsChromeAutoHide()
+                    return
+                }
+                if shouldHide {
+                    hideLyricsChrome()
+                } else {
+                    showLyricsChromeAndScheduleAutoHide()
+                }
+            }
+    }
+
+    private var lyricsActivityTapGesture: some Gesture {
+        TapGesture()
+            .onEnded {
+                registerLyricsInteraction()
+            }
+    }
+
+    private func registerLyricsInteraction() {
+        guard page == .lyrics else { return }
+        if lyricsChromeHidden {
+            // 沉浸态不因普通点击意外弹出；按要求只由“向下滑”恢复。
+            return
+        }
+        scheduleLyricsChromeAutoHide()
+    }
+
+    private func hideLyricsChrome() {
+        lyricsChromeAutoHideTask?.cancel()
+        lyricsChromeAutoHideTask = nil
+        guard !lyricsChromeHidden else { return }
+        withAnimation(LyricsChromeMotion.animation(reduceMotion: reduceMotion)) {
+            lyricsChromeHidden = true
+        }
+    }
+
+    private func showLyricsChromeAndScheduleAutoHide() {
+        lyricsChromeAutoHideTask?.cancel()
+        lyricsChromeAutoHideTask = nil
+        if lyricsChromeHidden {
+            withAnimation(LyricsChromeMotion.animation(reduceMotion: reduceMotion)) {
+                lyricsChromeHidden = false
+            }
+        }
+        scheduleLyricsChromeAutoHide()
+    }
+
+    private func scheduleLyricsChromeAutoHide() {
+        lyricsChromeAutoHideTask?.cancel()
+        lyricsChromeAutoHideTask = nil
+        guard page == .lyrics, !lyricsChromeHidden else { return }
+
+        lyricsChromeAutoHideTask = Task { @MainActor in
+            do {
+                try await Task.sleep(for: .seconds(LyricsChromePolicy.autoHideDelay))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, page == .lyrics, !lyricsChromeHidden else { return }
+            hideLyricsChrome()
+        }
     }
 
     private func playbackControls(sectionSpacing: CGFloat, playButtonSize: CGFloat) -> some View {
