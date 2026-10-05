@@ -319,6 +319,7 @@ public struct AuralisRootView: View {
             model.selectTopLevelSection(.home)
         }
         if arguments.contains("-auralis-ui-smoke-now-playing") {
+            model.installNowPlayingControlsUISmokeFixture()
             model.isNowPlayingPresented = true
         }
         if isDockInteractionSmoke {
