@@ -7,6 +7,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.mockwebserver.SocketPolicy
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
@@ -315,9 +316,9 @@ class AnthropicMessagesProviderTest {
     @Test
     fun `连接不回应时 withTimeout 及时恢复且连接被关闭`() = runBlocking {
         server.enqueue(
-            MockResponse().setResponseCode(200)
-                .setHeadersDelay(1500, java.util.concurrent.TimeUnit.MILLISECONDS)
-                .setBody("{}"),
+            // A delayed response can beat the cancellation callback on a busy CI
+            // runner. Never respond, so only the coroutine deadline can unblock it.
+            MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE),
         )
         val client = slowClient()
         val p = provider(streaming = false, client = client)
