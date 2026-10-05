@@ -110,6 +110,13 @@ struct AssistantView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+#if os(iOS)
+            // AI 助手标题固定在与首页 / 音乐库相同的左上层级；
+            // Provider 状态放在标题下方，不再用系统导航栏制造顶部空白。
+            header
+            Divider()
+#endif
+
             // iPhone 与 iPad 统一：会话列表始终以 sheet 呈现（不再有 regular-width 的
             // 桌面式 Sidebar 分支）；宽屏只通过可用宽度约束布局，不切换 UI 架构。
             conversation
@@ -492,8 +499,8 @@ struct AssistantView: View {
                 // 点击聊天空白区域收起键盘（不影响卡片自身的点按）。
                 .onTapGesture { assistantInputFocused = false }
             }
-            // 与音乐库一致：真实 ScrollView 直接参与 NavigationStack 的 scroll-edge。
-            // 页内工具条固定在顶部 safe area，聊天内容保留系统原生下拉回弹。
+#if os(macOS)
+            // macOS 仍沿用页内顶部栏；iOS 的 header 已固定在 ScrollView 外层。
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
                     header
@@ -501,6 +508,7 @@ struct AssistantView: View {
                 }
                 .background(theme.colorTokens.background.color)
             }
+#endif
             .background {
                 GeometryReader { geometry in
                     Color.clear.preference(
@@ -645,8 +653,65 @@ struct AssistantView: View {
     }
 
     private var header: some View {
+#if os(iOS)
+        HStack(alignment: .top, spacing: AuralisSpacing.medium) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(String(localized: "AI 助手", bundle: .module))
+                    .font(.largeTitle.bold())
+                    .foregroundStyle(theme.colorTokens.primaryText.color)
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+
+                if isLive {
+                    Label(settings.model, systemImage: "checkmark.seal.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(theme.colorTokens.success.color)
+                        .lineLimit(1)
+                } else {
+                    Label(
+                        String(localized: "未配置模型接口", bundle: .module),
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(theme.colorTokens.warning.color)
+                    .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: AuralisSpacing.small)
+
+            HStack(spacing: AuralisSpacing.xSmall) {
+                if !isLive {
+                    assistantHeaderIconButton(
+                        symbol: "gearshape",
+                        accessibilityLabel: String(localized: "配置 AI", bundle: .module),
+                        help: String(localized: "配置 AI", bundle: .module)
+                    ) {
+                        model.selectTopLevelSection(.settings)
+                    }
+                }
+
+                assistantHeaderIconButton(
+                    symbol: "magnifyingglass",
+                    accessibilityLabel: String(localized: "搜索音乐库", bundle: .module),
+                    help: String(localized: "搜索音乐库（兜底）", bundle: .module)
+                ) {
+                    presentedSheet = .librarySearch
+                }
+
+                sessionListButton
+            }
+            .padding(.top, 2)
+        }
+        .padding(.horizontal, IOSTopLevelChromeMetrics.horizontalPadding)
+        .padding(.vertical, IOSTopLevelChromeMetrics.verticalPadding)
+        .frame(minHeight: IOSTopLevelChromeMetrics.titleWithSubtitleHeight)
+        .frame(maxWidth: IOSLayoutMetrics.readableContentMaxWidth)
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("auralis.assistant.header")
+#else
         HStack(spacing: AuralisSpacing.medium) {
-            // 一行：模型名称 + 状态，与右侧按钮平齐。
             if isLive {
                 Label(settings.model, systemImage: "checkmark.seal.fill")
                     .font(.subheadline)
@@ -677,6 +742,7 @@ struct AssistantView: View {
         }
         .padding(AuralisSpacing.large)
         .accessibilityElement(children: .contain)
+#endif
     }
 
     /// 新建会话仅保留在会话页顶部；进入批量管理后，全选收纳到同一管理按钮中。
