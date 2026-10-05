@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import CoreGraphics
+import Domain
 import Testing
 @testable import AppShell
 
@@ -85,6 +86,38 @@ struct IOSLayoutMetricsTests {
         #expect(NowPlayingLayoutPolicy.usesLandscapeLayout(containerSize: CGSize(width: 844, height: 390)))
         #expect(NowPlayingLayoutPolicy.usesLandscapeLayout(containerSize: CGSize(width: 1194, height: 834)))
         #expect(!NowPlayingLayoutPolicy.usesLandscapeLayout(containerSize: CGSize(width: 0, height: 0)))
+    }
+
+    @Test("播放时封面放大，暂停时保持同布局内缩小")
+    func nowPlayingArtworkFollowsPlaybackState() {
+        #expect(NowPlayingArtworkMotionPolicy.scale(for: .playing) == 1)
+        #expect(NowPlayingArtworkMotionPolicy.scale(for: .buffering) == 1)
+        #expect(NowPlayingArtworkMotionPolicy.scale(for: .paused) == 0.82)
+        #expect(NowPlayingArtworkMotionPolicy.scale(for: .idle) == 0.82)
+    }
+
+    @Test("歌词与队列按钮再次点击回到封面页")
+    func bottomNowPlayingButtonsToggleBackToArtwork() {
+        #expect(
+            NowPlayingPageTogglePolicy.toggled(current: .player, target: .lyrics)
+                == .lyrics
+        )
+        #expect(
+            NowPlayingPageTogglePolicy.toggled(current: .lyrics, target: .lyrics)
+                == .player
+        )
+        #expect(
+            NowPlayingPageTogglePolicy.toggled(current: .player, target: .queue)
+                == .queue
+        )
+        #expect(
+            NowPlayingPageTogglePolicy.toggled(current: .queue, target: .queue)
+                == .player
+        )
+        #expect(
+            NowPlayingPageTogglePolicy.toggled(current: .lyrics, target: .queue)
+                == .queue
+        )
     }
 
     @Test("横屏封面受窗口高度和平台上限约束")
