@@ -163,28 +163,28 @@ struct LyricCharacterAnimationPolicyTests {
         )
     }
 
-    @Test("逐字强调最大只放大到 1.05 倍")
-    func characterScaleIsSubtleAndBounded() {
+    @Test("逐字强调波峰 1.12 倍，当前句基线 1.02 倍")
+    func characterScaleIsVisibleAndBounded() {
         let active = LyricCharacterAnimationPolicy.scale(
             unitIndex: 2,
             unitCount: 5,
             progress: 0.5
         )
-        #expect(abs(active - 1.05) < 0.0001)
+        #expect(abs(active - 1.12) < 0.0001)
 
         let distant = LyricCharacterAnimationPolicy.scale(
             unitIndex: 0,
             unitCount: 5,
             progress: 0.5
         )
-        #expect(distant == 1)
+        #expect(abs(distant - 1.02) < 0.0001)
 
         let fallback = LyricCharacterAnimationPolicy.scale(
             unitIndex: 0,
             unitCount: 5,
             progress: nil
         )
-        #expect(abs(fallback - 1.05) < 0.0001)
+        #expect(abs(fallback - 1.06) < 0.0001)
     }
 }
 
