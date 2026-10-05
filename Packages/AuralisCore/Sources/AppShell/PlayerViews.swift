@@ -327,20 +327,33 @@ struct NowPlayingView: View {
     }
 
     private var portraitBody: some View {
-        VStack(spacing: AuralisSpacing.large) {
+        VStack(spacing: AuralisSpacing.medium) {
 #if os(iOS)
+            // iOS 与 Apple Music 一致：拖拽横条直接贴近顶部安全区，
+            // 不再在它下面重复显示“正在播放 / 专辑名”两行副标题。
             dismissHandle
-#endif
+#else
             header
+#endif
             pagePicker
             GeometryReader { geo in
                 playbackContent(in: geo)
             }
         }
-        .padding(AuralisSpacing.large)
+        .padding(.horizontal, AuralisSpacing.large)
+        .padding(.bottom, AuralisSpacing.large)
+        .padding(.top, portraitTopPadding)
         // 900pt 只是大尺寸 iPad 的内容上限；较小 iPad、分屏和台前调度窗口
         // 会由 SwiftUI 根据实际可用宽度自然收缩，不依赖具体设备型号。
         .frame(maxWidth: nowPlayingContentMaxWidth)
+    }
+
+    private var portraitTopPadding: CGFloat {
+#if os(iOS)
+        2
+#else
+        AuralisSpacing.large
+#endif
     }
 
     private var pagePicker: some View {
@@ -362,7 +375,7 @@ struct NowPlayingView: View {
         let horizontalPadding: CGFloat = isPad ? 28 : 16
         let columnSpacing: CGFloat = isPad ? 36 : 24
         let compactLandscape = size.height < 460
-        let controlsSpacing: CGFloat = compactLandscape ? 7 : 11
+        let controlsSpacing: CGFloat = compactLandscape ? 10 : 15
         let playButtonSize: CGFloat = compactLandscape ? 48 : 56
 
         return VStack(spacing: compactLandscape ? 2 : AuralisSpacing.xSmall) {
@@ -446,7 +459,8 @@ struct NowPlayingView: View {
         Capsule(style: .continuous)
             .fill(theme.colorTokens.primaryText.color.opacity(0.34))
             .frame(width: 48, height: 5)
-            .frame(maxWidth: .infinity, minHeight: 24)
+            // 只保留足够的手势命中高度，不再用 24pt 可见布局把横条向下推。
+            .frame(maxWidth: .infinity, minHeight: 12)
             .contentShape(Rectangle())
             .onTapGesture {
                 dismissNowPlaying()
@@ -563,9 +577,11 @@ struct NowPlayingView: View {
         let compactHeight = geo.size.height < 650
         let compactPadWidth = isPad && geo.size.width < 620
         let compactLayout = compactHeight || compactPadWidth
-        let sectionSpacing: CGFloat = compactLayout ? 10 : 15
+        // 去掉顶部重复标题后，把节省出的高度还给播放控制区。
+        // 歌曲信息、进度、传输键、音量和底部状态之间保持更舒展的 Apple Music 式节奏。
+        let sectionSpacing: CGFloat = compactLayout ? 14 : 20
         let playButtonSize: CGFloat = compactLayout ? 56 : 64
-        let estimatedControlHeight: CGFloat = compactLayout ? 264 : 294
+        let estimatedControlHeight: CGFloat = compactLayout ? 292 : 330
         let heroHeight = max(geo.size.height - estimatedControlHeight, 190)
         let maxArtworkSide = artworkSizeCap(for: geo.size.width)
         let artworkSide = min(maxArtworkSide, geo.size.width * 0.84, heroHeight * 0.88)
