@@ -956,20 +956,19 @@ struct NowPlayingView: View {
                     color: theme.colorTokens.primaryText.color,
                     height: 30
                 )
-                .accessibilityIdentifier("auralis.nowPlaying.trackTitle")
                 OneShotMarqueeText(
                     text: model.currentTrack.artistName,
                     font: .subheadline,
                     color: theme.colorTokens.secondaryText.color,
                     height: 22
                 )
-                .accessibilityIdentifier("auralis.nowPlaying.artistName")
             }
             .padding(.horizontal, 56)
             .frame(maxWidth: .infinity)
             .clipped()
             .accessibilityElement(children: .combine)
             .accessibilityLabel(nowPlayingAccessibilityLabel)
+            .accessibilityIdentifier("auralis.nowPlaying.trackIdentity")
 
             HStack(spacing: 0) {
                 dislikeButton
