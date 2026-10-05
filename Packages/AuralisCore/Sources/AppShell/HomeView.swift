@@ -13,6 +13,17 @@ private enum HomeCardMetrics {
     static let titleHeight: CGFloat = 20
 }
 
+/// 首页顶部标题的纯滚动策略：顶部 overscroll 不移动标题；
+/// 只有真实向上滚动才推动标题，最多移动一个标题高度。
+struct HomeTopHeaderPolicy: Sendable {
+    static func offset(for zeroBasedScrollOffset: CGFloat) -> CGFloat {
+        min(
+            max(zeroBasedScrollOffset, 0),
+            IOSTopLevelChromeMetrics.titleOnlyHeight
+        )
+    }
+}
+
 /// 首页：由模块注册表驱动，不再写死 `if showX` 分支。
 /// - 渲染列表来自用户布局偏好（HomeLayoutStore，UserDefaults 持久化）；
 /// - 关闭的模块完全不渲染、不留空白、不查询数据、不加载封面（从模块列表移除）；
@@ -59,9 +70,8 @@ struct HomeView: View {
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
                 max(0, geometry.contentOffset.y + geometry.contentInsets.top)
             } action: { _, offset in
-                topHeaderScrollOffset = min(
-                    offset,
-                    IOSTopLevelChromeMetrics.titleOnlyHeight
+                topHeaderScrollOffset = HomeTopHeaderPolicy.offset(
+                    for: offset
                 )
             }
             .reportsBottomDockScroll(source: .home)
