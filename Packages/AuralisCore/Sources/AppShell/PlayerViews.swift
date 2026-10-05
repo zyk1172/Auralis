@@ -140,8 +140,8 @@ struct MiniPlayerContent: View {
 
 }
 
-/// 紧凑 Dock 内的播放内容。与展开态共用真实播放状态与操作，但缩为单行，
-/// 让首页入口和 AI 助手入口保持独立的圆形触控区域。
+/// 紧凑 Dock 内的播放内容。与展开态保持相同的“两行曲目信息”层级：
+/// 歌曲名 + 歌手始终存在，只收掉前后切歌按钮，避免终态切换时内容高度和重心跳变。
 struct CompactMiniPlayerContent: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject private var playbackStore: PlaybackStore
@@ -171,10 +171,21 @@ struct CompactMiniPlayerContent: View {
                 cornerRadius: 8
             )
 
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(theme.colorTokens.primaryText.color)
-                .lineLimit(1)
+            // 必须与展开态 MiniPlayerContent 保持相同的两行信息层级。
+            // 之前紧凑终态只保留歌名，Morphing 完成切树时歌手行突然消失，
+            // 导致文字块高度/视觉重心变化，看起来像 Dock 又缩了一次。
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(theme.colorTokens.primaryText.color)
+                    .lineLimit(1)
+                Text(playbackStore.currentTrack.artistName)
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    .lineLimit(1)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(accessibilityPlaybackLabel)
 
             Spacer(minLength: 4)
 
@@ -192,6 +203,19 @@ struct CompactMiniPlayerContent: View {
         }
         .padding(.horizontal, 10)
         .frame(maxHeight: .infinity)
+    }
+
+    private var accessibilityPlaybackLabel: String {
+        let state: String
+        switch playbackStore.state {
+        case .playing: state = String(localized: "播放中", bundle: .module)
+        case .paused: state = String(localized: "已暂停", bundle: .module)
+        default: state = String(localized: "未播放", bundle: .module)
+        }
+        return String(
+            localized: "\(playbackStore.currentTrack.title)，\(playbackStore.currentTrack.artistName)，\(state)",
+            bundle: .module
+        )
     }
 }
 
