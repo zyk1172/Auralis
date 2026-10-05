@@ -1523,8 +1523,9 @@ public final class AuralisAppModel: ObservableObject {
                 playTracks(recent)
             }
         case .playRandom:
-            // 整库随机属于自动发现：排除 disliked。
-            playTracks(autoCandidate(catalog.tracks).shuffled().prefix(30).map { $0 })
+            // 整库随机统一取 24 首，与首页「随机音乐」和「收藏里随便听」的
+            // 首页批次大小保持一致；自动发现仍排除 disliked。
+            playTracks(autoCandidate(catalog.tracks).shuffled().prefix(24).map { $0 })
         case let .playGenre(name):
             let tracks = tracks(for: Genre(name: name, songCount: 0))
             if tracks.isEmpty {
@@ -3127,12 +3128,12 @@ public final class AuralisAppModel: ObservableObject {
     /// 不在 body 里做任何 O(n) 计算，避免首页滚动卡顿与重复全表遍历。
     /// 各模块数据规则：
     /// - 很久没听：播放过（playCount>0）但不在最近播放历史里。当前只有播放次数与最近播放顺序、
-    ///   没有「每首歌最后播放时间戳」，因此以「不在最近 100 次播放内」（recentlyPlayedIDs 上限 100）
+    ///   没有「每首歌最后播放时间戳」，因此以「不在最近 50 首播放记录内」（recentlyPlayedIDs 上限 50）
     ///   作为「较久未播放」的产品定义；按播放次数降序展示（更常听但很久没听的最靠前）。
     /// - 从未播放：播放次数为 0 且不在播放历史（定义不依赖添加时间；展示排序用入库时间倒序，
     ///   让「最新入库但还没听过」的排前面）。
     /// - 最近添加：近 30 天真正新增的歌曲，标题显示「近30天新增 N 首」。
-    /// - 收藏里随便听：从真实收藏随机采样 18 首，刷新时采样一次，换一批时重新采样（不发网络请求）。
+    /// - 收藏里随便听：从真实收藏随机采样 24 首，刷新时采样一次，换一批时重新采样（不发网络请求）。
     /// - 常听艺术家 / 常听专辑：按真实播放次数聚合统计，仅包含播放过的。
     private func refreshHomeSnapshots() {
         homeStore.refresh(
