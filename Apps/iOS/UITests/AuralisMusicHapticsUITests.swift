@@ -120,6 +120,13 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         XCTAssertTrue(trackIdentity.waitForExistence(timeout: 15), "Now Playing track identity is missing")
         XCTAssertTrue(trackIdentity.label.contains("Now Playing Smoke A"))
 
+        let playMode = app.buttons["auralis.nowPlaying.playMode"].firstMatch
+        XCTAssertTrue(playMode.waitForExistence(timeout: 10), "Playback mode button is missing")
+        XCTAssertTrue(
+            playMode.label.contains("列表"),
+            "Smoke fixture must always start in deterministic list order"
+        )
+
         let next = app.buttons["auralis.nowPlaying.next"].firstMatch
         XCTAssertTrue(next.waitForExistence(timeout: 10), "Next button is missing")
         XCTAssertTrue(next.isEnabled, "Next button must be enabled for a three-track queue")
@@ -254,15 +261,17 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         // On the iPhone target the expanded player center is about 98pt above
         // the bottom edge (126pt container, 28pt player center). This coordinate
         // is intentionally outside the 62pt terminal Dock.
+        let nowPlayingIdentity = app.descendants(matching: .any)["auralis.nowPlaying.trackIdentity"].firstMatch
+
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.88)).tap()
         XCTAssertFalse(
-            app.staticTexts["正在播放"].waitForExistence(timeout: 1),
+            nowPlayingIdentity.waitForExistence(timeout: 1),
             "The old expanded player region must not open Now Playing after collapse"
         )
 
         compactPlayer.tap()
         XCTAssertTrue(
-            app.staticTexts["正在播放"].waitForExistence(timeout: 10),
+            nowPlayingIdentity.waitForExistence(timeout: 10),
             "The real compact player capsule must still open Now Playing"
         )
     }
