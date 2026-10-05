@@ -116,16 +116,16 @@ final class AuralisMusicHapticsUITests: XCTestCase {
     func testNowPlayingTransportAndBottomTogglesAreInteractive() throws {
         launchSmokeApp(with: "-auralis-ui-smoke-now-playing")
 
-        let title = app.descendants(matching: .any)["auralis.nowPlaying.trackTitle"].firstMatch
-        XCTAssertTrue(title.waitForExistence(timeout: 15), "Now Playing track title is missing")
-        XCTAssertEqual(title.label, "Now Playing Smoke A")
+        let trackIdentity = app.descendants(matching: .any)["auralis.nowPlaying.trackIdentity"].firstMatch
+        XCTAssertTrue(trackIdentity.waitForExistence(timeout: 15), "Now Playing track identity is missing")
+        XCTAssertTrue(trackIdentity.label.contains("Now Playing Smoke A"))
 
         let next = app.buttons["auralis.nowPlaying.next"].firstMatch
         XCTAssertTrue(next.waitForExistence(timeout: 10), "Next button is missing")
         XCTAssertTrue(next.isEnabled, "Next button must be enabled for a three-track queue")
-        func waitForLabel(_ expected: String, element: XCUIElement, message: String) {
+        func waitForLabelContaining(_ expected: String, element: XCUIElement, message: String) {
             let expectation = XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "label == %@", expected),
+                predicate: NSPredicate(format: "label CONTAINS %@", expected),
                 object: element
             )
             XCTAssertEqual(
@@ -148,18 +148,18 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         }
 
         next.tap()
-        waitForLabel(
+        waitForLabelContaining(
             "Now Playing Smoke B",
-            element: title,
+            element: trackIdentity,
             message: "A single tap on Next must advance to the next queue item"
         )
 
         let previous = app.buttons["auralis.nowPlaying.previous"].firstMatch
         XCTAssertTrue(previous.waitForExistence(timeout: 5), "Previous button is missing")
         previous.tap()
-        waitForLabel(
+        waitForLabelContaining(
             "Now Playing Smoke A",
-            element: title,
+            element: trackIdentity,
             message: "Previous must return to the prior queue item when playback position is at the start"
         )
 
