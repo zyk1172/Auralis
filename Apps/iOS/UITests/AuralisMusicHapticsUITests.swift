@@ -123,35 +123,59 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         let next = app.buttons["auralis.nowPlaying.next"].firstMatch
         XCTAssertTrue(next.waitForExistence(timeout: 10), "Next button is missing")
         XCTAssertTrue(next.isEnabled, "Next button must be enabled for a three-track queue")
+        func waitForLabel(_ expected: String, element: XCUIElement, message: String) {
+            let expectation = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "label == %@", expected),
+                object: element
+            )
+            XCTAssertEqual(
+                XCTWaiter.wait(for: [expectation], timeout: 5),
+                .completed,
+                message
+            )
+        }
+
+        func waitForValue(_ expected: String, element: XCUIElement, message: String) {
+            let expectation = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value == %@", expected),
+                object: element
+            )
+            XCTAssertEqual(
+                XCTWaiter.wait(for: [expectation], timeout: 5),
+                .completed,
+                message
+            )
+        }
+
         next.tap()
-        XCTAssertTrue(
-            NSPredicate(format: "label == %@", "Now Playing Smoke B")
-                .evaluate(with: title),
-            "A single tap on Next must synchronously advance to the next queue item"
+        waitForLabel(
+            "Now Playing Smoke B",
+            element: title,
+            message: "A single tap on Next must advance to the next queue item"
         )
 
         let previous = app.buttons["auralis.nowPlaying.previous"].firstMatch
         XCTAssertTrue(previous.waitForExistence(timeout: 5), "Previous button is missing")
         previous.tap()
-        XCTAssertTrue(
-            NSPredicate(format: "label == %@", "Now Playing Smoke A")
-                .evaluate(with: title),
-            "Previous must return to the prior queue item when playback position is at the start"
+        waitForLabel(
+            "Now Playing Smoke A",
+            element: title,
+            message: "Previous must return to the prior queue item when playback position is at the start"
         )
 
         let lyrics = app.buttons["auralis.nowPlaying.lyrics"].firstMatch
         XCTAssertTrue(lyrics.waitForExistence(timeout: 5), "Lyrics button is missing")
         lyrics.tap()
-        XCTAssertEqual(lyrics.value as? String, "已打开")
+        waitForValue("已打开", element: lyrics, message: "Lyrics must enter lyrics mode on first tap")
         lyrics.tap()
-        XCTAssertEqual(lyrics.value as? String, "未打开")
+        waitForValue("未打开", element: lyrics, message: "Lyrics must return to artwork mode on second tap")
 
         let queue = app.buttons["auralis.nowPlaying.queue"].firstMatch
         XCTAssertTrue(queue.waitForExistence(timeout: 5), "Queue button is missing")
         queue.tap()
-        XCTAssertEqual(queue.value as? String, "已打开")
+        waitForValue("已打开", element: queue, message: "Queue must enter queue mode on first tap")
         queue.tap()
-        XCTAssertEqual(queue.value as? String, "未打开")
+        waitForValue("未打开", element: queue, message: "Queue must return to artwork mode on second tap")
     }
 
     func testAssistantSessionSheetSurvivesColdBootstrap() throws {
