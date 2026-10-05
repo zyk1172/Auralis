@@ -91,6 +91,32 @@ struct PlaybackModeBehaviorTests {
         #expect(model.currentTrack.id.rawValue == "t3")
     }
 
+    @Test("从普通上下文点歌后立即点下一首也必须切换")
+    @MainActor
+    func immediateNextAfterNormalContextSelection() {
+        let tracks = (0..<20).map { track("context-\($0)") }
+        let model = makeModel(tracks: tracks)
+
+        model.playTrack(tracks[5], in: tracks)
+        #expect(model.canGoNext)
+        model.next()
+
+        #expect(model.currentTrack.id.rawValue == "context-6")
+    }
+
+    @Test("从大型资料库点歌后立即点下一首也必须切换")
+    @MainActor
+    func immediateNextAfterLargeContextSelection() {
+        let tracks = (0..<620).map { track("large-context-\($0)") }
+        let model = makeModel(tracks: tracks)
+
+        model.playTrack(tracks[510], in: tracks)
+        #expect(model.canGoNext)
+        model.next()
+
+        #expect(model.currentTrack.id.rawValue == "large-context-511")
+    }
+
     // MARK: - 顺序（repeat-off）
 
     @Test("repeatOff：队尾自然播完暂停，不切歌")
