@@ -470,68 +470,73 @@ struct AssistantView: View {
     /// 与迷你播放条处于同一屏幕位置（主菜单栏之上），列表滚动区自动避让，
     /// 键盘弹出时随之上移，不再被遮挡、也不与主菜单栏重叠。
     private var conversation: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: AuralisSpacing.large) {
-                        if agent.messages.isEmpty { emptyState }
-                        conversationMessageRows()
-                        if agent.isRunning { runningIndicator }
-                        Color.clear
-                            .frame(height: 1)
-                            .id(Self.conversationEndID)
-                    }
-                    .padding(AuralisSpacing.large)
-                    .background {
-                        GeometryReader { geometry in
-                            Color.clear.preference(
-                                key: AssistantConversationContentBottomPreferenceKey.self,
-                                value: geometry.frame(in: .named(Self.conversationScrollCoordinateSpace)).maxY
-                            )
-                        }
-                    }
-                    // 点击聊天空白区域收起键盘（不影响卡片自身的点按）。
-                    .onTapGesture { assistantInputFocused = false }
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: AuralisSpacing.large) {
+                    if agent.messages.isEmpty { emptyState }
+                    conversationMessageRows()
+                    if agent.isRunning { runningIndicator }
+                    Color.clear
+                        .frame(height: 1)
+                        .id(Self.conversationEndID)
                 }
+                .padding(AuralisSpacing.large)
                 .background {
                     GeometryReader { geometry in
                         Color.clear.preference(
-                            key: AssistantConversationViewportBottomPreferenceKey.self,
+                            key: AssistantConversationContentBottomPreferenceKey.self,
                             value: geometry.frame(in: .named(Self.conversationScrollCoordinateSpace)).maxY
                         )
                     }
                 }
-                .coordinateSpace(name: Self.conversationScrollCoordinateSpace)
-                .reportsBottomDockScroll(source: .assistant)
-                // 向下拖动聊天列表时交互式收起键盘。
-                .scrollDismissesKeyboard(.immediately)
-                // 首次打开 / 切换历史会话也必须落在最新消息，而不仅是新消息 append 时。
-                .onAppear {
-                    isFollowingConversationOutput = true
-                    scrollConversationToEnd(proxy, animated: false, force: true)
+                // 点击聊天空白区域收起键盘（不影响卡片自身的点按）。
+                .onTapGesture { assistantInputFocused = false }
+            }
+            // 与音乐库一致：真实 ScrollView 直接参与 NavigationStack 的 scroll-edge。
+            // 页内工具条固定在顶部 safe area，聊天内容保留系统原生下拉回弹。
+            .safeAreaInset(edge: .top, spacing: 0) {
+                VStack(spacing: 0) {
+                    header
+                    Divider()
                 }
-                .onChange(of: agent.activeSessionID) { _, _ in
-                    isFollowingConversationOutput = true
-                    scrollConversationToEnd(proxy, animated: false, force: true)
+                .background(theme.colorTokens.background.color)
+            }
+            .background {
+                GeometryReader { geometry in
+                    Color.clear.preference(
+                        key: AssistantConversationViewportBottomPreferenceKey.self,
+                        value: geometry.frame(in: .named(Self.conversationScrollCoordinateSpace)).maxY
+                    )
                 }
-                .onChange(of: agent.messages.count) { _, _ in
-                    scrollConversationToEnd(proxy, animated: true)
-                }
-                // 流式文字与工具进度通常替换同一条消息，消息数量不变；监听发布事件
-                // 并延后一帧，等新高度完成布局后再贴到底部。
-                .onReceive(agent.objectWillChange) { _ in
-                    scrollConversationToEnd(proxy, animated: false)
-                }
-                .onPreferenceChange(AssistantConversationViewportBottomPreferenceKey.self) { value in
-                    conversationViewportBottom = value
-                    updateConversationAutoFollowState()
-                }
-                .onPreferenceChange(AssistantConversationContentBottomPreferenceKey.self) { value in
-                    conversationContentBottom = value
-                    updateConversationAutoFollowState()
-                }
+            }
+            .coordinateSpace(name: Self.conversationScrollCoordinateSpace)
+            .reportsBottomDockScroll(source: .assistant)
+            // 向下拖动聊天列表时交互式收起键盘。
+            .scrollDismissesKeyboard(.immediately)
+            // 首次打开 / 切换历史会话也必须落在最新消息，而不仅是新消息 append 时。
+            .onAppear {
+                isFollowingConversationOutput = true
+                scrollConversationToEnd(proxy, animated: false, force: true)
+            }
+            .onChange(of: agent.activeSessionID) { _, _ in
+                isFollowingConversationOutput = true
+                scrollConversationToEnd(proxy, animated: false, force: true)
+            }
+            .onChange(of: agent.messages.count) { _, _ in
+                scrollConversationToEnd(proxy, animated: true)
+            }
+            // 流式文字与工具进度通常替换同一条消息，消息数量不变；监听发布事件
+            // 并延后一帧，等新高度完成布局后再贴到底部。
+            .onReceive(agent.objectWillChange) { _ in
+                scrollConversationToEnd(proxy, animated: false)
+            }
+            .onPreferenceChange(AssistantConversationViewportBottomPreferenceKey.self) { value in
+                conversationViewportBottom = value
+                updateConversationAutoFollowState()
+            }
+            .onPreferenceChange(AssistantConversationContentBottomPreferenceKey.self) { value in
+                conversationContentBottom = value
+                updateConversationAutoFollowState()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1052,11 +1057,11 @@ private struct AssistantDockInputBarLayout: View {
                     collapseProgress: collapseProgress
                 )
             )
-            // 输入框与根 Dock 读取同一个端点状态，并使用同一固定时长曲线。
-            .animation(
-                BottomDockMotion.animation(reduceMotion: reduceMotion),
-                value: collapseProgress
-            )
+            // 输入框的 safe-area 布局直接切换端点，不参与 Dock 的逐帧 layout
+            // 动画；Dock 自身仍保持 morph。这样聊天 ScrollView 不会在滚动中被反复重排。
+            .transaction { transaction in
+                transaction.animation = nil
+            }
     }
 }
 #endif
