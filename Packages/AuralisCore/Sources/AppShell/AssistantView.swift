@@ -1034,7 +1034,6 @@ private struct AssistantDockInputBarLayout: View {
     let focused: Bool
     let metrics: BottomChromeMetrics
     let collapseProgress: CGFloat
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         DockAssistantInputBar(model: model, agent: agent, theme: theme, focus: focus)
