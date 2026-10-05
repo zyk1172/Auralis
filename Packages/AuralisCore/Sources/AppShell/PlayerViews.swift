@@ -211,7 +211,7 @@ struct NowPlayingLayoutPolicy: Sendable {
         let maximum: CGFloat = isPad ? 520 : 360
         let widthShare = containerSize.width * (isPad ? 0.40 : 0.42)
         let heightShare = containerSize.height * 0.78
-        return max(220, min(maximum, widthShare, heightShare))
+        return max(220, min(maximum, min(widthShare, heightShare)))
     }
 }
 
@@ -370,7 +370,8 @@ struct NowPlayingView: View {
 
             HStack(spacing: columnSpacing) {
                 landscapeArtwork(side: artworkSide)
-                    .frame(width: artworkSide, maxHeight: .infinity)
+                    .frame(width: artworkSide)
+                    .frame(maxHeight: .infinity)
 
                 VStack(spacing: compactLandscape ? 8 : AuralisSpacing.medium) {
                     pagePicker
