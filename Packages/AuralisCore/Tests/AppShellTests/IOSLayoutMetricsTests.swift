@@ -64,4 +64,31 @@ struct IOSLayoutMetricsTests {
         #expect(IOSLayoutMetrics.playerContentMaxWidth < IOSLayoutMetrics.readableContentMaxWidth)
         #expect(IOSLayoutMetrics.floatingChromeMaxWidth <= IOSLayoutMetrics.readableContentMaxWidth)
     }
+
+    @Test("正在播放页按实际容器宽高切换横屏双栏")
+    func nowPlayingUsesLandscapeLayoutForWideContainers() {
+        #expect(!NowPlayingLayoutPolicy.usesLandscapeLayout(containerSize: CGSize(width: 390, height: 844)))
+        #expect(NowPlayingLayoutPolicy.usesLandscapeLayout(containerSize: CGSize(width: 844, height: 390)))
+        #expect(NowPlayingLayoutPolicy.usesLandscapeLayout(containerSize: CGSize(width: 1194, height: 834)))
+        #expect(!NowPlayingLayoutPolicy.usesLandscapeLayout(containerSize: CGSize(width: 0, height: 0)))
+    }
+
+    @Test("横屏封面受窗口高度和平台上限约束")
+    func nowPlayingLandscapeArtworkStaysBounded() {
+        let phone = NowPlayingLayoutPolicy.landscapeArtworkSide(
+            containerSize: CGSize(width: 844, height: 390),
+            isPad: false
+        )
+        #expect(phone >= 220)
+        #expect(phone <= 360)
+        #expect(phone <= 390 * 0.78 + 0.001)
+
+        let pad = NowPlayingLayoutPolicy.landscapeArtworkSide(
+            containerSize: CGSize(width: 1194, height: 834),
+            isPad: true
+        )
+        #expect(pad >= phone)
+        #expect(pad <= 520)
+        #expect(pad <= 1194 * 0.40 + 0.001)
+    }
 }
