@@ -36,7 +36,7 @@ cd android
 ./gradlew :app-mobile:assemblePerf :app-tv:assemblePerf
 ```
 
-The full Debug run passed 242 tests across 41 suites, including four Robolectric Compose UI tests for portrait controls, landscape geometry, immersive lyrics and bottom-button toggles. Debug APKs for mobile and TV built successfully.
+The full Debug run passed 242 tests across 41 suites, including four Robolectric Compose UI tests for portrait controls, landscape geometry, immersive lyrics and bottom-button toggles. Debug and R8-optimized `perf` APKs for mobile and TV built successfully, including release lint checks.
 
 The managed cloud session needs its proxy and CA settings passed to forked Robolectric JVMs as well as Gradle. Its local init script is `/workspace/.onboarding/auralis/test-network.init.gradle`; this is environment configuration, not an application change.
 

@@ -102,6 +102,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -665,7 +666,7 @@ private fun AnimatedLyricLine(
                 Modifier.widthIn(max = 600.dp)
                     .fillMaxWidth()
                     .padding(horizontal = AuralisSpacing.large)
-                    .semantics(mergeDescendants = true) {},
+                    .clearAndSetSemantics { contentDescription = text },
             horizontalArrangement = Arrangement.Center,
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -938,6 +939,7 @@ private fun PlaybackControlsArea(
 ) {
     val colors = LocalAuralisTheme.current.colors
     val context = LocalContext.current
+    val reduceMotion = LocalReduceMotion.current
     val state = playback.state
     val isPlaying = state is PlaybackState.Playing
     val isBusy =
@@ -1062,8 +1064,12 @@ private fun PlaybackControlsArea(
 
         AnimatedVisibility(
             visible = !chromeHidden,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically(),
+            enter =
+                fadeIn(tween(if (reduceMotion) 160 else 420)) +
+                    expandVertically(tween(if (reduceMotion) 0 else 420)),
+            exit =
+                fadeOut(tween(if (reduceMotion) 160 else 420)) +
+                    shrinkVertically(tween(if (reduceMotion) 0 else 420)),
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
