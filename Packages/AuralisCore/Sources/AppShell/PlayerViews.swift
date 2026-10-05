@@ -241,6 +241,129 @@ enum LyricsChromeMotion {
     }
 }
 
+/// 当前歌词的轻量逐字强调。歌词源目前只有“逐行”时间戳，因此不能伪装成
+/// 真正的逐字 timing；这里仅在当前行与下一行之间做均匀插值。
+struct LyricCharacterAnimationPolicy: Sendable {
+    static let maximumScale: CGFloat = 1.05
+
+    static func lineProgress(
+        position: TimeInterval,
+        lineStart: TimeInterval?,
+        nextLineStart: TimeInterval?
+    ) -> Double? {
+        guard let lineStart,
+              let nextLineStart,
+              nextLineStart > lineStart
+        else { return nil }
+        return min(max((position - lineStart) / (nextLineStart - lineStart), 0), 1)
+    }
+
+    static func scale(
+        unitIndex: Int,
+        unitCount: Int,
+        progress: Double?
+    ) -> CGFloat {
+        guard unitCount > 0 else { return 1 }
+        guard let progress else { return maximumScale }
+
+        let lastIndex = max(unitCount - 1, 0)
+        let cursor = progress * Double(lastIndex)
+        let distance = abs(Double(unitIndex) - cursor)
+        let influence = max(0, 1 - distance)
+        return 1 + (maximumScale - 1) * CGFloat(influence)
+    }
+}
+
+/// 按 Character 流式换行，避免为了逐字动画把长歌词强行塞进一行。
+/// 每一行仍以整体居中，scaleEffect 不参与测量，因此 1.05× 不会引发布局抖动。
+private struct LyricCharacterFlowLayout: Layout {
+    var horizontalSpacing: CGFloat = 0
+    var verticalSpacing: CGFloat = 4
+
+    private struct Row {
+        var indices: [Int] = []
+        var sizes: [CGSize] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func rows(
+        proposal: ProposedViewSize,
+        subviews: Subviews
+    ) -> [Row] {
+        let maximumWidth = proposal.width ?? .greatestFiniteMagnitude
+        var rows: [Row] = []
+        var row = Row()
+
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            let extraSpacing = row.indices.isEmpty ? 0 : horizontalSpacing
+            let proposedWidth = row.width + extraSpacing + size.width
+
+            if !row.indices.isEmpty, proposedWidth > maximumWidth {
+                rows.append(row)
+                row = Row()
+            }
+
+            if !row.indices.isEmpty {
+                row.width += horizontalSpacing
+            }
+            row.indices.append(index)
+            row.sizes.append(size)
+            row.width += size.width
+            row.height = max(row.height, size.height)
+        }
+
+        if !row.indices.isEmpty {
+            rows.append(row)
+        }
+        return rows
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let rows = rows(proposal: proposal, subviews: subviews)
+        let width = min(
+            proposal.width ?? rows.map(\.width).max() ?? 0,
+            rows.map(\.width).max() ?? 0
+        )
+        let height = rows.enumerated().reduce(CGFloat.zero) { partial, item in
+            partial + item.element.height + (item.offset == 0 ? 0 : verticalSpacing)
+        }
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let rows = rows(
+            proposal: ProposedViewSize(width: bounds.width, height: proposal.height),
+            subviews: subviews
+        )
+        var y = bounds.minY
+
+        for row in rows {
+            var x = bounds.minX + max((bounds.width - row.width) / 2, 0)
+            for (offset, index) in row.indices.enumerated() {
+                let size = row.sizes[offset]
+                subviews[index].place(
+                    at: CGPoint(x: x + size.width / 2, y: y + row.height / 2),
+                    anchor: .center,
+                    proposal: ProposedViewSize(size)
+                )
+                x += size.width + horizontalSpacing
+            }
+            y += row.height + verticalSpacing
+        }
+    }
+}
+
 struct NowPlayingView: View {
     static let musicHapticsMenuIdentifier = "auralis.nowPlaying.musicHaptics"
     static let moreActionsButtonIdentifier = "auralis.nowPlaying.moreActions"
@@ -257,7 +380,7 @@ struct NowPlayingView: View {
     @State private var showsTrackInformation = false
     @State private var lyricScrollTarget: Int?
     @State private var lyricTimeline: [LyricsIndexResolver.TimedLine] = []
-    /// 歌词页 5 秒无操作后进入沉浸态：只保留歌曲名，其余 Chrome 向下收缩消失。
+    /// 歌词页 5 秒无操作后进入沉浸态：保留歌曲名 + 歌手，其余 Chrome 向下收缩消失。
     @State private var lyricsChromeHidden = false
     @State private var lyricsChromeAutoHideTask: Task<Void, Never>?
     /// 拖动进度条时暂存的 seek 目标：松手才真正 seek（Apple Music 行为）。
@@ -439,43 +562,49 @@ struct NowPlayingView: View {
         let controlsSpacing: CGFloat = compactLandscape ? 10 : 15
         let playButtonSize: CGFloat = compactLandscape ? 48 : 56
 
-        return Group {
-            if lyricsImmersiveMode {
-                // 横屏歌词沉浸态也遵守“只留歌曲名”：封面、顶部横条和分页控件退出，
-                // 歌词获得完整宽度，向下滑即可恢复双栏。
-                VStack(spacing: AuralisSpacing.small) {
-                    lyrics
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    lyricsPersistentTitle
-                        .padding(.horizontal, AuralisSpacing.large)
-                }
-                .contentShape(Rectangle())
-                .simultaneousGesture(lyricsChromeSwipeGesture)
-                .simultaneousGesture(lyricsActivityTapGesture)
-            } else {
-                VStack(spacing: compactLandscape ? 2 : AuralisSpacing.xSmall) {
-                    dismissHandle
-
-                    HStack(spacing: columnSpacing) {
-                        landscapeArtwork(side: artworkSide)
-                            .frame(width: artworkSide)
-                            .frame(maxHeight: .infinity)
-
-                        VStack(spacing: compactLandscape ? 8 : AuralisSpacing.medium) {
-                            pagePicker
-                                .frame(maxWidth: 420)
-
-                            landscapePageContent(
-                                sectionSpacing: controlsSpacing,
-                                playButtonSize: playButtonSize
-                            )
-                        }
-                        .frame(maxWidth: 600, maxHeight: .infinity)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
+        return VStack(spacing: compactLandscape ? 2 : AuralisSpacing.xSmall) {
+            if !lyricsImmersiveMode {
+                dismissHandle
+                    .transition(lyricsChromeTransition)
             }
+
+            // 横屏骨架永远保持“左封面 + 右内容”，沉浸模式只隐藏 Chrome，
+            // 不再删除封面或把歌词突然扩成全屏。
+            HStack(spacing: columnSpacing) {
+                landscapeArtwork(side: artworkSide)
+                    .frame(width: artworkSide)
+                    .frame(maxHeight: .infinity)
+
+                VStack(spacing: compactLandscape ? 8 : AuralisSpacing.medium) {
+                    if !lyricsImmersiveMode {
+                        pagePicker
+                            .frame(maxWidth: 420)
+                            .transition(lyricsChromeTransition)
+                    }
+
+                    if page == .lyrics {
+                        lyrics
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .contentShape(Rectangle())
+                            .simultaneousGesture(lyricsChromeSwipeGesture)
+                            .simultaneousGesture(lyricsActivityTapGesture)
+
+                        if lyricsImmersiveMode {
+                            lyricsTrackIdentityHeader(showActions: false)
+                                .frame(maxWidth: 560)
+                        }
+                    } else {
+                        landscapePageContent(
+                            sectionSpacing: controlsSpacing,
+                            playButtonSize: playButtonSize
+                        )
+                    }
+                }
+                .frame(maxWidth: 600, maxHeight: .infinity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .animation(LyricsChromeMotion.animation(reduceMotion: reduceMotion), value: lyricsChromeHidden)
         .padding(.horizontal, horizontalPadding)
         .padding(.top, 2)
         .padding(.bottom, compactLandscape ? 6 : AuralisSpacing.small)
@@ -522,9 +651,6 @@ struct NowPlayingView: View {
         case .lyrics:
             lyrics
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())
-                .simultaneousGesture(lyricsChromeSwipeGesture)
-                .simultaneousGesture(lyricsActivityTapGesture)
         case .queue:
             queue
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -738,43 +864,56 @@ struct NowPlayingView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var lyricsPersistentTitle: some View {
-        OneShotMarqueeText(
-            text: model.currentTrack.title,
-            font: .title2.bold(),
-            color: theme.colorTokens.primaryText.color,
-            height: 30
-        )
-        .padding(.horizontal, 12)
+    /// 与 main 分支播放控制区完全相同的歌曲信息位置。
+    /// 沉浸态只隐藏左右按钮，歌曲名和歌手仍占据同一几何位置，不做二次搬家。
+    private func lyricsTrackIdentityHeader(showActions: Bool) -> some View {
+        ZStack {
+            VStack(spacing: AuralisSpacing.xSmall) {
+                OneShotMarqueeText(
+                    text: model.currentTrack.title,
+                    font: .title2.bold(),
+                    color: theme.colorTokens.primaryText.color,
+                    height: 30
+                )
+                OneShotMarqueeText(
+                    text: model.currentTrack.artistName,
+                    font: .subheadline,
+                    color: theme.colorTokens.secondaryText.color,
+                    height: 22
+                )
+            }
+            .padding(.horizontal, 56)
+            .frame(maxWidth: .infinity)
+            .clipped()
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(nowPlayingAccessibilityLabel)
+
+            HStack(spacing: 0) {
+                dislikeButton
+                    .opacity(showActions ? 1 : 0)
+                    .allowsHitTesting(showActions)
+                    .accessibilityHidden(!showActions)
+                Spacer(minLength: 0)
+                favoriteButton
+                    .opacity(showActions ? 1 : 0)
+                    .allowsHitTesting(showActions)
+                    .accessibilityHidden(!showActions)
+            }
+        }
         .frame(maxWidth: .infinity)
-        .accessibilityLabel(model.currentTrack.title)
     }
 
-    /// 歌词页完整态保留现有播放能力；沉浸态只留下歌曲名。
-    /// 额外控件使用 bottom transition，隐藏时向下收缩离场，歌词区域同步扩展。
+    /// 歌词页完整态复用主分支歌曲信息位置；沉浸态保留歌曲名 + 歌手，
+    /// 其余进度、控制、音量与状态向下收缩消失。
     private func lyricsPlaybackChrome(
         sectionSpacing: CGFloat,
         playButtonSize: CGFloat
     ) -> some View {
         VStack(spacing: sectionSpacing) {
-            lyricsPersistentTitle
+            lyricsTrackIdentityHeader(showActions: !lyricsChromeHidden)
 
             if !lyricsChromeHidden {
                 VStack(spacing: sectionSpacing) {
-                    HStack(spacing: 0) {
-                        dislikeButton
-                        Spacer(minLength: 0)
-                        OneShotMarqueeText(
-                            text: model.currentTrack.artistName,
-                            font: .subheadline,
-                            color: theme.colorTokens.secondaryText.color,
-                            height: 22
-                        )
-                        .padding(.horizontal, 8)
-                        Spacer(minLength: 0)
-                        favoriteButton
-                    }
-
                     VStack(spacing: AuralisSpacing.xSmall) {
                         ThinSlider(
                             value: model.playbackProgress,
@@ -891,39 +1030,8 @@ struct NowPlayingView: View {
 
     private func playbackControls(sectionSpacing: CGFloat, playButtonSize: CGFloat) -> some View {
         VStack(spacing: sectionSpacing) {
-            // 标题和艺术家始终以整行中心为基准；超长内容只从头到尾慢速移动一次。
-            // 左右各预留 56pt 对称安全区：长标题滚动时不会滑到不喜欢/收藏按钮下面，
-            // 也不会把歌名从屏幕中心推走。
-            ZStack {
-                VStack(spacing: AuralisSpacing.xSmall) {
-                    OneShotMarqueeText(
-                        text: model.currentTrack.title,
-                        font: .title2.bold(),
-                        color: theme.colorTokens.primaryText.color,
-                        height: 30
-                    )
-                    OneShotMarqueeText(
-                        text: model.currentTrack.artistName,
-                        font: .subheadline,
-                        color: theme.colorTokens.secondaryText.color,
-                        height: 22
-                    )
-                }
-                .padding(.horizontal, 56)
-                .frame(maxWidth: .infinity)
-                .clipped()
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(nowPlayingAccessibilityLabel)
-
-                // 不喜欢（左）与收藏（右）严格镜像：距屏幕边缘一致、frame 一致、
-                // 命中区域一致、symbol 大小一致；标题以屏幕中心为基准独立居中。
-                HStack(spacing: 0) {
-                    dislikeButton
-                    Spacer(minLength: 0)
-                    favoriteButton
-                }
-            }
-            .frame(maxWidth: .infinity)
+            // 与歌词页共用同一歌曲信息布局，避免模式切换后标题位置漂移。
+            lyricsTrackIdentityHeader(showActions: true)
 
             VStack(spacing: AuralisSpacing.xSmall) {
                 ThinSlider(
