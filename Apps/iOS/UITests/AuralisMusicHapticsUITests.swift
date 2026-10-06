@@ -130,30 +130,6 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         let next = app.buttons["auralis.nowPlaying.next"].firstMatch
         XCTAssertTrue(next.waitForExistence(timeout: 10), "Next button is missing")
         XCTAssertTrue(next.isEnabled, "Next button must be enabled for a three-track queue")
-        func waitForLabelContaining(_ expected: String, element: XCUIElement, message: String) {
-            let expectation = XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "label CONTAINS %@", expected),
-                object: element
-            )
-            XCTAssertEqual(
-                XCTWaiter.wait(for: [expectation], timeout: 5),
-                .completed,
-                message
-            )
-        }
-
-        func waitForValue(_ expected: String, element: XCUIElement, message: String) {
-            let expectation = XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "value == %@", expected),
-                object: element
-            )
-            XCTAssertEqual(
-                XCTWaiter.wait(for: [expectation], timeout: 5),
-                .completed,
-                message
-            )
-        }
-
         next.tap()
         waitForLabelContaining(
             "Now Playing Smoke B",
@@ -315,6 +291,31 @@ final class AuralisMusicHapticsUITests: XCTestCase {
             description: "The last library track must remain above the compact Dock player"
         )
     }
+
+    private func waitForLabelContaining(_ expected: String, element: XCUIElement, message: String) {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", expected),
+            object: element
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [expectation], timeout: 5),
+            .completed,
+            message
+        )
+    }
+
+    private func waitForValue(_ expected: String, element: XCUIElement, message: String) {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", expected),
+            object: element
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [expectation], timeout: 5),
+            .completed,
+            message
+        )
+    }
+
 
     private func assertCollapsedDockHitTesting(with smokeArgument: String) {
         launchSmokeApp(with: smokeArgument)
