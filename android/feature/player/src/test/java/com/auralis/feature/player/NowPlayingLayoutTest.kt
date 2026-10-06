@@ -2,9 +2,13 @@
 package com.auralis.feature.player
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -68,18 +72,20 @@ class NowPlayingLayoutTest {
                     artwork = { Box(Modifier.fillMaxSize()) },
                     pageContent = { Text("Lyrics", Modifier.testTag("lyricsContent")) },
                     controls = { _, _ ->
-                        Box(Modifier.fillMaxWidth().height(180.dp).testTag("controls"))
+                        Box(Modifier.fillMaxWidth().height(180.dp).testTag("fullControls"))
                     },
+                    pageFooter = { Box(Modifier.fillMaxWidth().height(44.dp).testTag("footer")) },
                 )
             }
         }
         compose.onNodeWithTag("player.landscape").assertIsDisplayed()
         val artwork = compose.onNodeWithTag("player.artwork").fetchSemanticsNode().boundsInRoot
         val lyrics = compose.onNodeWithTag("lyricsContent").fetchSemanticsNode().boundsInRoot
-        val controls = compose.onNodeWithTag("controls").fetchSemanticsNode().boundsInRoot
+        val footer = compose.onNodeWithTag("footer").fetchSemanticsNode().boundsInRoot
         assertThat(artwork.right).isAtMost(lyrics.left)
-        assertThat(lyrics.bottom).isAtMost(controls.top)
-        compose.onNodeWithTag("controls").assertIsDisplayed()
+        assertThat(lyrics.bottom).isAtMost(footer.top)
+        compose.onNodeWithTag("footer").assertIsDisplayed()
+        compose.onNodeWithTag("fullControls").assertDoesNotExist()
     }
 
     @Test
@@ -93,12 +99,100 @@ class NowPlayingLayoutTest {
                     onClose = {},
                     artwork = { Box(Modifier.fillMaxSize()) },
                     pageContent = { Text("Lyrics") },
-                    controls = { _, _ -> Text("Track identity") },
+                    controls = { _, _ -> Text("Full controls", Modifier.testTag("fullControls")) },
+                    pageFooter = { Text("Track identity", Modifier.testTag("identity")) },
                 )
             }
         }
         compose.onNodeWithTag("player.artwork").assertIsDisplayed()
         compose.onNodeWithTag("player.dismiss").assertDoesNotExist()
+        compose.onNodeWithTag("identity").assertIsDisplayed()
+        compose.onNodeWithTag("fullControls").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w844dp-h390dp-land")
+    fun `landscape lyrics and queue leave the right column to their content`() {
+        var page by mutableStateOf(PlayerTab.Lyrics)
+        compose.setContent {
+            AuralisTheme {
+                NowPlayingChromeLayout(
+                    page = page,
+                    chromeHidden = false,
+                    onClose = {},
+                    artwork = { Box(Modifier.fillMaxSize()) },
+                    pageContent = { Box(Modifier.fillMaxSize().testTag("secondaryContent")) },
+                    controls = { _, _ ->
+                        Box(Modifier.fillMaxWidth().height(260.dp).testTag("fullControls"))
+                    },
+                    pageFooter = { Box(Modifier.fillMaxWidth().height(44.dp).testTag("footer")) },
+                )
+            }
+        }
+        for (target in listOf(PlayerTab.Lyrics, PlayerTab.Queue)) {
+            compose.runOnIdle { page = target }
+            compose.onNodeWithTag("fullControls").assertDoesNotExist()
+            compose.onNodeWithTag("footer").assertIsDisplayed()
+            val content = compose.onNodeWithTag("secondaryContent").fetchSemanticsNode()
+            assertThat(content.boundsInRoot.height / content.layoutInfo.density.density)
+                .isAtLeast(220f)
+        }
+    }
+
+    @Test
+    fun `reduced motion navigation settles without advancing animation time`() {
+        lateinit var pager: PagerState
+        compose.setContent {
+            AuralisTheme(reduceMotion = true) {
+                pager = rememberPagerState(initialPage = PlayerTab.Player.ordinal) { 3 }
+                Column {
+                    HorizontalPager(pager, Modifier.fillMaxWidth().height(240.dp)) {
+                        Text("Page $it")
+                    }
+                    PlayerPageNavigation(pager, onActivity = {})
+                }
+            }
+        }
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithTag("player.lyrics").performClick()
+        compose.runOnIdle {
+            assertThat(pager.currentPage).isEqualTo(PlayerTab.Lyrics.ordinal)
+            assertThat(pager.isScrollInProgress).isFalse()
+        }
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithTag("player.lyrics").performClick()
+        compose.runOnIdle {
+            assertThat(pager.currentPage).isEqualTo(PlayerTab.Player.ordinal)
+            assertThat(pager.isScrollInProgress).isFalse()
+        }
+        compose.mainClock.autoAdvance = true
+    }
+
+    @Test
+    fun `second tap during page animation cancels the old destination`() {
+        lateinit var pager: PagerState
+        compose.setContent {
+            AuralisTheme {
+                pager = rememberPagerState(initialPage = PlayerTab.Player.ordinal) { 3 }
+                Column {
+                    HorizontalPager(pager, Modifier.fillMaxWidth().height(240.dp)) {
+                        Text("Page $it")
+                    }
+                    PlayerPageNavigation(pager, onActivity = {})
+                }
+            }
+        }
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithTag("player.lyrics").performClick()
+        compose.runOnIdle { assertThat(pager.targetPage).isEqualTo(PlayerTab.Lyrics.ordinal) }
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithTag("player.lyrics").performClick()
+        compose.mainClock.advanceTimeBy(2_000)
+        compose.runOnIdle {
+            assertThat(pager.currentPage).isEqualTo(PlayerTab.Player.ordinal)
+            assertThat(pager.isScrollInProgress).isFalse()
+        }
+        compose.mainClock.autoAdvance = true
     }
 
     @Test

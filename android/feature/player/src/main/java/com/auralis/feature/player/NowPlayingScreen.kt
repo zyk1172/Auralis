@@ -39,6 +39,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -168,13 +169,15 @@ fun NowPlayingScreen(
     val pagerState =
         rememberPagerState(initialPage = PlayerTab.Player.ordinal) { PlayerTab.entries.size }
     val page = PlayerTab.entries[pagerState.currentPage]
-    val scope = rememberCoroutineScope()
     var chromeHidden by remember { mutableStateOf(false) }
     var lyricsActivity by remember { mutableStateOf(0) }
     var dragging by remember(track.globalId) { mutableStateOf(false) }
     fun registerActivity() {
         chromeHidden = false
         lyricsActivity++
+    }
+    val bottomNavigation: @Composable () -> Unit = {
+        PlayerPageNavigation(pagerState, onActivity = ::registerActivity)
     }
     LaunchedEffect(page, track.globalId, lyricsActivity, dragging) {
         chromeHidden = false
@@ -254,6 +257,7 @@ fun NowPlayingScreen(
                     }
                 }
             },
+            pageFooter = { if (immersive) PlayerTrackIdentity(track) else bottomNavigation() },
             controls = { sectionSpacing, playButtonSize ->
                 PlaybackControlsArea(
                     graph = graph,
@@ -280,16 +284,7 @@ fun NowPlayingScreen(
                     onOpenBrowse = onOpenBrowse,
                     onTrackAction = onTrackAction,
                     chromeHidden = immersive,
-                    bottomNavigation = {
-                        PlayerBottomNavigation(page) { target ->
-                            registerActivity()
-                            scope.launch {
-                                pagerState.animateScrollToPage(
-                                    NowPlayingUiPolicy.togglePage(page, target).ordinal
-                                )
-                            }
-                        }
-                    },
+                    bottomNavigation = bottomNavigation,
                     modifier = activityModifier,
                 )
             },
@@ -306,6 +301,7 @@ internal fun NowPlayingChromeLayout(
     artwork: @Composable (Dp) -> Unit,
     pageContent: @Composable (Boolean) -> Unit,
     controls: @Composable (Dp, Dp) -> Unit,
+    pageFooter: @Composable () -> Unit = {},
 ) {
     val colors = LocalAuralisTheme.current.colors
     val dismissDescription = stringResource(R.string.player_dismiss_now_playing)
@@ -379,11 +375,19 @@ internal fun NowPlayingChromeLayout(
                         // The landscape player keeps artwork on the left. Lyrics/queue
                         // occupy the right column; the artwork page needs only controls.
                         Box(Modifier.weight(1f).fillMaxWidth()) { pageContent(true) }
-                        controls(
-                            if (compactLandscape) 10.dp else 15.dp,
-                            if (compactLandscape) 48.dp else 56.dp,
-                        )
-                        if (page == PlayerTab.Player) Spacer(Modifier.weight(1f))
+                        if (page == PlayerTab.Player) {
+                            controls(
+                                if (compactLandscape) 10.dp else 15.dp,
+                                if (compactLandscape) 48.dp else 56.dp,
+                            )
+                            Spacer(Modifier.weight(1f))
+                        } else {
+                            // Match iOS: secondary pages use the entire right column,
+                            // with only navigation or immersive track identity below.
+                            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                pageFooter()
+                            }
+                        }
                     }
                 }
             } else {
@@ -407,6 +411,24 @@ internal fun NowPlayingChromeLayout(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+internal fun PlayerPageNavigation(pagerState: PagerState, onActivity: () -> Unit) {
+    val reduceMotion = LocalReduceMotion.current
+    val scope = rememberCoroutineScope()
+    // The target changes immediately, so a second tap during animation returns
+    // to artwork rather than requesting the same destination again.
+    val page = PlayerTab.entries[pagerState.targetPage]
+    PlayerBottomNavigation(page) { target ->
+        onActivity()
+        scope.launch {
+            val destination =
+                NowPlayingUiPolicy.togglePage(PlayerTab.entries[pagerState.targetPage], target)
+            if (reduceMotion) pagerState.scrollToPage(destination.ordinal)
+            else pagerState.animateScrollToPage(destination.ordinal)
         }
     }
 }
@@ -985,28 +1007,7 @@ private fun PlaybackControlsArea(
         verticalArrangement = Arrangement.spacedBy(sectionSpacing),
     ) {
         Box(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier =
-                    Modifier.fillMaxWidth()
-                        .padding(horizontal = 56.dp)
-                        .testTag("player.trackIdentity")
-                        .semantics(mergeDescendants = true) {},
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(AuralisSpacing.xSmall),
-            ) {
-                AutoMarqueeText(
-                    text = track.title,
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                    color = colors.primaryText,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                AutoMarqueeText(
-                    text = track.artistName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.secondaryText,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+            PlayerTrackIdentity(track)
             if (!chromeHidden)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1378,6 +1379,33 @@ private fun PlaybackControlsArea(
                 }
             },
             text = { Text(it) },
+        )
+    }
+}
+
+@Composable
+private fun PlayerTrackIdentity(track: Track) {
+    val colors = LocalAuralisTheme.current.colors
+    Column(
+        modifier =
+            Modifier.fillMaxWidth()
+                .padding(horizontal = 56.dp)
+                .testTag("player.trackIdentity")
+                .semantics(mergeDescendants = true) {},
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(AuralisSpacing.xSmall),
+    ) {
+        AutoMarqueeText(
+            text = track.title,
+            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+            color = colors.primaryText,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        AutoMarqueeText(
+            text = track.artistName,
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.secondaryText,
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }
