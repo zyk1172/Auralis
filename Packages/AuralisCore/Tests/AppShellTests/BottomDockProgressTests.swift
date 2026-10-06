@@ -269,12 +269,14 @@ struct LyricsScrollFollowStateTests {
             state.update(phase: phase)
             #expect(state.isUserScrolling)
             #expect(!state.isFollowingPlayback)
-            #expect(!state.resumeFollowing())
+            let resumedWhileScrolling = state.resumeFollowing()
+            #expect(!resumedWhileScrolling)
         }
         state.update(phase: .idle)
         #expect(!state.isUserScrolling)
         #expect(!state.isFollowingPlayback)
-        #expect(state.resumeFollowing())
+        let resumedAfterIdle = state.resumeFollowing()
+        #expect(resumedAfterIdle)
         #expect(state.isFollowingPlayback)
     }
 
@@ -288,9 +290,11 @@ struct LyricsScrollFollowStateTests {
         #expect(state.isFollowingPlayback)
         state.update(phase: .tracking)
         state.update(phase: .idle)
-        #expect(state.resumeFollowing())
+        let resumedAfterIdle = state.resumeFollowing()
+        #expect(resumedAfterIdle)
         state.update(phase: .tracking)
         #expect(!state.isFollowingPlayback)
-        #expect(!state.resumeFollowing())
+        let resumedDuringNewTouch = state.resumeFollowing()
+        #expect(!resumedDuringNewTouch)
     }
 }
