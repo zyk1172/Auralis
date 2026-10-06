@@ -197,9 +197,16 @@ pull request 提交。不要提交 API key、用户数据、未经授权的音�
 
 ## License
 
-Auralis source code is licensed under **GPL-3.0-only**. See [`LICENSE`](LICENSE) for the full
-license terms. 发生 GPL 所规定的分发情形时，基于 GPL 覆盖代码的衍生作品需要遵守 GPL 的对应源码
-与再分发要求；具体边界以许可证正文为准，不以本 README 扩张法律结论。
+Auralis 项目源码采用 **PolyForm Noncommercial 1.0.0**
+（`PolyForm-Noncommercial-1.0.0`），完整条款见 [`LICENSE`](LICENSE)。允许在许可证规定的
+非商业用途下使用、学习、修改和分发；本许可证不授予商业用途的许可。商业用途需要相关版权
+持有人的另行授权，不能仅因免费提供、公开源码或注明出处就视为已获授权。
+
+这是带有非商业限制的“源码可用”许可证，不符合 OSI 的开源定义。个人研究、学习、娱乐及
+许可证列明的非商业机构用途的具体范围，以许可证正文为准。
+
+本次变更不撤销此前已按 **GPL-3.0-only** 发布版本的授权；这些历史版本仍可按原 GPL 条款
+使用。本许可证适用于本次变更后的项目自有代码，不改变第三方材料的授权。
 
 第三方依赖和平台 SDK 仍受其各自许可证、条款和分发条件约束，详见
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
@@ -207,7 +214,7 @@ license terms. 发生 GPL 所规定的分发情形时，基于 GPL 覆盖代码�
 ## Brand
 
 源码许可证不自动授予 Auralis 官方名称、Logo、App Icon、官方视觉资产或官方发布身份。Fork 可以
-依法修改和重新分发 GPL 源码，但发行版应使用自己的名称和视觉资产，并避免让用户误认为其是官方
+按非商业许可证修改和重新分发源码，但发行版应使用自己的名称和视觉资产，并避免让用户误认为其是官方
 Auralis 版本。详见 [`TRADEMARKS.md`](TRADEMARKS.md)。
 
 ## Documentation
@@ -222,7 +229,7 @@ Auralis 版本。详见 [`TRADEMARKS.md`](TRADEMARKS.md)。
 - [测试策略](Docs/TestingStrategy.md)
 - [手工验收](Docs/ManualValidation.md)
 - [跨平台发布](Docs/Release.md)
-- [开源审计](Docs/OpenSourceAudit.md)
+- [源码与许可证审计](Docs/OpenSourceAudit.md)
 - [安全政策](SECURITY.md)
 
 ## Project status

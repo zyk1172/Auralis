@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 import Foundation
 
 /// 崩溃日志管理器：捕获未处理的异常和信号，写入文件供下次启动时查看。

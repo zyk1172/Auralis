@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
 # Local music download identity
 
 Server downloads are promoted into the app-managed local music library instead of remaining opaque cache-only files. On iOS/iPadOS, their physical audio is also relocated into the Files-visible `Documents/LocalMusic` one-song package layout after download completion.

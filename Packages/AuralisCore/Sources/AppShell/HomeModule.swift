@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 import Foundation
 
 /// 首页模块分组：快捷入口与内容模块分开排序、分开显示/隐藏（互不混排）。

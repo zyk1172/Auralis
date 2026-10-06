@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 import Foundation
 
 /// 单个首页模块的布局偏好：是否显示 + 排序。

@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
 # Local music folder format
 
 Auralis 的 iOS/iPadOS 可见本地音乐目录采用“**一首歌一个文件夹**”的 package 形式，而不是把所有音频平铺到 `LocalMusic` 根目录。手动导入与服务器下载最终都遵循这套物理目录规范。

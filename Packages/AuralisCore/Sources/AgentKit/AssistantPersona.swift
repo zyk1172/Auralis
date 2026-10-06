@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 import Foundation
 
 /// Stable personality layer kept separate from capability, policy and tool

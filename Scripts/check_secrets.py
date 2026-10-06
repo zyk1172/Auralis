@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Scan tracked repository files for high-confidence credential material.
 
 The scanner intentionally reports only a path, line number, and finding class.

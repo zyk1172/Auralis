@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 set -eu
 
 app_bundle="${1:?usage: check_ios_artifact.sh /path/to/Auralis.app [expected-commit]}"

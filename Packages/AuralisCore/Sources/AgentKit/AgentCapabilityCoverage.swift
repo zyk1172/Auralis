@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 import Foundation
 
 /// 在普通 Agent 进入模型规划前，确定性地判断「当前注册表里是否真的存在

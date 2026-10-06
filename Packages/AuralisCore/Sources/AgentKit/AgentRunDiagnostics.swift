@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 import Foundation
 
 /// 单个模型轮（round）的诊断记录。只携带可诊断事实：模型名、终止原因、

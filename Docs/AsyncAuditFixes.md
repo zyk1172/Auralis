@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
 # 异步状态审查修复
 
 本轮对应 2026-10-02 审查中的 F01–F12，并修复验证中新发现的 AV 引擎协议默认实现遮蔽问题，保持现有 Dock 和播放界面结构。

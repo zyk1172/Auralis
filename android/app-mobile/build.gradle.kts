@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
