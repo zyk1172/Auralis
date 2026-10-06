@@ -135,6 +135,7 @@ import com.auralis.core.playback.PlaybackController
 import com.auralis.core.playback.PlaybackSnapshot
 import com.auralis.core.playback.QueueSnapshot
 import kotlin.math.abs
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
@@ -169,6 +170,7 @@ fun NowPlayingScreen(
     val pagerState =
         rememberPagerState(initialPage = PlayerTab.Player.ordinal) { PlayerTab.entries.size }
     val page = PlayerTab.entries[pagerState.currentPage]
+    val navigationScope = rememberCoroutineScope()
     var chromeHidden by remember { mutableStateOf(false) }
     var lyricsActivity by remember { mutableStateOf(0) }
     var dragging by remember(track.globalId) { mutableStateOf(false) }
@@ -177,7 +179,7 @@ fun NowPlayingScreen(
         lyricsActivity++
     }
     val bottomNavigation: @Composable () -> Unit = {
-        PlayerPageNavigation(pagerState, onActivity = ::registerActivity)
+        PlayerPageNavigation(pagerState, navigationScope, onActivity = ::registerActivity)
     }
     LaunchedEffect(page, track.globalId, lyricsActivity, dragging) {
         chromeHidden = false
@@ -416,15 +418,20 @@ internal fun NowPlayingChromeLayout(
 }
 
 @Composable
-internal fun PlayerPageNavigation(pagerState: PagerState, onActivity: () -> Unit) {
+internal fun PlayerPageNavigation(
+    pagerState: PagerState,
+    navigationScope: CoroutineScope,
+    onActivity: () -> Unit,
+) {
     val reduceMotion = LocalReduceMotion.current
-    val scope = rememberCoroutineScope()
     // The target changes immediately, so a second tap during animation returns
     // to artwork rather than requesting the same destination again.
     val page = PlayerTab.entries[pagerState.targetPage]
     PlayerBottomNavigation(page) { target ->
         onActivity()
-        scope.launch {
+        // Owned by the screen: moving navigation between landscape controls and
+        // page footers must not cancel a scroll midway through the transition.
+        navigationScope.launch {
             val destination =
                 NowPlayingUiPolicy.togglePage(PlayerTab.entries[pagerState.targetPage], target)
             if (reduceMotion) pagerState.scrollToPage(destination.ordinal)

@@ -36,7 +36,7 @@ cd android
 ./gradlew :app-mobile:assemblePerf :app-tv:assemblePerf
 ```
 
-The full Debug run passed 245 tests across 41 suites, including seven Robolectric Compose UI tests for portrait controls, landscape geometry, immersive lyrics, secondary-page viewport space, bottom-button toggles, reduced-motion paging and repeated taps during animation. Debug and R8-optimized `perf` APKs for mobile and TV built successfully, including release lint checks.
+The full Debug run passed 246 tests across 41 suites, including eight Robolectric Compose UI tests for portrait controls, landscape geometry, immersive lyrics, secondary-page viewport space, bottom-button toggles, reduced-motion paging, repeated taps during animation and footer relocation during a real pager transition. Debug and R8-optimized `perf` APKs for mobile and TV built successfully, including release lint checks.
 
 The managed cloud session needs its proxy and CA settings passed to forked Robolectric JVMs as well as Gradle. Its local init script is `/workspace/.onboarding/auralis/test-network.init.gradle`; this is environment configuration, not an application change.
 
@@ -51,3 +51,5 @@ Apple validation passed in PR #67's Xcode CI, including the iOS UI smoke suite; 
 - Landscape lyrics and queue previously retained the entire transport area, reducing short-window content to a few lines or part of a queue row. Match the merged iOS implementation: full controls on the artwork page, navigation below secondary pages, and track identity alone below immersive lyrics. The new regression failed before this fix and now verifies at least 220dp of content in the 844×390dp test window.
 - Honor Reduce Motion for bottom-button paging with an immediate `scrollToPage`; the regression holds the animation clock still and verifies settled page state.
 - Resolve repeat taps against the pager's target destination, so a second tap while animation is running returns to artwork. A real pager regression verifies that the old destination does not win.
+
+The navigation coroutine is owned by the Now Playing screen, so moving the bottom navigation from the transport area to the landscape footer cannot cancel paging halfway through. A combined layout / real-pager regression reproduced the interruption before this ownership correction.

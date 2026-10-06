@@ -13,6 +13,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -145,11 +146,12 @@ class NowPlayingLayoutTest {
         compose.setContent {
             AuralisTheme(reduceMotion = true) {
                 pager = rememberPagerState(initialPage = PlayerTab.Player.ordinal) { 3 }
+                val navigationScope = rememberCoroutineScope()
                 Column {
                     HorizontalPager(pager, Modifier.fillMaxWidth().height(240.dp)) {
                         Text("Page $it")
                     }
-                    PlayerPageNavigation(pager, onActivity = {})
+                    PlayerPageNavigation(pager, navigationScope, onActivity = {})
                 }
             }
         }
@@ -174,11 +176,12 @@ class NowPlayingLayoutTest {
         compose.setContent {
             AuralisTheme {
                 pager = rememberPagerState(initialPage = PlayerTab.Player.ordinal) { 3 }
+                val navigationScope = rememberCoroutineScope()
                 Column {
                     HorizontalPager(pager, Modifier.fillMaxWidth().height(240.dp)) {
                         Text("Page $it")
                     }
-                    PlayerPageNavigation(pager, onActivity = {})
+                    PlayerPageNavigation(pager, navigationScope, onActivity = {})
                 }
             }
         }
@@ -193,6 +196,40 @@ class NowPlayingLayoutTest {
             assertThat(pager.isScrollInProgress).isFalse()
         }
         compose.mainClock.autoAdvance = true
+    }
+
+    @Test
+    @Config(qualifiers = "w844dp-h390dp-land")
+    fun `landscape navigation finishes when the footer changes parents`() {
+        lateinit var pager: PagerState
+        compose.setContent {
+            AuralisTheme {
+                pager = rememberPagerState(initialPage = PlayerTab.Player.ordinal) { 3 }
+                val navigationScope = rememberCoroutineScope()
+                NowPlayingChromeLayout(
+                    page = PlayerTab.entries[pager.currentPage],
+                    chromeHidden = false,
+                    onClose = {},
+                    artwork = { Box(Modifier.fillMaxSize()) },
+                    pageContent = {
+                        HorizontalPager(pager, Modifier.fillMaxSize()) { Text("Page $it") }
+                    },
+                    controls = { _, _ ->
+                        Column {
+                            Box(Modifier.fillMaxWidth().height(180.dp))
+                            PlayerPageNavigation(pager, navigationScope, onActivity = {})
+                        }
+                    },
+                    pageFooter = { PlayerPageNavigation(pager, navigationScope, onActivity = {}) },
+                )
+            }
+        }
+        compose.onNodeWithTag("player.lyrics").performClick()
+        compose.runOnIdle {
+            assertThat(pager.currentPage).isEqualTo(PlayerTab.Lyrics.ordinal)
+            assertThat(pager.currentPageOffsetFraction).isWithin(0.001f).of(0f)
+            assertThat(pager.isScrollInProgress).isFalse()
+        }
     }
 
     @Test
