@@ -153,10 +153,16 @@ class HomeAggregateQueriesTest : RoomDbTest() {
         seedCatalog()
 
         val firstEmission = CompletableDeferred<Unit>()
+        val favoriteEmission = CompletableDeferred<Unit>()
+        var emissionCount = 0
         val collected = async {
             withTimeout(5_000) {
                 repo.homeChangeSignals(sid)
-                    .onEach { firstEmission.complete(Unit) }
+                    .onEach {
+                        emissionCount += 1
+                        if (emissionCount == 1) firstEmission.complete(Unit)
+                        if (emissionCount == 2) favoriteEmission.complete(Unit)
+                    }
                     .take(3)
                     .toList()
             }
@@ -165,6 +171,8 @@ class HomeAggregateQueriesTest : RoomDbTest() {
         // 明确等到 collector 已经拿到初始快照，再制造两类真实变化；不依赖固定 sleep。
         withTimeout(5_000) { firstEmission.await() }
         repo.setFavorite(GlobalId(sid, "t1"), FavoriteKind.Track, true)
+        // Room 可以合并相邻写入的通知；先观察收藏变化，再写播放记录，独立验证两类变化。
+        withTimeout(5_000) { favoriteEmission.await() }
         repo.recordPlay(GlobalId(sid, "t1"), completed = true)
 
         assertEquals(3, collected.await().size)

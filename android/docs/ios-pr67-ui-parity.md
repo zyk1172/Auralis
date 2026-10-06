@@ -42,4 +42,6 @@ The managed cloud session needs its proxy and CA settings passed to forked Robol
 
 A pre-existing Anthropic cancellation test was made deterministic with `SocketPolicy.NO_RESPONSE`, retaining the 300ms coroutine deadline and five-second recovery / connection-close assertions. A delayed response could otherwise race cancellation on a busy CI runner.
 
-Apple validation runs in PR #67's Xcode CI because this Linux environment has no Apple toolchain. Hardware audio routing and haptics still require device validation.
+The Home invalidation regression now waits for the favorite emission before recording a play. Room may coalesce adjacent writes, so expecting one emission per unobserved write made the existing test race on CI.
+
+Apple validation passed in PR #67's Xcode CI, including the iOS UI smoke suite; this Linux environment has no Apple toolchain. Hardware audio routing and haptics still require device validation.
