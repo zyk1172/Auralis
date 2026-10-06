@@ -1,7 +1,9 @@
 # Contributing to Auralis
 
 Auralis welcomes reviewable improvements to the complete source tree. The project source is
-licensed under `GPL-3.0-only`; see [`LICENSE`](LICENSE). There is no private core or separate
+licensed under `PolyForm-Noncommercial-1.0.0`; see [`LICENSE`](LICENSE). This is a
+source-available license that permits noncommercial purposes, not an OSI-approved open-source
+license. There is no private core or separate
 implementation withheld from the repository.
 
 ## Before opening a pull request
@@ -28,7 +30,7 @@ implementation withheld from the repository.
 ## Content and licensing rules
 
 Contributors must have the right to submit every part of their contribution and agree that the
-contribution is released under `GPL-3.0-only`. Do not submit:
+contribution is released under `PolyForm-Noncommercial-1.0.0`. Do not submit:
 
 - API keys, passwords, bearer tokens, private certificates, signing keys, provisioning profiles,
   exported Keychain data, cookies, or authenticated URLs;
@@ -43,10 +45,12 @@ and distribution obligations in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.m
 another project's copyright or license header. Do not add a dependency that requires a private
 repository or a contributor's personal credential for ordinary fork CI.
 
-The project does not require a blanket CLA or copyright assignment at this time. A future
-commercial dual-license program would need a separate, explicit rights arrangement for code whose
-copyright is held by other contributors; submitting a GPL contribution alone does not silently
-grant that additional right.
+The project does not require a blanket CLA or copyright assignment at this time. Commercial
+licensing or future relicensing would need a separate, explicit rights arrangement for code whose
+copyright is held by other contributors; submitting a contribution under the noncommercial
+license alone does not silently grant that additional right. Contributions previously accepted
+under GPL-3.0-only retain their original grants; changing the repository license does not revoke
+those grants or establish permission to relicense someone else's code.
 
 ## Issues and pull requests
 

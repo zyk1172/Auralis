@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Root build file. Modules declare their own plugins; this file only exposes
 // the plugin classpath so every module uses the exact same versions.
 plugins {

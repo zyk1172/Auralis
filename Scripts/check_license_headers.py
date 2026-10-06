@@ -9,7 +9,7 @@ import sys
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SPDX = "SPDX-License-Identifier: GPL-3.0-only"
+SPDX = "SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0"
 SOURCE_SUFFIXES = {
     ".swift",
     ".kt",

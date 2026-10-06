@@ -1,4 +1,4 @@
-# Auralis open-source audit
+# Auralis source and license audit
 
 ## Scope and conclusion
 
@@ -11,7 +11,8 @@ The local Swift package boundaries remain because they provide useful compile-ti
 dependency direction, test isolation, and platform separation. They are engineering modules in
 this repository, not a license boundary or a second repository.
 
-The project source is licensed under `GPL-3.0-only`. This file is an engineering inventory, not
+The project source is licensed under `PolyForm-Noncommercial-1.0.0`. It is source-available with
+noncommercial restrictions and is not OSI-approved open source. This file is an engineering inventory, not
 legal advice; the exact rights and obligations are in [`LICENSE`](../LICENSE) and in each
 dependency's own license.
 
@@ -28,18 +29,23 @@ dependency's own license.
 
 ## License and copyright checks
 
-- `LICENSE` is the unmodified GNU General Public License, version 3, 29 June 2007.
-- Repository declarations use `GPL-3.0-only`; the project does not add a non-commercial or
-  anti-commercial restriction.
-- Project-owned source files carry `SPDX-License-Identifier: GPL-3.0-only` where a header is
+- `LICENSE` is the unmodified PolyForm Noncommercial License 1.0.0 from
+  [the official PolyForm repository](https://github.com/polyformproject/polyform-licenses/blob/master/PolyForm-Noncommercial-1.0.0.md).
+- Repository declarations use `PolyForm-Noncommercial-1.0.0`. The license grants use,
+  modification, and distribution for permitted noncommercial purposes; commercial purposes
+  require separate permission from the relevant rights holders.
+- Project-owned source files carry `SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0` where a header is
   appropriate. Generated provenance, dependency wrappers, platform metadata, and third-party
   material are excluded from mechanical header insertion.
 - The current Git history is authored under the repository owner identity in the local audit.
   That is useful evidence for a future rights review, but it is not a legal chain-of-title
   opinion. Contributors and copied material still need individual provenance checks.
-- A future commercial license can cover only code for which the licensing party has the necessary
-  rights. Contributions accepted under GPL alone do not silently grant a separate commercial
-  relicensing right; see `CONTRIBUTING.md`.
+- Previously published GPL-3.0-only versions retain their original license grants. This change
+  does not revoke those grants or impose the new restriction on historical copies.
+- Relicensing can cover only code for which the licensing party has the necessary rights.
+  Contributions accepted under GPL alone do not silently grant permission to relicense them
+  under noncommercial terms. New noncommercial contributions likewise do not silently grant a
+  separate commercial relicensing right; see `CONTRIBUTING.md`.
 
 ## Dependencies and intake rule
 
