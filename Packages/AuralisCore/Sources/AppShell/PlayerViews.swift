@@ -356,6 +356,15 @@ private struct LyricCharacterRenderer: TextRenderer {
     let progress: Double?
 
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+        guard isActive else {
+            // 大多数可见歌词无需逐字绘制，保留原生整段文字的快速绘制路径。
+            for line in layout {
+                for run in line {
+                    context.draw(run)
+                }
+            }
+            return
+        }
         let unitCount = layout.reduce(0) { count, line in
             count + line.reduce(0) { $0 + $1.count }
         }
@@ -363,13 +372,11 @@ private struct LyricCharacterRenderer: TextRenderer {
         for line in layout {
             for run in line {
                 for slice in run {
-                    let scale = isActive
-                        ? LyricCharacterAnimationPolicy.scale(
-                            unitIndex: unitIndex,
-                            unitCount: unitCount,
-                            progress: progress
-                        )
-                        : 1
+                    let scale = LyricCharacterAnimationPolicy.scale(
+                        unitIndex: unitIndex,
+                        unitCount: unitCount,
+                        progress: progress
+                    )
                     let bounds = slice.typographicBounds.rect
                     var glyphContext = context
                     glyphContext.translateBy(x: bounds.midX, y: bounds.midY)
