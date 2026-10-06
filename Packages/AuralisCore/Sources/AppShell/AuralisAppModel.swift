@@ -2870,7 +2870,7 @@ public final class AuralisAppModel: ObservableObject {
 
     /// Now Playing 控件 UI smoke：构造一个无需网络/音频引擎即可切换的三首队列。
     /// 只验证 UI → AppModel → QueueStore 的同步控制路径。
-    func installNowPlayingControlsUISmokeFixture() {
+    func installNowPlayingControlsUISmokeFixture(withLyrics: Bool = false) {
         let serverID: ServerID = "now-playing-smoke"
         let albumID: AlbumID = "now-playing-smoke-album"
         let artistID: ArtistID = "now-playing-smoke-artist"
@@ -2912,6 +2912,21 @@ public final class AuralisAppModel: ObservableObject {
                 duration: 180,
                 streamURL: audioURL
             )
+        }
+
+        if withLyrics {
+            for track in tracks {
+                catalog.lyrics[track.id] = LyricsDocument(
+                    trackID: track.id,
+                    lines: (0..<40).map { index in
+                        TimedLyricLine(
+                            startTime: Double(index),
+                            text: "Smoke lyric \(String(format: "%02d", index + 1)) — 顺滑滚动"
+                        )
+                    },
+                    isSynced: true
+                )
+            }
         }
 
         // UI smoke 必须与开发机 / 模拟器之前持久化的播放模式完全隔离。

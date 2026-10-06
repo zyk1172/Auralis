@@ -209,6 +209,66 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         XCTAssertTrue(title.exists, "Session sheet must survive delayed launch bootstrap")
     }
 
+    func testLyricsManualScrollDoesNotSnapBackDuringPlayback() throws {
+        launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics")
+        let playPause = app.buttons["auralis.nowPlaying.playPause"].firstMatch
+        XCTAssertTrue(playPause.waitForExistence(timeout: 15))
+        playPause.tap()
+        waitForLabelContaining("暂停", element: playPause, message: "The local smoke audio must be playing")
+        app.buttons["auralis.nowPlaying.lyrics"].firstMatch.tap()
+
+        let scroll = app.scrollViews["auralis.nowPlaying.lyricsScroll"].firstMatch
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        scroll.swipeUp(velocity: .slow)
+        scroll.swipeUp(velocity: .slow)
+        Thread.sleep(forTimeInterval: 0.6) // Let native deceleration and the deferred Chrome transition finish.
+
+        let marker = scroll.staticTexts.allElementsBoundByIndex.first { row in
+            row.identifier.hasPrefix("auralis.nowPlaying.lyric.")
+                && row.frame.midY > scroll.frame.minY + 30
+                && row.frame.midY < scroll.frame.maxY - 30
+        }
+        guard let marker else {
+            XCTFail("Manual browsing must expose a lyric row in the viewport")
+            return
+        }
+        let originalY = marker.frame.midY
+        Thread.sleep(forTimeInterval: 1.1) // Playback crosses another lyric boundary during the browsing grace period.
+        XCTAssertTrue(marker.isHittable, "Playback must not snap the manual viewport back to the active lyric")
+        XCTAssertEqual(marker.frame.midY, originalY, accuracy: 3, "Changing the active row must not move the manual viewport")
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Manual lyrics browsing during playback"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+    func testLandscapeArtworkIsLargerAndRetainsEdgeClearance() throws {
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics")
+        let playPause = app.buttons["auralis.nowPlaying.playPause"].firstMatch
+        XCTAssertTrue(playPause.waitForExistence(timeout: 15))
+        playPause.tap()
+        waitForLabelContaining("暂停", element: playPause, message: "Artwork must use the active playback size")
+        XCUIDevice.shared.orientation = .landscapeLeft
+
+        let artwork = app.descendants(matching: .any)["auralis.nowPlaying.landscapeArtwork"].firstMatch
+        XCTAssertTrue(artwork.waitForExistence(timeout: 10))
+        let screen = app.frame
+        XCTAssertGreaterThan(artwork.frame.height, screen.height * 0.78, "The landscape cover must grow beyond the previous height allocation")
+        XCTAssertGreaterThanOrEqual(artwork.frame.minX - screen.minX, 16)
+        XCTAssertGreaterThanOrEqual(artwork.frame.minY - screen.minY, 16)
+        XCTAssertGreaterThanOrEqual(screen.maxY - artwork.frame.maxY, 16)
+
+        app.buttons["auralis.nowPlaying.lyrics"].firstMatch.tap()
+        XCTAssertTrue(app.scrollViews["auralis.nowPlaying.lyricsScroll"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(artwork.exists, "The enlarged cover must remain beside landscape lyrics")
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Landscape artwork and lyrics"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
     func testHomeCollapsedDockDoesNotHitExpandedPlayerRegion() throws {
         assertCollapsedDockHitTesting(with: "-auralis-ui-smoke-dock-home")
     }

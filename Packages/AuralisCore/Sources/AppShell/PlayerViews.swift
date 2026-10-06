@@ -236,10 +236,52 @@ struct NowPlayingLayoutPolicy: Sendable {
     }
 
     static func landscapeArtworkSide(containerSize: CGSize, isPad: Bool) -> CGFloat {
-        let maximum: CGFloat = isPad ? 520 : 360
-        let widthShare = containerSize.width * (isPad ? 0.40 : 0.42)
-        let heightShare = containerSize.height * 0.78
-        return max(220, min(maximum, min(widthShare, heightShare)))
+        let maximum: CGFloat = isPad ? 600 : 420
+        let contentWidth = max(
+            0,
+            containerSize.width - 2 * landscapeHorizontalPadding(isPad: isPad)
+                - landscapeColumnSpacing(isPad: isPad)
+        )
+        let widthShare = contentWidth * (isPad ? 0.50 : 0.48)
+        // 顶部拖拽柄与页面内边距之外，封面上下至少各留 16pt。
+        // 不强制 220pt 下限，避免短窗口 / 台前调度中封面顶到边框。
+        let heightShare = max(0, containerSize.height - (isPad ? 64 : 48))
+        return min(maximum, min(widthShare, heightShare))
+    }
+
+    static func landscapeHorizontalPadding(isPad: Bool) -> CGFloat {
+        isPad ? 32 : 20
+    }
+
+    static func landscapeColumnSpacing(isPad: Bool) -> CGFloat {
+        isPad ? 36 : 24
+    }
+}
+
+/// 自动跟随只在用户放开滚动、惯性结束并短暂停留后恢复。
+/// 程序触发的滚动动画不应被误判成手动浏览。
+struct LyricsScrollFollowState {
+    static let resumeDelay: Duration = .seconds(5)
+    private(set) var isUserScrolling = false
+    private(set) var isFollowingPlayback = true
+
+    mutating func update(phase: ScrollPhase) {
+        switch phase {
+        case .tracking, .interacting, .decelerating:
+            isUserScrolling = true
+            isFollowingPlayback = false
+        case .idle, .animating:
+            isUserScrolling = false
+        @unknown default:
+            break
+        }
+    }
+
+    @discardableResult
+    mutating func resumeFollowing() -> Bool {
+        guard !isUserScrolling else { return false }
+        isFollowingPlayback = true
+        return true
     }
 }
 
@@ -272,10 +314,9 @@ enum LyricsChromeMotion {
 /// 当前歌词的轻量逐字强调。歌词源目前只有“逐行”时间戳，因此不能伪装成
 /// 真正的逐字 timing；这里仅在当前行与下一行之间做均匀插值。
 struct LyricCharacterAnimationPolicy: Sendable {
-    /// 当前句整体先轻微放大，正在唱到的字符再形成更明显的 1.12× 波峰。
-    /// 之前 1.05× 配合 0.5s 的进度 tick 肉眼几乎不可见。
+    /// 当前句整体先轻微放大，正在唱到的字符形成 1.1× 波峰。
     static let currentLineBaseScale: CGFloat = 1.02
-    static let maximumScale: CGFloat = 1.12
+    static let maximumScale: CGFloat = 1.1
     static let fallbackLineScale: CGFloat = 1.06
 
     static func lineProgress(
@@ -308,92 +349,36 @@ struct LyricCharacterAnimationPolicy: Sendable {
     }
 }
 
-/// 按 Character 流式换行，避免为了逐字动画把长歌词强行塞进一行。
-/// 每一行仍以整体居中，scaleEffect 不参与测量，因此 1.05× 不会引发布局抖动。
-private struct LyricCharacterFlowLayout: Layout {
-    var horizontalSpacing: CGFloat = 0
-    var verticalSpacing: CGFloat = 4
+/// 在原生 Text 已完成的排版上绘制逐字缩放，不创建逐字符子视图或重新测量换行。
+/// 非当前行和当前行使用同一个 Text 布局，切换高亮时不会改变滚动内容高度。
+private struct LyricCharacterRenderer: TextRenderer {
+    let isActive: Bool
+    let progress: Double?
 
-    private struct Row {
-        var indices: [Int] = []
-        var sizes: [CGSize] = []
-        var width: CGFloat = 0
-        var height: CGFloat = 0
-    }
-
-    private func rows(
-        proposal: ProposedViewSize,
-        subviews: Subviews
-    ) -> [Row] {
-        let maximumWidth = proposal.width ?? .greatestFiniteMagnitude
-        var rows: [Row] = []
-        var row = Row()
-
-        for index in subviews.indices {
-            let size = subviews[index].sizeThatFits(.unspecified)
-            let extraSpacing = row.indices.isEmpty ? 0 : horizontalSpacing
-            let proposedWidth = row.width + extraSpacing + size.width
-
-            if !row.indices.isEmpty, proposedWidth > maximumWidth {
-                rows.append(row)
-                row = Row()
-            }
-
-            if !row.indices.isEmpty {
-                row.width += horizontalSpacing
-            }
-            row.indices.append(index)
-            row.sizes.append(size)
-            row.width += size.width
-            row.height = max(row.height, size.height)
+    func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+        let unitCount = layout.reduce(0) { count, line in
+            count + line.reduce(0) { $0 + $1.count }
         }
-
-        if !row.indices.isEmpty {
-            rows.append(row)
-        }
-        return rows
-    }
-
-    func sizeThatFits(
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) -> CGSize {
-        let rows = rows(proposal: proposal, subviews: subviews)
-        let width = min(
-            proposal.width ?? rows.map(\.width).max() ?? 0,
-            rows.map(\.width).max() ?? 0
-        )
-        let height = rows.enumerated().reduce(CGFloat.zero) { partial, item in
-            partial + item.element.height + (item.offset == 0 ? 0 : verticalSpacing)
-        }
-        return CGSize(width: width, height: height)
-    }
-
-    func placeSubviews(
-        in bounds: CGRect,
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) {
-        let rows = rows(
-            proposal: ProposedViewSize(width: bounds.width, height: proposal.height),
-            subviews: subviews
-        )
-        var y = bounds.minY
-
-        for row in rows {
-            var x = bounds.minX + max((bounds.width - row.width) / 2, 0)
-            for (offset, index) in row.indices.enumerated() {
-                let size = row.sizes[offset]
-                subviews[index].place(
-                    at: CGPoint(x: x + size.width / 2, y: y + row.height / 2),
-                    anchor: .center,
-                    proposal: ProposedViewSize(width: size.width, height: size.height)
-                )
-                x += size.width + horizontalSpacing
+        var unitIndex = 0
+        for line in layout {
+            for run in line {
+                for slice in run {
+                    let scale = isActive
+                        ? LyricCharacterAnimationPolicy.scale(
+                            unitIndex: unitIndex,
+                            unitCount: unitCount,
+                            progress: progress
+                        )
+                        : 1
+                    let bounds = slice.typographicBounds.rect
+                    var glyphContext = context
+                    glyphContext.translateBy(x: bounds.midX, y: bounds.midY)
+                    glyphContext.scaleBy(x: scale, y: scale)
+                    glyphContext.translateBy(x: -bounds.midX, y: -bounds.midY)
+                    glyphContext.draw(slice, options: .disablesSubpixelQuantization)
+                    unitIndex += 1
+                }
             }
-            y += row.height + verticalSpacing
         }
     }
 }
@@ -436,6 +421,9 @@ struct NowPlayingView: View {
     @State private var isPlaylistSheetPresented = false
     @State private var showsTrackInformation = false
     @State private var lyricScrollTarget: Int?
+    @State private var lyricScrollFollow = LyricsScrollFollowState()
+    @State private var lyricFollowResumeTask: Task<Void, Never>?
+    @State private var pendingLyricsChromeHidden: Bool?
     @State private var lyricTimeline: [LyricsIndexResolver.TimedLine] = []
     /// PlaybackStore 为避免全局重绘只每 0.5s 发布一次 position。
     /// 歌词逐字动画在本地用时间锚点插值到约 30fps，不提高全局播放进度发布频率。
@@ -544,15 +532,19 @@ struct NowPlayingView: View {
         // 切歌时旧歌曲的 pendingSeek 不能污染下一首歌（拖动中切歌保护）。
         .onChange(of: currentTrackIdentity) { _, _ in
             pendingSeek = nil
+            resetLyricsScrollInteraction()
             if page == .lyrics {
                 showLyricsChromeAndScheduleAutoHide()
             }
         }
         .onChange(of: page) { oldPage, newPage in
             if newPage == .lyrics {
+                resetLyricsScrollInteraction()
+                scrollToCurrentLyric(animated: false)
                 syncLyricPositionAnchor()
                 showLyricsChromeAndScheduleAutoHide()
             } else if oldPage == .lyrics {
+                resetLyricsScrollInteraction()
                 lyricsChromeAutoHideTask?.cancel()
                 lyricsChromeAutoHideTask = nil
                 lyricsChromeHidden = false
@@ -569,6 +561,7 @@ struct NowPlayingView: View {
             syncLyricPositionAnchor()
         }
         .onDisappear {
+            resetLyricsScrollInteraction()
             lyricsChromeAutoHideTask?.cancel()
             lyricsChromeAutoHideTask = nil
         }
@@ -624,8 +617,8 @@ struct NowPlayingView: View {
             containerSize: size,
             isPad: isPad
         )
-        let horizontalPadding: CGFloat = isPad ? 28 : 16
-        let columnSpacing: CGFloat = isPad ? 36 : 24
+        let horizontalPadding = NowPlayingLayoutPolicy.landscapeHorizontalPadding(isPad: isPad)
+        let columnSpacing = NowPlayingLayoutPolicy.landscapeColumnSpacing(isPad: isPad)
         let compactLandscape = size.height < 460
         let controlsSpacing: CGFloat = compactLandscape ? 10 : 15
         let playButtonSize: CGFloat = compactLandscape ? 48 : 56
@@ -686,6 +679,7 @@ struct NowPlayingView: View {
         )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(String(localized: "专辑封面，\(model.currentTrack.albumTitle)", bundle: .module))
+        .accessibilityIdentifier("auralis.nowPlaying.landscapeArtwork")
     }
 
     @ViewBuilder
@@ -1045,8 +1039,7 @@ struct NowPlayingView: View {
     private var lyricsChromeSwipeGesture: some Gesture {
         DragGesture(minimumDistance: 12)
             .onChanged { _ in
-                lyricsChromeAutoHideTask?.cancel()
-                lyricsChromeAutoHideTask = nil
+                cancelLyricsChromeAutoHide()
             }
             .onEnded { value in
                 guard page == .lyrics else { return }
@@ -1054,12 +1047,29 @@ struct NowPlayingView: View {
                     scheduleLyricsChromeAutoHide()
                     return
                 }
-                if shouldHide {
-                    hideLyricsChrome()
-                } else {
-                    showLyricsChromeAndScheduleAutoHide()
+                // 等原生惯性滚动结束再改变可用高度，避免松手瞬间重排歌词。
+                pendingLyricsChromeHidden = shouldHide
+                if !lyricScrollFollow.isUserScrolling {
+                    applyPendingLyricsChromeChange()
                 }
             }
+    }
+
+    private func applyPendingLyricsChromeChange() {
+        guard let shouldHide = pendingLyricsChromeHidden,
+              !lyricScrollFollow.isUserScrolling else { return }
+        pendingLyricsChromeHidden = nil
+        if shouldHide {
+            hideLyricsChrome()
+        } else {
+            showLyricsChromeAndScheduleAutoHide()
+        }
+    }
+
+    private func cancelLyricsChromeAutoHide() {
+        guard let task = lyricsChromeAutoHideTask else { return }
+        task.cancel()
+        lyricsChromeAutoHideTask = nil
     }
 
     private var lyricsActivityTapGesture: some Gesture {
@@ -1079,8 +1089,11 @@ struct NowPlayingView: View {
     }
 
     private func hideLyricsChrome() {
-        lyricsChromeAutoHideTask?.cancel()
-        lyricsChromeAutoHideTask = nil
+        cancelLyricsChromeAutoHide()
+        guard !lyricScrollFollow.isUserScrolling else {
+            pendingLyricsChromeHidden = true
+            return
+        }
         guard !lyricsChromeHidden else { return }
         withAnimation(LyricsChromeMotion.animation(reduceMotion: reduceMotion)) {
             lyricsChromeHidden = true
@@ -1099,9 +1112,8 @@ struct NowPlayingView: View {
     }
 
     private func scheduleLyricsChromeAutoHide() {
-        lyricsChromeAutoHideTask?.cancel()
-        lyricsChromeAutoHideTask = nil
-        guard page == .lyrics, !lyricsChromeHidden else { return }
+        cancelLyricsChromeAutoHide()
+        guard page == .lyrics, !lyricsChromeHidden, !lyricScrollFollow.isUserScrolling else { return }
 
         lyricsChromeAutoHideTask = Task { @MainActor in
             do {
@@ -1474,6 +1486,60 @@ struct NowPlayingView: View {
         lyricPositionAnchorDate = Date()
     }
 
+    private func resetLyricsScrollInteraction() {
+        lyricFollowResumeTask?.cancel()
+        lyricFollowResumeTask = nil
+        lyricScrollFollow = LyricsScrollFollowState()
+        pendingLyricsChromeHidden = nil
+    }
+
+    private func handleLyricsScrollPhase(_ phase: ScrollPhase) {
+        let wasUserScrolling = lyricScrollFollow.isUserScrolling
+        lyricScrollFollow.update(phase: phase)
+        if lyricScrollFollow.isUserScrolling {
+            lyricFollowResumeTask?.cancel()
+            lyricFollowResumeTask = nil
+            cancelLyricsChromeAutoHide()
+        } else if phase == .idle, wasUserScrolling || !lyricScrollFollow.isFollowingPlayback {
+            applyPendingLyricsChromeChange()
+            scheduleLyricsChromeAutoHide()
+            scheduleLyricFollowResume()
+        }
+    }
+
+    private func scheduleLyricFollowResume() {
+        lyricFollowResumeTask?.cancel()
+        lyricFollowResumeTask = Task { @MainActor in
+            do {
+                try await Task.sleep(for: LyricsScrollFollowState.resumeDelay)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, page == .lyrics,
+                  lyricScrollFollow.resumeFollowing() else { return }
+            lyricFollowResumeTask = nil
+            // 恢复时读最新高亮行，不能跳回拖动前缓存的歌词。
+            scrollToCurrentLyric(animated: true)
+        }
+    }
+
+    private func scrollToCurrentLyric(animated: Bool) {
+        guard lyricScrollFollow.isFollowingPlayback,
+              !lyricScrollFollow.isUserScrolling,
+              let index = currentLyricIndex, lyricScrollTarget != index else { return }
+        if reduceMotion || !animated {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                lyricScrollTarget = index
+            }
+        } else {
+            withAnimation(.smooth(duration: 0.44, extraBounce: 0)) {
+                lyricScrollTarget = index
+            }
+        }
+    }
+
     /// PlaybackStore 只每 0.5 秒发布一次进度。逐字动画不能直接吃这个离散值，
     /// 否则会每半秒跳一两个字，看起来像“没有动画”。这里仅在歌词视图内部做时间插值。
     private func interpolatedLyricPosition(at date: Date) -> TimeInterval {
@@ -1484,63 +1550,6 @@ struct NowPlayingView: View {
         return lyricPositionAnchorValue + elapsed * Double(model.playbackRate)
     }
 
-    private func lyricLineProgress(
-        document: LyricsDocument,
-        index: Int,
-        position: TimeInterval
-    ) -> Double? {
-        guard document.isSynced,
-              document.lines.indices.contains(index)
-        else { return nil }
-
-        let line = document.lines[index]
-        let nextStart = document.lines
-            .dropFirst(index + 1)
-            .compactMap { $0.startTime }
-            .first
-
-        return LyricCharacterAnimationPolicy.lineProgress(
-            position: position,
-            lineStart: line.startTime,
-            nextLineStart: nextStart
-        )
-    }
-
-    @ViewBuilder
-    private func animatedLyricCharacters(
-        text: String,
-        progress: Double
-    ) -> some View {
-        let characters = Array(text)
-        let animatedIndices = characters.indices.filter { index in
-            !String(characters[index]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-        let animatedOrdinals = Dictionary(
-            uniqueKeysWithValues: animatedIndices.enumerated().map { ($0.element, $0.offset) }
-        )
-
-        LyricCharacterFlowLayout(horizontalSpacing: 0, verticalSpacing: 4) {
-            ForEach(characters.indices, id: \.self) { characterIndex in
-                let ordinal = animatedOrdinals[characterIndex]
-                let scale = ordinal.map {
-                    LyricCharacterAnimationPolicy.scale(
-                        unitIndex: $0,
-                        unitCount: animatedIndices.count,
-                        progress: progress
-                    )
-                } ?? 1
-
-                Text(String(characters[characterIndex]))
-                    .font(.title2.weight(.bold))
-                    .foregroundStyle(theme.colorTokens.accent.color)
-                    .scaleEffect(scale)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .opacity(1)
-    }
-
-    @ViewBuilder
     private func lyricLineView(
         document: LyricsDocument,
         index: Int,
@@ -1548,31 +1557,28 @@ struct NowPlayingView: View {
     ) -> some View {
         let line = document.lines[index]
         let isCurrent = index == activeIndex
+        let nextStart = document.lines.dropFirst(index + 1).first { $0.startTime != nil }?.startTime
+        let hasCharacterTiming = document.isSynced && LyricCharacterAnimationPolicy.lineProgress(
+            position: playbackStore.position,
+            lineStart: line.startTime,
+            nextLineStart: nextStart
+        ) != nil
+        let animateCharacters = isCurrent && hasCharacterTiming && !reduceMotion
+            && !lyricScrollFollow.isUserScrolling && page == .lyrics
+            && playbackStore.state == .playing
 
-        if isCurrent, !reduceMotion,
-           lyricLineProgress(
-               document: document,
-               index: index,
-               position: playbackStore.position
-           ) != nil {
-            // 只给当前歌词行开 30fps 本地 Timeline；不会提高整个 App 的 playback tick。
-            TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { context in
-                let progress = lyricLineProgress(
-                    document: document,
-                    index: index,
-                    position: interpolatedLyricPosition(at: context.date)
-                ) ?? 0
-                animatedLyricCharacters(text: line.text, progress: progress)
-            }
-        } else {
-            Text(line.text)
-                .font(.title2.weight(isCurrent ? .bold : .semibold))
-                // 缺少下一行时间戳时不伪造逐字 timing，只保留明显但克制的整句强调。
-                .scaleEffect(
-                    isCurrent && !reduceMotion
-                        ? LyricCharacterAnimationPolicy.fallbackLineScale
-                        : 1
+        return TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !animateCharacters)) { context in
+            let progress = hasCharacterTiming
+                ? LyricCharacterAnimationPolicy.lineProgress(
+                    position: interpolatedLyricPosition(at: context.date),
+                    lineStart: line.startTime,
+                    nextLineStart: nextStart
                 )
+                : nil
+            Text(line.text)
+                // 字重与换行保持稳定；高亮只改变绘制颜色与缩放。
+                .font(.title2.weight(.bold))
+                .textRenderer(LyricCharacterRenderer(isActive: isCurrent && !reduceMotion, progress: progress))
                 .opacity(isCurrent ? 1 : 0.62)
                 .foregroundStyle(
                     isCurrent
@@ -1580,11 +1586,9 @@ struct NowPlayingView: View {
                         : theme.colorTokens.secondaryText.color
                 )
                 .multilineTextAlignment(.center)
+                .padding(.vertical, 3)
                 .frame(maxWidth: .infinity, alignment: .center)
-                .animation(
-                    reduceMotion ? nil : .smooth(duration: 0.22, extraBounce: 0),
-                    value: isCurrent
-                )
+                .accessibilityIdentifier("auralis.nowPlaying.lyric.\(index)")
         }
     }
 
@@ -1616,21 +1620,15 @@ struct NowPlayingView: View {
             .padding(.vertical, AuralisSpacing.huge)
         }
         .scrollPosition(id: $lyricScrollTarget, anchor: .center)
-        .onChange(of: activeIndex) { _, newIndex in
-            guard let newIndex, lyricScrollTarget != newIndex else { return }
-            if reduceMotion {
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    lyricScrollTarget = newIndex
-                }
-            } else {
-                withAnimation(.smooth(duration: 0.44, extraBounce: 0)) {
-                    lyricScrollTarget = newIndex
-                }
-            }
+        .accessibilityIdentifier("auralis.nowPlaying.lyricsScroll")
+        .onScrollPhaseChange { _, phase in
+            handleLyricsScrollPhase(phase)
+        }
+        .onChange(of: activeIndex) { _, _ in
+            scrollToCurrentLyric(animated: true)
         }
         .task(id: model.currentLyrics?.id) {
+            resetLyricsScrollInteraction()
             guard let document = model.currentLyrics else {
                 lyricTimeline = []
                 lyricScrollTarget = nil
