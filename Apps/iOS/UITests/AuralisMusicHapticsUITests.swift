@@ -208,7 +208,7 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         let marker = scroll.staticTexts["auralis.nowPlaying.lyric.12"].firstMatch
         for _ in 0..<4 {
             scroll.swipeUp(velocity: .slow)
-            if marker.isHittable { break }
+            if marker.exists, marker.isHittable { break }
         }
         Thread.sleep(forTimeInterval: 0.6) // Let native deceleration and the deferred Chrome transition finish.
         XCTAssertTrue(marker.isHittable, "Manual browsing must expose the deterministic lyric row")
