@@ -139,10 +139,19 @@ final class AuralisMusicHapticsUITests: XCTestCase {
 
         // Previous restarts the current song after three seconds. Stop playback and
         // seek to the beginning so this assertion specifically checks queue navigation.
-        app.buttons["auralis.nowPlaying.playPause"].firstMatch.tap()
+        let playPause = app.buttons["auralis.nowPlaying.playPause"].firstMatch
+        waitForLabelContaining("暂停", element: playPause, message: "Next must finish starting the local audio before Pause is tapped")
+        playPause.tap()
+        waitForLabelContaining("播放", element: playPause, message: "Playback must finish pausing before seeking")
         let progress = app.descendants(matching: .any)["播放进度"].firstMatch
         XCTAssertTrue(progress.waitForExistence(timeout: 5))
-        progress.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).tap()
+        progress.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: progress.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)))
+        let seekFinished = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value BEGINSWITH %@", "0:01 /"),
+            object: progress
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [seekFinished], timeout: 5), .completed, "Seek must finish within the first three seconds before Previous is tapped")
 
         let previous = app.buttons["auralis.nowPlaying.previous"].firstMatch
         XCTAssertTrue(previous.waitForExistence(timeout: 5), "Previous button is missing")
@@ -195,19 +204,14 @@ final class AuralisMusicHapticsUITests: XCTestCase {
 
         let scroll = app.scrollViews["auralis.nowPlaying.lyricsScroll"].firstMatch
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
-        scroll.swipeUp(velocity: .slow)
-        scroll.swipeUp(velocity: .slow)
+        // 一个已知歌词行避免逐行 AX 查询耗尽真实的五秒浏览暂停期。
+        let marker = scroll.staticTexts["auralis.nowPlaying.lyric.12"].firstMatch
+        for _ in 0..<4 {
+            scroll.swipeUp(velocity: .slow)
+            if marker.isHittable { break }
+        }
         Thread.sleep(forTimeInterval: 0.6) // Let native deceleration and the deferred Chrome transition finish.
-
-        let marker = scroll.staticTexts.allElementsBoundByIndex.first { row in
-            row.identifier.hasPrefix("auralis.nowPlaying.lyric.")
-                && row.frame.midY > scroll.frame.minY + 30
-                && row.frame.midY < scroll.frame.maxY - 30
-        }
-        guard let marker else {
-            XCTFail("Manual browsing must expose a lyric row in the viewport")
-            return
-        }
+        XCTAssertTrue(marker.isHittable, "Manual browsing must expose the deterministic lyric row")
         let originalY = marker.frame.midY
         Thread.sleep(forTimeInterval: 1.1) // Playback crosses another lyric boundary during the browsing grace period.
         XCTAssertTrue(marker.isHittable, "Playback must not snap the manual viewport back to the active lyric")

@@ -2939,7 +2939,8 @@ public final class AuralisAppModel: ObservableObject {
         queue = tracks
         currentTrack = tracks[0]
         playbackPosition = 0
-        playbackState = .paused
+        // 引擎尚未加载这段本地音频；必须走 idle → play，而不是对空引擎 resume。
+        playbackState = .idle
     }
 
 #endif
