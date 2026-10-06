@@ -9,6 +9,13 @@ final class AuralisMusicHapticsUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
         app.terminate()
+        XCUIDevice.shared.orientation = .portrait
+    }
+
+    override func tearDownWithError() throws {
+        // XCTest 的失败中止不能保证执行测试方法中的 Swift defer。
+        // 每个用例都必须恢复方向，避免一项横屏失败污染后续播放 / Dock 检查。
+        XCUIDevice.shared.orientation = .portrait
     }
 
     private func launchSmokeApp(with arguments: String...) {
@@ -224,8 +231,6 @@ final class AuralisMusicHapticsUITests: XCTestCase {
     }
 
     func testLandscapeArtworkIsLargerAndRetainsEdgeClearance() throws {
-        XCUIDevice.shared.orientation = .portrait
-        defer { XCUIDevice.shared.orientation = .portrait }
         launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics")
         let playPause = app.buttons["auralis.nowPlaying.playPause"].firstMatch
         XCTAssertTrue(playPause.waitForExistence(timeout: 15))

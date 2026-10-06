@@ -684,9 +684,14 @@ struct NowPlayingView: View {
             reduceMotion ? nil : .smooth(duration: 0.42, extraBounce: 0),
             value: artworkPresentationScale
         )
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(String(localized: "专辑封面，\(model.currentTrack.albumTitle)", bundle: .module))
-        .accessibilityIdentifier("auralis.nowPlaying.landscapeArtwork")
+        .accessibilityRepresentation {
+            // 装饰光效和占位图中的外溢图形不能扩大封面本体的 VoiceOver 边界。
+            Rectangle()
+                .frame(width: side, height: side)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(String(localized: "专辑封面，\(model.currentTrack.albumTitle)", bundle: .module))
+                .accessibilityIdentifier("auralis.nowPlaying.landscapeArtwork")
+        }
     }
 
     @ViewBuilder
