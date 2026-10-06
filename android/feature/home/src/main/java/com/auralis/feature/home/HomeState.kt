@@ -210,7 +210,7 @@ class HomeState(
                     },
                 )
 
-                HomeModuleId.RecentlyPlayed -> tracksModule(id, repo.recentlyPlayed(serverId, MODULE_SHELF_LIMIT))
+                HomeModuleId.RecentlyPlayed -> tracksModule(id, repo.recentlyPlayed(serverId, 50))
                 HomeModuleId.RecentlyAdded -> tracksModule(id, repo.recentlyAddedWithin(serverId, 30, MODULE_SHELF_LIMIT))
                 HomeModuleId.LongUnplayed -> tracksModule(id, repo.longUnplayed(serverId, MODULE_SHELF_LIMIT))
                 HomeModuleId.NeverPlayed -> tracksModule(id, repo.neverPlayed(serverId, MODULE_SHELF_LIMIT))

@@ -93,4 +93,5 @@
     <string name="assistant_tool_search_artists">Search artists</string>
     <string name="assistant_tool_get_lyrics">Get lyrics</string>
     <string name="assistant_tool_view_queue">View queue</string>
+    <string name="assistant_page_title">AI Assistant</string>
 </resources>

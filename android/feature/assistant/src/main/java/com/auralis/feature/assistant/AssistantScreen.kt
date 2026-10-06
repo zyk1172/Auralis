@@ -46,6 +46,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
@@ -130,45 +135,52 @@ fun AssistantScreen(
     val canSend = aiStatus.isLive && !run.isRunning && draft.isNotBlank()
 
     Box(modifier = modifier.fillMaxSize().background(colors.background)) {
-        Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+        Column(modifier = Modifier.fillMaxSize().statusBarsPadding().imePadding()) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = AuralisSpacing.large, vertical = AuralisSpacing.small),
             ) {
-                if (aiStatus.isLive) {
-                    Icon(
-                        Icons.Filled.CheckCircle,
-                        contentDescription = null,
-                        tint = colors.success,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(Modifier.width(AuralisSpacing.small))
-                    Text(
-                        aiStatus.model,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = colors.success,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        modifier = Modifier.weight(1f),
-                    )
-                } else {
-                    Icon(
-                        Icons.Filled.Warning,
-                        contentDescription = null,
-                        tint = colors.warning,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(Modifier.width(AuralisSpacing.small))
-                    Text(
-                        if (aiStatus.enabled) stringResource(R.string.assistant_not_configured) else stringResource(R.string.assistant_disabled),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = colors.warning,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        modifier = Modifier.weight(1f),
-                    )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.assistant_page_title),
+                        style = MaterialTheme.typography.displayLarge, color = colors.primaryText,
+                        maxLines = 1)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (aiStatus.isLive) {
+                            Icon(
+                                Icons.Filled.CheckCircle,
+                                contentDescription = null,
+                                tint = colors.success,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(AuralisSpacing.small))
+                            Text(
+                                aiStatus.model,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = colors.success,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        } else {
+                            Icon(
+                                Icons.Filled.Warning,
+                                contentDescription = null,
+                                tint = colors.warning,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(AuralisSpacing.small))
+                            Text(
+                                if (aiStatus.enabled) stringResource(R.string.assistant_not_configured) else stringResource(R.string.assistant_disabled),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = colors.warning,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
                 }
                 if (!aiStatus.isLive) {
                     TextButton(
@@ -226,7 +238,7 @@ fun AssistantScreen(
                     .fillMaxWidth()
                     .padding(horizontal = AuralisSpacing.large),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    bottom = AuralisSpacing.small,
+                    bottom = AuralisSpacing.small + AuralisChrome.dockSpacing + AuralisChrome.dockHeight,
                 ),
             ) {
                 items(activeMessages.size) { index ->
@@ -330,12 +342,15 @@ private fun AssistantInputDock(
     onStop: () -> Unit,
 ) {
     val colors = LocalAuralisTheme.current.colors
-    val progress = collapseProgress.coerceIn(0f, 1f)
+    val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val progress = if (keyboardVisible) 0f else collapseProgress.coerceIn(0f, 1f)
     val inputFocusRequester = remember { FocusRequester() }
     val inputInteraction = remember { MutableInteractionSource() }
     val horizontalInset = AuralisChrome.dockHorizontalPadding +
         (AuralisChrome.dockHeight + AuralisChrome.dockSpacing) * progress
-    val bottomInset = AuralisChrome.dockBottomPadding +
+    // Keep the measured height stable. Dock animation only moves the visible input.
+    val bottomInset = AuralisChrome.dockBottomPadding
+    val verticalLift = if (keyboardVisible) 0.dp else
         (AuralisChrome.dockHeight + AuralisChrome.dockSpacing) * (1f - progress)
 
     Row(
@@ -345,6 +360,7 @@ private fun AssistantInputDock(
             .navigationBarsPadding()
             .padding(bottom = bottomInset)
             .height(AuralisChrome.dockHeight)
+            .offset(y = -verticalLift)
             .auralisChromeSurface(
                 RoundedCornerShape(AuralisRadius.large),
                 AuralisChromeSurfaceRole.FloatingControl,

@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -34,6 +35,15 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.heading
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,11 +75,11 @@ import com.auralis.core.image.AuralisArtwork
  * Apple `HomeView.swift` 的 Android 同构实现。
  *
  * 与旧 Android HomeScreen 的关键差异：
- * - Apple 首页没有额外的“首页 + 服务器名 + 添加”顶栏，因此这里移除 Android 自创 Header；
+ * - 首页标题占固定 60dp，向上滚动离场，顶部过度滚动不移动标题；
  * - 根背景使用 `[background, accent@12%, background]` 斜向环境渐变；
- * - 内容 20dp 横边距 / 12dp 顶边距 / 960dp 最大可读宽度；
+ * - 内容 20dp 横边距 / 960dp 最大可读宽度；
  * - 快捷入口、140dp 货架卡片、字号和间距按 Apple 源码逐项映射；
- * - 底部滚动留白跟随共享 Dock 126→62dp 动画，不再固定占用展开态高度。
+ * - 底部留白保持最大 Dock 高度，动画不触发列表逐帧测量。
  */
 @Composable
 fun AppleParityHomeScreen(
@@ -88,6 +98,7 @@ fun AppleParityHomeScreen(
 
     LaunchedEffect(state) { state.start() }
 
+    val listState = rememberLazyListState()
     val ambient = Brush.linearGradient(
         colors = listOf(
             colors.background,
@@ -126,8 +137,10 @@ fun AppleParityHomeScreen(
                 onPlayTracks = onPlayTracks,
                 onBrowse = onBrowse,
                 bottomChromeClearance = bottomChromeClearance,
+                listState = listState,
             )
         }
+        HomeTopHeader(listState)
     }
 }
 
@@ -137,8 +150,8 @@ private fun AppleHomeContent(
     onPlayTracks: (List<Track>, Int) -> Unit,
     onBrowse: (BrowseDestination) -> Unit,
     bottomChromeClearance: Dp,
+    listState: LazyListState,
 ) {
-    val listState = rememberLazyListState()
     listState.rememberDockBottomReservation(bottomChromeClearance)
 
     LazyColumn(
@@ -149,7 +162,7 @@ private fun AppleHomeContent(
         contentPadding = PaddingValues(
             start = AuralisSpacing.large,
             end = AuralisSpacing.large,
-            top = AuralisSpacing.medium,
+            top = 60.dp + AuralisSpacing.small,
             bottom = bottomChromeClearance + AuralisSpacing.large,
         ),
         verticalArrangement = Arrangement.spacedBy(AuralisSpacing.xLarge),
@@ -174,6 +187,34 @@ private fun AppleHomeContent(
 
         item(key = "stats") { AppleLibrarySummary(state.stats) }
     }
+}
+
+/** Fixed viewport clips the title before it can paint over the status bar. */
+@Composable
+private fun HomeTopHeader(listState: LazyListState) {
+    val colors = LocalAuralisTheme.current.colors
+    val heightPx = with(LocalDensity.current) { 60.dp.toPx() }
+    val offset by remember(listState, heightPx) {
+        derivedStateOf {
+            HomeTopHeaderPolicy.offset(listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset.toFloat(), heightPx)
+        }
+    }
+    Box(Modifier.widthIn(max = AuralisChrome.readableContentMaxWidth).fillMaxWidth()
+        .height(60.dp).clipToBounds()) {
+        Text(stringResource(AuralisR.string.home_title),
+            style = MaterialTheme.typography.displayLarge, color = colors.primaryText,
+            maxLines = 1,
+            modifier = Modifier.fillMaxWidth().height(60.dp).wrapContentHeight(Alignment.CenterVertically)
+                .graphicsLayer { translationY = -offset }
+                .padding(horizontal = AuralisSpacing.large)
+                .testTag("home.title").semantics { heading() })
+    }
+}
+
+internal object HomeTopHeaderPolicy {
+    fun offset(firstItemIndex: Int, offset: Float, height: Float): Float =
+        if (firstItemIndex > 0) height else offset.coerceIn(0f, height)
 }
 
 @Composable

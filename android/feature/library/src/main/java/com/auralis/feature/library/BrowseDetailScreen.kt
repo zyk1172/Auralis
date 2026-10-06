@@ -254,7 +254,7 @@ private suspend fun loadDetail(context: Context, graph: AuralisGraph, destinatio
             }
             BrowseDestination.Favorites -> DetailLoad.Ready(repo.favoriteTracks(sid()))
             BrowseDestination.MostPlayed -> DetailLoad.Ready(repo.mostPlayedTracks(sid(), DETAIL_TRACK_CAP))
-            BrowseDestination.RecentlyPlayed -> DetailLoad.Ready(repo.recentlyPlayed(sid(), DETAIL_TRACK_CAP))
+            BrowseDestination.RecentlyPlayed -> DetailLoad.Ready(repo.recentlyPlayed(sid(), 50))
             BrowseDestination.RecentlyAdded -> DetailLoad.Ready(repo.recentlyAdded(sid(), DETAIL_TRACK_CAP))
             BrowseDestination.LongUnplayed -> DetailLoad.Ready(repo.longUnplayed(sid(), DETAIL_TRACK_CAP))
             BrowseDestination.NeverPlayed -> DetailLoad.Ready(repo.neverPlayed(sid(), DETAIL_TRACK_CAP))
