@@ -198,8 +198,9 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics")
         let playPause = app.buttons["auralis.nowPlaying.playPause"].firstMatch
         XCTAssertTrue(playPause.waitForExistence(timeout: 15))
+        waitForLabelContaining("播放", element: playPause, message: "The smoke player must be ready before its first Play tap")
         playPause.tap()
-        waitForLabelContaining("暂停", element: playPause, message: "The local smoke audio must be playing")
+        waitForLabelContaining("暂停", element: playPause, timeout: 15, message: "The local smoke audio must be playing")
         app.buttons["auralis.nowPlaying.lyrics"].firstMatch.tap()
 
         let scroll = app.scrollViews["auralis.nowPlaying.lyricsScroll"].firstMatch
@@ -228,8 +229,9 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics")
         let playPause = app.buttons["auralis.nowPlaying.playPause"].firstMatch
         XCTAssertTrue(playPause.waitForExistence(timeout: 15))
+        waitForLabelContaining("播放", element: playPause, message: "The smoke player must be ready before its first Play tap")
         playPause.tap()
-        waitForLabelContaining("暂停", element: playPause, message: "Artwork must use the active playback size")
+        waitForLabelContaining("暂停", element: playPause, timeout: 15, message: "Artwork must use the active playback size")
         XCUIDevice.shared.orientation = .landscapeLeft
 
         let artwork = app.descendants(matching: .any)["auralis.nowPlaying.landscapeArtwork"].firstMatch
@@ -296,15 +298,16 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         )
     }
 
-    private func waitForLabelContaining(_ expected: String, element: XCUIElement, message: String) {
+    private func waitForLabelContaining(_ expected: String, element: XCUIElement, timeout: TimeInterval = 5, message: String) {
         let expectation = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "label CONTAINS %@", expected),
             object: element
         )
+        let result = XCTWaiter.wait(for: [expectation], timeout: timeout)
         XCTAssertEqual(
-            XCTWaiter.wait(for: [expectation], timeout: 5),
+            result,
             .completed,
-            message
+            result == .completed ? message : "\(message); actual label: \(element.label)"
         )
     }
 
