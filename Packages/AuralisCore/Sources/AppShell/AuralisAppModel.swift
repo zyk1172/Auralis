@@ -74,11 +74,16 @@ public final class AuralisAppModel: ObservableObject {
     /// 播放队列展示状态：与高频播放状态分离，上万首队列更新只发布到这里，
     /// 普通播放器控件不再因 queue 变化整体 invalidate。
     public let queueStore = PlaybackQueuePresentationStore()
-    // MARK: - Large context windowed queue（>500 则仅物化窗口，避免一次创建 10000 QueueEntry）
+    // MARK: - Windowed / asynchronously prepared playback context
+    // 大上下文长期窗口化；中等上下文会先安装小窗口保证“下一首”立即可用，
+    // 再在后台完成完整队列构建，避免在 MainActor 上创建数百个 QueueEntry。
     private var largeLogicalContext: [Track]? = nil
     private var largeLogicalWindowStart: Int? = nil // 窗口在 logical 中的起始下标
     private var largeLogicalNextIndex: Int? = nil // 下一次可物化的 logical 起始下标
+    private var contextPreparationGeneration: UInt64 = 0
     private let largeContextThreshold = 500
+    private let synchronousContextThreshold = 64
+    private let provisionalContextWindow = 24
     private let largeWindowInitial = 256
     private let largeWindowRefillThreshold = 48
     private let largeWindowRefillBatch = 192
@@ -117,18 +122,21 @@ public final class AuralisAppModel: ObservableObject {
         let start = preparedWindowStart.map {
             max(0, min($0, logical.count - 1))
         } ?? max(0, min(clampedIndex - 64, logical.count - largeWindowInitial))
-        let end = min(start + largeWindowInitial, logical.count)
-        let window = Array(logical[start..<end])
+        let defaultEnd = min(start + largeWindowInitial, logical.count)
+        let window = Array(logical[start..<defaultEnd])
         let selectedID = queueIdentity(logical[clampedIndex])
-        let prepared = prepared ?? PlaybackQueuePresentationStore.prepare(
+        let resolvedPrepared = prepared ?? PlaybackQueuePresentationStore.prepare(
             tracks: window,
             selectedTrackID: selectedID,
             selectedLocalIndex: clampedIndex - start
         )
+        // prepared 可能是“即时可用”的小窗口，也可能是后台构建的完整 256 窗口。
+        // 下一次补窗位置必须按真实 entries 数量计算，不能硬编码 256。
+        let installedEnd = min(start + resolvedPrepared.entries.count, logical.count)
         largeLogicalContext = logical
         largeLogicalWindowStart = start
-        largeLogicalNextIndex = end
-        queueStore.installPreparedQueue(prepared)
+        largeLogicalNextIndex = installedEnd
+        queueStore.installPreparedQueue(resolvedPrepared)
         syncRemoteCommandCapabilities()
     }
 
@@ -187,6 +195,9 @@ public final class AuralisAppModel: ObservableObject {
     private func mutateLargeLogicalQueue(_ mutation: (inout [(token: Int, track: Track)], inout Int) -> Void) -> Bool {
         guard let logical = largeLogicalContext,
               let current = largeLogicalCurrentIndex else { return false }
+        // 逻辑队列发生真实编辑后，任何基于编辑前 snapshot 的后台 prepare 都必须失效，
+        // 否则完成较晚的旧结果会把“下一首播放 / 删除 / 移动”等用户操作覆盖掉。
+        contextPreparationGeneration &+= 1
         var items = logical.enumerated().map { (token: $0.offset, track: $0.element) }
         var currentToken = current
         mutation(&items, &currentToken)
@@ -286,6 +297,8 @@ public final class AuralisAppModel: ObservableObject {
     public var queue: [Track] {
         get { queueStore.tracks }
         set {
+            // 显式替换队列会使任何尚未完成的上下文后台准备失效。
+            contextPreparationGeneration &+= 1
             // 大队列保护：>500 时仅物化窗口
             if newValue.count > largeContextThreshold {
                 shufflePlayedEntryIDs.removeAll()
@@ -330,6 +343,7 @@ public final class AuralisAppModel: ObservableObject {
         get { queueStore.entries }
         set {
             guard queueStore.entries != newValue else { return }
+            contextPreparationGeneration &+= 1
             queueStore.replace(entries: newValue, currentTrackID: queueIdentity(currentTrack))
             syncRemoteCommandCapabilities()
             shufflePlayedEntryIDs.removeAll()
@@ -1509,8 +1523,9 @@ public final class AuralisAppModel: ObservableObject {
                 playTracks(recent)
             }
         case .playRandom:
-            // 整库随机属于自动发现：排除 disliked。
-            playTracks(autoCandidate(catalog.tracks).shuffled().prefix(30).map { $0 })
+            // 整库随机统一取 24 首，与首页「随机音乐」和「收藏里随便听」的
+            // 首页批次大小保持一致；自动发现仍排除 disliked。
+            playTracks(autoCandidate(catalog.tracks).shuffled().prefix(24).map { $0 })
         case let .playGenre(name):
             let tracks = tracks(for: Genre(name: name, songCount: 0))
             if tracks.isEmpty {
@@ -2011,6 +2026,11 @@ public final class AuralisAppModel: ObservableObject {
     /// 后台准备完成后校验当前歌曲未变，再替换播放队列。
     /// 大上下文（>500）自动进入窗口化：仅物化 256 首，剩余按需后台追加，避免一次创建 10000 QueueEntry。
     public func playTrack(_ track: Track, in context: [Track]) {
+        // 每次新的“在某个上下文中播放”都拥有独立 generation。
+        // 后台完整队列准备只能回写到创建它的那一轮上下文。
+        contextPreparationGeneration &+= 1
+        let preparationGeneration = contextPreparationGeneration
+
         if context.isEmpty {
             selectAndPlay(track)
             largeLogicalContext = nil
@@ -2029,15 +2049,39 @@ public final class AuralisAppModel: ObservableObject {
         let selectMs = durationMs(selectStarted.duration(to: .now))
         AuralisLog.playback.debug("PLAY_SELECT_DISPATCHED id=\(expectedID.description, privacy: .public) duration_ms=\(selectMs, privacy: .public)")
         #endif
-        // 大上下文窗口化：>500 时仅物化 256，避免一次 10000 的 CPU/内存/哈希压力。
+        // 大上下文（例如上万首资料库）先同步安装一个极小的“可操作窗口”，
+        // 保证用户打开播放页后立刻点“下一首”就能切歌；后台再准备 256 首标准窗口。
         if context.count > largeContextThreshold {
             let contextSnapshot = context
+            let selectedIndex = contextSnapshot.firstIndex {
+                GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue) == expectedID
+            } ?? 0
+            let provisionalEnd = min(selectedIndex + 8, contextSnapshot.count)
+            let provisionalWindow = Array(contextSnapshot[selectedIndex..<provisionalEnd])
+            let provisionalPrepared = PlaybackQueuePresentationStore.prepare(
+                tracks: provisionalWindow,
+                selectedTrackID: expectedID,
+                selectedLocalIndex: 0
+            )
+            installLargeLogicalContext(
+                contextSnapshot,
+                currentIndex: selectedIndex,
+                prepared: provisionalPrepared,
+                preparedWindowStart: selectedIndex
+            )
+            // 新上下文 = 新一轮随机语义。deferred selectAndPlay 当时没有 entry，
+            // 因此必须在窗口安装后补记当前 occurrence。
+            shufflePlayedEntryIDs.removeAll()
+            shufflePlayedLogicalIDs.removeAll()
+            if isShuffled {
+                shufflePlayedLogicalIDs.insert(selectedIndex)
+            }
+
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let prepareStarted = ContinuousClock.now
                 let result = await Task.detached(priority: .userInitiated) { () -> (PlaybackQueuePresentationStore.PreparedQueue, [Track], Int, Int) in
-                    let selIdx = contextSnapshot.firstIndex { GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue) == expectedID } ?? 0
-                    let start = selIdx
+                    let start = selectedIndex
                     let end = min(start + 256, contextSnapshot.count)
                     let window = Array(contextSnapshot[start..<end])
                     let prepared = PlaybackQueuePresentationStore.prepare(
@@ -2049,7 +2093,11 @@ public final class AuralisAppModel: ObservableObject {
                 }.value
                 let prepareMs = self.durationMs(prepareStarted.duration(to: .now))
                 AuralisLog.playback.debug("LARGE_WINDOW_PREPARED logicalCount=\(result.1.count, privacy: .public) windowCount=\(result.0.entries.count, privacy: .public) duration_ms=\(prepareMs, privacy: .public)")
-                guard self.queueIdentity(self.currentTrack) == expectedID else { return }
+                // 如果开始了新的上下文、或用户已经编辑过逻辑队列，旧 snapshot
+                // 绝不能再覆盖；若只是点了“下一首”，当前曲目变化也保留即时窗口。
+                guard self.contextPreparationGeneration == preparationGeneration,
+                      self.queueIdentity(self.currentTrack) == expectedID
+                else { return }
                 let installStarted = ContinuousClock.now
                 self.installLargeLogicalContext(
                     result.1,
@@ -2064,29 +2112,106 @@ public final class AuralisAppModel: ObservableObject {
             }
             return
         }
-        // 2) 普通上下文：后台一次性构建整个队列（去重 + QueueEntry + selected index + persistence IDs + 索引字典），
-        //    MainActor 只安装结果，不再做 map / firstIndex / 生成 UUID / 构建 ID。
-        largeLogicalContext = nil
-        largeLogicalWindowStart = nil
-        largeLogicalNextIndex = nil
+
+        // 2) 很小的上下文直接同步安装，成本有限；中等上下文不再在 MainActor
+        // 一次性创建几百个 QueueEntry。先装一个 24 首 provisional window，
+        // 让当前曲目 / 上一首 / 下一首立即可用，再在 detached 线程准备完整队列。
+        if context.count <= synchronousContextThreshold {
+            largeLogicalContext = nil
+            largeLogicalWindowStart = nil
+            largeLogicalNextIndex = nil
+            let prepared = PlaybackQueuePresentationStore.prepare(
+                tracks: context,
+                selectedTrackID: expectedID
+            )
+            queueStore.installPreparedQueue(prepared)
+            shufflePlayedEntryIDs.removeAll()
+            shufflePlayedLogicalIDs.removeAll()
+            if isShuffled, let entryID = queueStore.currentEntryID {
+                shufflePlayedEntryIDs.insert(entryID)
+            }
+            syncRemoteCommandCapabilities()
+            schedulePlaybackSessionPersistence()
+            schedulePreparedNext()
+            return
+        }
+
         let contextSnapshot = context
+        let selectedIndex = contextSnapshot.firstIndex {
+            GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue) == expectedID
+        } ?? 0
+        let maximumStart = max(contextSnapshot.count - provisionalContextWindow, 0)
+        let provisionalStart = min(max(selectedIndex - 4, 0), maximumStart)
+        let provisionalEnd = min(
+            provisionalStart + provisionalContextWindow,
+            contextSnapshot.count
+        )
+        let provisionalTracks = Array(
+            contextSnapshot[provisionalStart..<provisionalEnd]
+        )
+        let provisionalPrepared = PlaybackQueuePresentationStore.prepare(
+            tracks: provisionalTracks,
+            selectedTrackID: expectedID,
+            selectedLocalIndex: selectedIndex - provisionalStart
+        )
+        installLargeLogicalContext(
+            contextSnapshot,
+            currentIndex: selectedIndex,
+            prepared: provisionalPrepared,
+            preparedWindowStart: provisionalStart
+        )
+        shufflePlayedEntryIDs.removeAll()
+        shufflePlayedLogicalIDs.removeAll()
+        if isShuffled {
+            shufflePlayedLogicalIDs.insert(selectedIndex)
+        }
+        syncRemoteCommandCapabilities()
+        schedulePlaybackSessionPersistence()
+        schedulePreparedNext()
+
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let prepareStarted = ContinuousClock.now
             let prepared = await Task.detached(priority: .userInitiated) {
                 PlaybackQueuePresentationStore.prepare(
                     tracks: contextSnapshot,
-                    selectedTrackID: expectedID
+                    selectedTrackID: expectedID,
+                    selectedLocalIndex: selectedIndex
                 )
             }.value
-            let prepareMs = self.durationMs(prepareStarted.duration(to: .now))
-            AuralisLog.playback.debug("PLAY_CONTEXT_PREPARED count=\(prepared.entries.count, privacy: .public) duration_ms=\(prepareMs, privacy: .public)")
-            // 快速连点 A→B→C：旧请求完成后若当前歌曲已变，丢弃，禁止旧队列覆盖新歌。
-            guard self.queueIdentity(self.currentTrack) == expectedID else { return }
-            let installStarted = ContinuousClock.now
-            self.queueStore.installPreparedQueue(prepared)
-            let installMs = self.durationMs(installStarted.duration(to: .now))
-            AuralisLog.playback.debug("QUEUE_INSTALL_FINISHED count=\(prepared.entries.count, privacy: .public) revision=\(self.queueStore.revision, privacy: .public) duration_ms=\(installMs, privacy: .public)")
+
+            // 新的 playTrack / 显式 queue replacement 已经发生时，禁止旧结果覆盖。
+            guard self.contextPreparationGeneration == preparationGeneration,
+                  self.largeLogicalContext != nil
+            else { return }
+
+            // provisional 阶段用户可能已经点过“下一首”甚至随机跳转。
+            // 以当前 logical occurrence 重定向完整 prepared queue，而不是退回最初曲目。
+            guard let logicalIndex = self.largeLogicalCurrentIndex,
+                  contextSnapshot.indices.contains(logicalIndex),
+                  self.queueIdentity(self.currentTrack)
+                    == self.queueIdentity(contextSnapshot[logicalIndex]),
+                  prepared.entries.indices.contains(logicalIndex)
+            else { return }
+
+            let retargeted = PlaybackQueuePresentationStore.PreparedQueue(
+                entries: prepared.entries,
+                currentIndex: logicalIndex,
+                currentEntryID: prepared.entries[logicalIndex].id,
+                persistenceTrackIDs: prepared.persistenceTrackIDs,
+                indexByEntryID: prepared.indexByEntryID,
+                firstIndexByGlobalID: prepared.firstIndexByGlobalID
+            )
+            // The provisional queue tracks shuffle history by logical occurrence.
+            // Translate it before replacing the window with fresh entry UUIDs.
+            self.shufflePlayedEntryIDs = Set(self.shufflePlayedLogicalIDs.compactMap { index in
+                prepared.entries.indices.contains(index) ? prepared.entries[index].id : nil
+            })
+            self.shufflePlayedLogicalIDs.removeAll()
+            self.largeLogicalContext = nil
+            self.largeLogicalWindowStart = nil
+            self.largeLogicalNextIndex = nil
+            self.queueStore.installPreparedQueue(retargeted)
+            self.syncRemoteCommandCapabilities()
             self.schedulePlaybackSessionPersistence()
             self.schedulePreparedNext()
         }
@@ -2101,7 +2226,7 @@ public final class AuralisAppModel: ObservableObject {
     /// 随机播放指定数量的歌曲。整库随机属于自动发现：必须排除“不喜欢”的歌曲。
     /// 返回真正加入队列的数量，供 Agent 只在播放器已收到歌曲时报告成功。
     @discardableResult
-    public func playRandom(limit: Int = 30) -> Int {
+    public func playRandom(limit: Int = 24) -> Int {
         let candidates = catalog.tracks.filter { !isDisliked($0) }
         let tracks = Array(candidates.shuffled().prefix(max(1, limit)))
         guard !tracks.isEmpty else { return 0 }
@@ -2742,6 +2867,66 @@ public final class AuralisAppModel: ObservableObject {
         reconcileLibraryAddedDates(tracks: tracks, serverID: serverID)
         refreshHomeSnapshots()
     }
+
+    /// Now Playing 控件 UI smoke：构造一个无需网络/音频引擎即可切换的三首队列。
+    /// 只验证 UI → AppModel → QueueStore 的同步控制路径。
+    func installNowPlayingControlsUISmokeFixture() {
+        let serverID: ServerID = "now-playing-smoke"
+        let albumID: AlbumID = "now-playing-smoke-album"
+        let artistID: ArtistID = "now-playing-smoke-artist"
+        // Transport actions use the real engine. A nil stream URL raises a playback
+        // alert over the player, so supply deterministic local audio as well as metadata.
+        let audioURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("auralis-now-playing-smoke.wav")
+        let sampleCount: UInt32 = 8_000 * 180
+        var wave = Data("RIFF".utf8)
+        func appendUInt32(_ value: UInt32) {
+            var littleEndian = value.littleEndian
+            withUnsafeBytes(of: &littleEndian) { wave.append(contentsOf: $0) }
+        }
+        appendUInt32(36 + sampleCount)
+        wave.append(Data("WAVEfmt ".utf8))
+        appendUInt32(16)
+        wave.append(contentsOf: [1, 0, 1, 0]) // PCM, mono
+        appendUInt32(8_000)
+        appendUInt32(8_000)
+        wave.append(contentsOf: [1, 0, 8, 0]) // block alignment, 8-bit samples
+        wave.append(Data("data".utf8))
+        appendUInt32(sampleCount)
+        wave.append(Data(repeating: 128, count: Int(sampleCount)))
+        do {
+            try wave.write(to: audioURL, options: .atomic)
+        } catch {
+            assertionFailure("Unable to install Now Playing smoke audio: \(error)")
+            return
+        }
+        let tracks = ["A", "B", "C"].map { suffix in
+            Track(
+                id: TrackID(rawValue: "now-playing-smoke-\(suffix.lowercased())"),
+                serverID: serverID,
+                albumID: albumID,
+                artistID: artistID,
+                title: "Now Playing Smoke \(suffix)",
+                artistName: "Smoke Artist",
+                albumTitle: "Smoke Album",
+                duration: 180,
+                streamURL: audioURL
+            )
+        }
+
+        // UI smoke 必须与开发机 / 模拟器之前持久化的播放模式完全隔离。
+        // 若残留 shuffle，点击一次“下一首”可能合法地跳到 C，测试却会误报按钮失效。
+        setShuffle(false)
+        setRepeatMode(.off)
+        largeLogicalContext = nil
+        largeLogicalWindowStart = nil
+        largeLogicalNextIndex = nil
+        queue = tracks
+        currentTrack = tracks[0]
+        playbackPosition = 0
+        playbackState = .paused
+    }
+
 #endif
 
     /// 测试钩子：确定性等待 apply() 排队的后台派生（首页货架 / 随机音乐 /
@@ -2976,12 +3161,12 @@ public final class AuralisAppModel: ObservableObject {
     /// 不在 body 里做任何 O(n) 计算，避免首页滚动卡顿与重复全表遍历。
     /// 各模块数据规则：
     /// - 很久没听：播放过（playCount>0）但不在最近播放历史里。当前只有播放次数与最近播放顺序、
-    ///   没有「每首歌最后播放时间戳」，因此以「不在最近 100 次播放内」（recentlyPlayedIDs 上限 100）
+    ///   没有「每首歌最后播放时间戳」，因此以「不在最近 50 首播放记录内」（recentlyPlayedIDs 上限 50）
     ///   作为「较久未播放」的产品定义；按播放次数降序展示（更常听但很久没听的最靠前）。
     /// - 从未播放：播放次数为 0 且不在播放历史（定义不依赖添加时间；展示排序用入库时间倒序，
     ///   让「最新入库但还没听过」的排前面）。
     /// - 最近添加：近 30 天真正新增的歌曲，标题显示「近30天新增 N 首」。
-    /// - 收藏里随便听：从真实收藏随机采样 18 首，刷新时采样一次，换一批时重新采样（不发网络请求）。
+    /// - 收藏里随便听：从真实收藏随机采样 24 首，刷新时采样一次，换一批时重新采样（不发网络请求）。
     /// - 常听艺术家 / 常听专辑：按真实播放次数聚合统计，仅包含播放过的。
     private func refreshHomeSnapshots() {
         homeStore.refresh(

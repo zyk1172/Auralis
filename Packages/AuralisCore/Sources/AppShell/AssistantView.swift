@@ -39,15 +39,34 @@ struct AssistantDockInputLayout {
         return (metrics.dockHeight + metrics.spacing) * normalized(collapseProgress)
     }
 
+    /// safeAreaInset 的真实布局高度必须稳定，不能随着 Dock 展开/收拢变化。
+    /// 否则聊天列表位于底部时，viewport 高度会变化约一个 Dock 高度，
+    /// 反过来再次触发 scroll geometry，形成“回弹 → 展开 → 收拢”的反馈环。
     static func bottomPadding(
         focused: Bool,
         metrics: BottomChromeMetrics,
         collapseProgress: CGFloat,
         focusedBottomPadding: CGFloat = AuralisSpacing.small
     ) -> CGFloat {
-        guard !focused else { return focusedBottomPadding }
-        return metrics.bottomPadding
-            + (metrics.spacing + metrics.dockHeight) * (1 - normalized(collapseProgress))
+        _ = collapseProgress
+        return focused ? focusedBottomPadding : metrics.bottomPadding
+    }
+
+    /// 视觉上仍保持原布局：展开态输入栏位于主 Dock 上方，紧凑态降到底部。
+    /// 用 offset 完成这段位移，offset 不参与 safeAreaInset 测量。
+    static func verticalLift(
+        focused: Bool,
+        metrics: BottomChromeMetrics,
+        collapseProgress: CGFloat
+    ) -> CGFloat {
+        guard !focused else { return 0 }
+        return (metrics.spacing + metrics.dockHeight) * (1 - normalized(collapseProgress))
+    }
+
+    /// 聊天内容末尾保留一段恒定、可滚动的净空，保证展开态输入栏不会覆盖最后消息。
+    /// 这是 content padding，不改变 ScrollView viewport，因此不会参与 Dock 反馈环。
+    static func scrollBottomClearance(metrics: BottomChromeMetrics) -> CGFloat {
+        metrics.spacing + metrics.dockHeight
     }
 
     private static func normalized(_ progress: CGFloat) -> CGFloat {
@@ -110,6 +129,13 @@ struct AssistantView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+#if os(iOS)
+            // AI 助手标题固定在与首页 / 音乐库相同的左上层级；
+            // Provider 状态放在标题下方，不再用系统导航栏制造顶部空白。
+            header
+            Divider()
+#endif
+
             // iPhone 与 iPad 统一：会话列表始终以 sheet 呈现（不再有 regular-width 的
             // 桌面式 Sidebar 分支）；宽屏只通过可用宽度约束布局，不切换 UI 架构。
             conversation
@@ -470,68 +496,84 @@ struct AssistantView: View {
     /// 与迷你播放条处于同一屏幕位置（主菜单栏之上），列表滚动区自动避让，
     /// 键盘弹出时随之上移，不再被遮挡、也不与主菜单栏重叠。
     private var conversation: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: AuralisSpacing.large) {
-                        if agent.messages.isEmpty { emptyState }
-                        conversationMessageRows()
-                        if agent.isRunning { runningIndicator }
-                        Color.clear
-                            .frame(height: 1)
-                            .id(Self.conversationEndID)
-                    }
-                    .padding(AuralisSpacing.large)
-                    .background {
-                        GeometryReader { geometry in
-                            Color.clear.preference(
-                                key: AssistantConversationContentBottomPreferenceKey.self,
-                                value: geometry.frame(in: .named(Self.conversationScrollCoordinateSpace)).maxY
-                            )
-                        }
-                    }
-                    // 点击聊天空白区域收起键盘（不影响卡片自身的点按）。
-                    .onTapGesture { assistantInputFocused = false }
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: AuralisSpacing.large) {
+                    if agent.messages.isEmpty { emptyState }
+                    conversationMessageRows()
+                    if agent.isRunning { runningIndicator }
+                    Color.clear
+                        .frame(height: 1)
+                        .id(Self.conversationEndID)
                 }
+                .padding(AuralisSpacing.large)
+#if os(iOS)
+                // 固定的可滚动末尾净空：输入栏展开/收拢只改变视觉 offset，
+                // 不再改变 ScrollView 的 viewport 高度。
+                .padding(
+                    .bottom,
+                    AssistantDockInputLayout.scrollBottomClearance(
+                        metrics: bottomDockScroll?.metrics ?? .standard
+                    )
+                )
+#endif
                 .background {
                     GeometryReader { geometry in
                         Color.clear.preference(
-                            key: AssistantConversationViewportBottomPreferenceKey.self,
+                            key: AssistantConversationContentBottomPreferenceKey.self,
                             value: geometry.frame(in: .named(Self.conversationScrollCoordinateSpace)).maxY
                         )
                     }
                 }
-                .coordinateSpace(name: Self.conversationScrollCoordinateSpace)
-                .reportsBottomDockScroll(source: .assistant)
-                // 向下拖动聊天列表时交互式收起键盘。
-                .scrollDismissesKeyboard(.immediately)
-                // 首次打开 / 切换历史会话也必须落在最新消息，而不仅是新消息 append 时。
-                .onAppear {
-                    isFollowingConversationOutput = true
-                    scrollConversationToEnd(proxy, animated: false, force: true)
+                // 点击聊天空白区域收起键盘（不影响卡片自身的点按）。
+                .onTapGesture { assistantInputFocused = false }
+            }
+#if os(macOS)
+            // macOS 仍沿用页内顶部栏；iOS 的 header 已固定在 ScrollView 外层。
+            .safeAreaInset(edge: .top, spacing: 0) {
+                VStack(spacing: 0) {
+                    header
+                    Divider()
                 }
-                .onChange(of: agent.activeSessionID) { _, _ in
-                    isFollowingConversationOutput = true
-                    scrollConversationToEnd(proxy, animated: false, force: true)
+                .background(theme.colorTokens.background.color)
+            }
+#endif
+            .background {
+                GeometryReader { geometry in
+                    Color.clear.preference(
+                        key: AssistantConversationViewportBottomPreferenceKey.self,
+                        value: geometry.frame(in: .named(Self.conversationScrollCoordinateSpace)).maxY
+                    )
                 }
-                .onChange(of: agent.messages.count) { _, _ in
-                    scrollConversationToEnd(proxy, animated: true)
-                }
-                // 流式文字与工具进度通常替换同一条消息，消息数量不变；监听发布事件
-                // 并延后一帧，等新高度完成布局后再贴到底部。
-                .onReceive(agent.objectWillChange) { _ in
-                    scrollConversationToEnd(proxy, animated: false)
-                }
-                .onPreferenceChange(AssistantConversationViewportBottomPreferenceKey.self) { value in
-                    conversationViewportBottom = value
-                    updateConversationAutoFollowState()
-                }
-                .onPreferenceChange(AssistantConversationContentBottomPreferenceKey.self) { value in
-                    conversationContentBottom = value
-                    updateConversationAutoFollowState()
-                }
+            }
+            .coordinateSpace(name: Self.conversationScrollCoordinateSpace)
+            .reportsBottomDockScroll(source: .assistant)
+            // 向下拖动聊天列表时交互式收起键盘。
+            .scrollDismissesKeyboard(.immediately)
+            // 首次打开 / 切换历史会话也必须落在最新消息，而不仅是新消息 append 时。
+            .onAppear {
+                isFollowingConversationOutput = true
+                scrollConversationToEnd(proxy, animated: false, force: true)
+            }
+            .onChange(of: agent.activeSessionID) { _, _ in
+                isFollowingConversationOutput = true
+                scrollConversationToEnd(proxy, animated: false, force: true)
+            }
+            .onChange(of: agent.messages.count) { _, _ in
+                scrollConversationToEnd(proxy, animated: true)
+            }
+            // 流式文字与工具进度通常替换同一条消息，消息数量不变；监听发布事件
+            // 并延后一帧，等新高度完成布局后再贴到底部。
+            .onReceive(agent.objectWillChange) { _ in
+                scrollConversationToEnd(proxy, animated: false)
+            }
+            .onPreferenceChange(AssistantConversationViewportBottomPreferenceKey.self) { value in
+                conversationViewportBottom = value
+                updateConversationAutoFollowState()
+            }
+            .onPreferenceChange(AssistantConversationContentBottomPreferenceKey.self) { value in
+                conversationContentBottom = value
+                updateConversationAutoFollowState()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -640,8 +682,65 @@ struct AssistantView: View {
     }
 
     private var header: some View {
+#if os(iOS)
+        HStack(alignment: .top, spacing: AuralisSpacing.medium) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(String(localized: "AI 助手", bundle: .module))
+                    .font(.largeTitle.bold())
+                    .foregroundStyle(theme.colorTokens.primaryText.color)
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+
+                if isLive {
+                    Label(settings.model, systemImage: "checkmark.seal.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(theme.colorTokens.success.color)
+                        .lineLimit(1)
+                } else {
+                    Label(
+                        String(localized: "未配置模型接口", bundle: .module),
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(theme.colorTokens.warning.color)
+                    .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: AuralisSpacing.small)
+
+            HStack(spacing: AuralisSpacing.xSmall) {
+                if !isLive {
+                    assistantHeaderIconButton(
+                        symbol: "gearshape",
+                        accessibilityLabel: String(localized: "配置 AI", bundle: .module),
+                        help: String(localized: "配置 AI", bundle: .module)
+                    ) {
+                        model.selectTopLevelSection(.settings)
+                    }
+                }
+
+                assistantHeaderIconButton(
+                    symbol: "magnifyingglass",
+                    accessibilityLabel: String(localized: "搜索音乐库", bundle: .module),
+                    help: String(localized: "搜索音乐库（兜底）", bundle: .module)
+                ) {
+                    presentedSheet = .librarySearch
+                }
+
+                sessionListButton
+            }
+            .padding(.top, 2)
+        }
+        .padding(.horizontal, IOSTopLevelChromeMetrics.horizontalPadding)
+        .padding(.vertical, IOSTopLevelChromeMetrics.verticalPadding)
+        .frame(minHeight: IOSTopLevelChromeMetrics.titleWithSubtitleHeight)
+        .frame(maxWidth: IOSLayoutMetrics.readableContentMaxWidth)
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("auralis.assistant.header")
+#else
         HStack(spacing: AuralisSpacing.medium) {
-            // 一行：模型名称 + 状态，与右侧按钮平齐。
             if isLive {
                 Label(settings.model, systemImage: "checkmark.seal.fill")
                     .font(.subheadline)
@@ -672,6 +771,7 @@ struct AssistantView: View {
         }
         .padding(AuralisSpacing.large)
         .accessibilityElement(children: .contain)
+#endif
     }
 
     /// 新建会话仅保留在会话页顶部；进入批量管理后，全选收纳到同一管理按钮中。
@@ -1052,7 +1152,15 @@ private struct AssistantDockInputBarLayout: View {
                     collapseProgress: collapseProgress
                 )
             )
-            // 输入框与根 Dock 读取同一个端点状态，并使用同一固定时长曲线。
+            .offset(
+                y: -AssistantDockInputLayout.verticalLift(
+                    focused: focused,
+                    metrics: metrics,
+                    collapseProgress: collapseProgress
+                )
+            )
+            // vertical offset 与横向收窄都只是输入栏自身的视觉变化；
+            // safeAreaInset 的测量高度保持不变，因此聊天 ScrollView 不会因 Dock 动画重排。
             .animation(
                 BottomDockMotion.animation(reduceMotion: reduceMotion),
                 value: collapseProgress

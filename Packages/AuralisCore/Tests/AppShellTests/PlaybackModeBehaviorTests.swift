@@ -91,6 +91,95 @@ struct PlaybackModeBehaviorTests {
         #expect(model.currentTrack.id.rawValue == "t3")
     }
 
+    @Test("从普通上下文点歌后立即点下一首也必须切换")
+    @MainActor
+    func immediateNextAfterNormalContextSelection() {
+        let tracks = (0..<20).map { track("context-\($0)") }
+        let model = makeModel(tracks: tracks)
+
+        model.playTrack(tracks[5], in: tracks)
+        #expect(model.canGoNext)
+        model.next()
+
+        #expect(model.currentTrack.id.rawValue == "context-6")
+    }
+
+    @Test("从大型资料库点歌后立即点下一首也必须切换")
+    @MainActor
+    func immediateNextAfterLargeContextSelection() {
+        let tracks = (0..<620).map { track("large-context-\($0)") }
+        let model = makeModel(tracks: tracks)
+
+        model.playTrack(tracks[510], in: tracks)
+        #expect(model.canGoNext)
+        model.next()
+
+        #expect(model.currentTrack.id.rawValue == "large-context-511")
+    }
+
+    @Test("中等上下文先提供即时下一首，再后台补齐完整队列")
+    @MainActor
+    func mediumContextKeepsImmediateNextAndCompletesQueue() async {
+        let tracks = (0..<200).map { track("medium-context-\($0)") }
+        let model = makeModel(tracks: tracks)
+
+        model.playTrack(tracks[90], in: tracks)
+        #expect(model.canGoNext)
+        model.next()
+        #expect(model.currentTrack.id.rawValue == "medium-context-91")
+
+        for _ in 0..<500 {
+            if model.queue.count == tracks.count { break }
+            await Task.yield()
+        }
+
+        #expect(model.queue.count == tracks.count)
+        #expect(model.currentTrack.id.rawValue == "medium-context-91")
+        #expect(model.canGoNext)
+    }
+
+    @Test("中等上下文转为完整队列后保留随机已播放 occurrence")
+    @MainActor
+    func mediumPreparationPreservesShuffleHistory() async {
+        let tracks = (0..<65).map { track("medium-shuffle-\($0)") }
+        let model = makeModel(tracks: tracks)
+        model.setShuffle(true)
+        model.setRepeatMode(.off)
+        model.playTrack(tracks[30], in: tracks)
+        for _ in 0..<500 {
+            if model.queue.count == tracks.count { break }
+            await Task.yield()
+        }
+        #expect(model.queue.count == tracks.count)
+        var visited: Set<TrackID> = [model.currentTrack.id]
+        for _ in 1..<tracks.count {
+            #expect(model.canGoNext)
+            model.next()
+            #expect(visited.insert(model.currentTrack.id).inserted)
+        }
+        #expect(!model.canGoNext)
+        #expect(visited.count == tracks.count)
+    }
+
+    @Test("中等上下文后台准备不能覆盖用户随后编辑的队列")
+    @MainActor
+    func staleMediumPreparationCannotOverwriteQueueEdit() async {
+        let tracks = (0..<200).map { track("medium-edit-\($0)") }
+        let extra = track("medium-edit-extra")
+        let model = makeModel(tracks: tracks + [extra])
+
+        model.playTrack(tracks[90], in: tracks)
+        model.appendToQueue(extra)
+
+        for _ in 0..<200 {
+            await Task.yield()
+        }
+
+        #expect(model.queue.count == tracks.count + 1)
+        #expect(model.queue.last?.id.rawValue == "medium-edit-extra")
+        #expect(model.currentTrack.id.rawValue == "medium-edit-90")
+    }
+
     // MARK: - 顺序（repeat-off）
 
     @Test("repeatOff：队尾自然播完暂停，不切歌")

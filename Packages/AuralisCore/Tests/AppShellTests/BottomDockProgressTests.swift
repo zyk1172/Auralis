@@ -32,6 +32,102 @@ struct BottomDockProgressTests {
         #expect(BottomDockProgressReducer.terminalProgress(for: .init(width: 2, height: 320)) == 0)
     }
 
+    @Test("原生滚动观察按 44pt 量化且顶部回弹不误触发")
+    func nativeScrollBucketsIgnoreRubberBand() {
+        #expect(BottomDockProgressReducer.scrollBucket(for: -120) == 0)
+        #expect(BottomDockProgressReducer.scrollBucket(for: 0) == 0)
+        #expect(BottomDockProgressReducer.scrollBucket(for: 43.9) == 0)
+        #expect(BottomDockProgressReducer.scrollBucket(for: 44) == 1)
+        #expect(BottomDockProgressReducer.scrollBucket(for: 95) == 2)
+
+        #expect(BottomDockProgressReducer.terminalProgress(oldScrollBucket: 0, newScrollBucket: 1) == 1)
+        #expect(BottomDockProgressReducer.terminalProgress(oldScrollBucket: 2, newScrollBucket: 1) == 0)
+        #expect(BottomDockProgressReducer.terminalProgress(oldScrollBucket: 1, newScrollBucket: 1) == nil)
+    }
+
+    @Test("底部 rubber-band 不产生额外 Dock 桶变化")
+    func bottomRubberBandIsClampedToMaximumScrollOffset() {
+        let maximum: CGFloat = 176
+
+        let atBottom = BottomDockProgressReducer.scrollBucket(
+            for: maximum,
+            maximumOffset: maximum
+        )
+        let overscrolled = BottomDockProgressReducer.scrollBucket(
+            for: maximum + 120,
+            maximumOffset: maximum
+        )
+        let bouncingBack = BottomDockProgressReducer.scrollBucket(
+            for: maximum + 18,
+            maximumOffset: maximum
+        )
+
+        #expect(atBottom == overscrolled)
+        #expect(atBottom == bouncingBack)
+        #expect(
+            BottomDockProgressReducer.terminalProgress(
+                oldScrollBucket: overscrolled,
+                newScrollBucket: bouncingBack
+            ) == nil
+        )
+    }
+
+    @Test("底部临界值 settling 不会反向展开 Dock")
+    func bottomBoundarySettlingUsesHysteresis() {
+        // 177→175 会跨过旧的 44pt bucket 边界（4→3），但并不是用户回滚。
+        let collapsed = BottomDockProgressReducer.hysteresisStep(
+            anchor: 177,
+            offset: 175,
+            collapseProgress: 1
+        )
+        #expect(collapsed.terminalProgress == nil)
+        #expect(collapsed.anchor == 177)
+
+        // 只有从实际最大值反向移动满 44pt 才展开。
+        let expanded = BottomDockProgressReducer.hysteresisStep(
+            anchor: collapsed.anchor,
+            offset: 133,
+            collapseProgress: 1
+        )
+        #expect(expanded.terminalProgress == 0)
+        #expect(expanded.anchor == 133)
+    }
+
+    @Test("展开态也要求真实向下滚满 44pt 才收拢")
+    func expandedDockRequiresFullForwardTravel() {
+        let shortMove = BottomDockProgressReducer.hysteresisStep(
+            anchor: 100,
+            offset: 143,
+            collapseProgress: 0
+        )
+        #expect(shortMove.terminalProgress == nil)
+        #expect(shortMove.anchor == 100)
+
+        let collapse = BottomDockProgressReducer.hysteresisStep(
+            anchor: shortMove.anchor,
+            offset: 144,
+            collapseProgress: 0
+        )
+        #expect(collapse.terminalProgress == 1)
+        #expect(collapse.anchor == 144)
+    }
+
+    @Test("滚动采样同时裁掉顶部和底部 rubber-band")
+    func clampedScrollSampleRemovesRubberBand() {
+        #expect(
+            BottomDockProgressReducer.clampedScrollSample(
+                zeroBasedOffset: -30,
+                maximumOffset: 177.8
+            ) == 0
+        )
+        #expect(
+            BottomDockProgressReducer.clampedScrollSample(
+                zeroBasedOffset: 999,
+                maximumOffset: 177.8
+            ) == 177
+        )
+    }
+
     @Test("播放器可视胶囊使用独立宽度几何")
     func playerWidthUsesVisibleCapsuleGeometry() {
         let fullWidth: CGFloat = 760
@@ -69,6 +165,82 @@ struct BottomDockProgressTests {
         #expect(metrics.reservedHeight(hasAccessory: true, collapseProgress: 1) == metrics.singleBarReservation)
         #expect(metrics.reservedHeight(hasAccessory: true, collapseProgress: 0.5) == (metrics.expandedReservation + metrics.singleBarReservation) / 2)
         #expect(metrics.withSafeAreaBottom(34).safeAreaBottom == 34)
+    }
+}
+
+
+@Suite("歌词页沉浸 Chrome")
+struct LyricsChromePolicyTests {
+    @Test("5 秒无操作后自动隐藏")
+    func autoHideDelayIsFiveSeconds() {
+        #expect(LyricsChromePolicy.autoHideDelay == .seconds(5))
+    }
+
+    @Test("向上滑隐藏、向下滑显示，短划和横划不触发")
+    func verticalGestureChoosesLyricsChromeTerminalState() {
+        #expect(LyricsChromePolicy.terminalHidden(for: .init(width: 2, height: -44)) == true)
+        #expect(LyricsChromePolicy.terminalHidden(for: .init(width: 2, height: 80)) == false)
+        #expect(LyricsChromePolicy.terminalHidden(for: .init(width: 1, height: -43)) == nil)
+        #expect(LyricsChromePolicy.terminalHidden(for: .init(width: 80, height: -20)) == nil)
+    }
+}
+
+@Suite("歌词逐字轻量强调")
+struct LyricCharacterAnimationPolicyTests {
+    @Test("逐行时间戳会换算为 0 到 1 的行内进度")
+    func lineProgressUsesAdjacentLineTimes() {
+        #expect(
+            LyricCharacterAnimationPolicy.lineProgress(
+                position: 12,
+                lineStart: 10,
+                nextLineStart: 14
+            ) == 0.5
+        )
+        #expect(
+            LyricCharacterAnimationPolicy.lineProgress(
+                position: 8,
+                lineStart: 10,
+                nextLineStart: 14
+            ) == 0
+        )
+        #expect(
+            LyricCharacterAnimationPolicy.lineProgress(
+                position: 20,
+                lineStart: 10,
+                nextLineStart: 14
+            ) == 1
+        )
+        #expect(
+            LyricCharacterAnimationPolicy.lineProgress(
+                position: 12,
+                lineStart: 10,
+                nextLineStart: nil
+            ) == nil
+        )
+    }
+
+    @Test("逐字强调波峰 1.12 倍，当前句基线 1.02 倍")
+    func characterScaleIsVisibleAndBounded() {
+        let active = LyricCharacterAnimationPolicy.scale(
+            unitIndex: 2,
+            unitCount: 5,
+            progress: 0.5
+        )
+        #expect(abs(active - 1.12) < 0.0001)
+
+        let distant = LyricCharacterAnimationPolicy.scale(
+            unitIndex: 0,
+            unitCount: 5,
+            progress: 0.5
+        )
+        #expect(abs(distant - 1.02) < 0.0001)
+
+        let fallback = LyricCharacterAnimationPolicy.scale(
+            unitIndex: 0,
+            unitCount: 5,
+            progress: nil
+        )
+        #expect(abs(fallback - 1.06) < 0.0001)
     }
 }
 

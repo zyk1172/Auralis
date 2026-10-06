@@ -32,33 +32,24 @@ struct LibraryView: View {
     }
 
     var body: some View {
+        // 音乐库的标题行与页内选择栏都属于固定 Chrome：
+        // 它们不随内容滚动，也不依赖系统 NavigationBar，因此不会产生顶部大片空白
+        // 或上滑后的 inline 小标题。
         VStack(spacing: 0) {
+            libraryTopHeader
+
             libraryScopeNavigation
-                .padding(.horizontal, AuralisSpacing.large)
-                .padding(.vertical, AuralisSpacing.small)
+                .padding(.horizontal, IOSTopLevelChromeMetrics.horizontalPadding)
+                .padding(.vertical, IOSTopLevelChromeMetrics.scopeVerticalPadding)
+
             Divider()
+
             scopeContent
                 .id(scope)
                 .transition(.opacity)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(theme.colorTokens.background.color)
-#if os(iOS)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    model.selectTopLevelSection(.settings)
-                } label: {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(theme.colorTokens.accent.color)
-                        .frame(width: 44, height: 44)
-                }
-                .buttonStyle(HapticPlainButtonStyle())
-                .accessibilityLabel(String(localized: "设置", bundle: .module))
-            }
-        }
-#endif
         .sheet(item: $playlistTarget) { track in
             AddToPlaylistSheet(model: model, theme: theme, track: track)
         }
@@ -104,6 +95,38 @@ struct LibraryView: View {
         } message: {
             Text(String(localized: "服务器上的歌单也会被删除，此操作不可撤销。", bundle: .module))
         }
+    }
+
+    private var libraryTopHeader: some View {
+        HStack(spacing: AuralisSpacing.medium) {
+            Text(String(localized: "音乐库", bundle: .module))
+                .font(.largeTitle.bold())
+                .foregroundStyle(theme.colorTokens.primaryText.color)
+                .lineLimit(1)
+                .accessibilityAddTraits(.isHeader)
+
+            Spacer(minLength: 0)
+
+            Button {
+                model.selectTopLevelSection(.settings)
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(theme.colorTokens.accent.color)
+                    .frame(
+                        width: IOSLayoutMetrics.minimumTouchTargetHeight,
+                        height: IOSLayoutMetrics.minimumTouchTargetHeight
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(HapticPlainButtonStyle())
+            .accessibilityLabel(String(localized: "设置", bundle: .module))
+        }
+        .padding(.horizontal, IOSTopLevelChromeMetrics.horizontalPadding)
+        .frame(height: IOSTopLevelChromeMetrics.titleOnlyHeight)
+        .frame(maxWidth: IOSLayoutMetrics.readableContentMaxWidth)
+        .frame(maxWidth: .infinity)
+        .accessibilityIdentifier("auralis.library.header")
     }
 
     private var libraryScopeNavigation: some View {
@@ -215,7 +238,10 @@ struct LibraryView: View {
             } else {
                 List(model.catalog.tracks) { track in
                     Button {
-                        model.selectAndPlay(track)
+                        // 直接点“歌曲”列表必须建立可继续播放的上下文。
+                        // 之前这里只 selectAndPlay 单曲，队列可能只有当前一首，
+                        // 播放页“下一首”因此看起来有按钮却无法切歌。
+                        model.playTrack(track, in: model.catalog.tracks)
                     } label: {
                         TrackRow(track: track, isCurrent: track.isSame(as: model.currentTrack), isDownloaded: model.isDownloaded(track), theme: theme)
                             .contentShape(Rectangle())
@@ -224,7 +250,7 @@ struct LibraryView: View {
                         .accessibilityLabel(String(localized: "播放《\(track.title)》，艺术家 \(track.artistName)", bundle: .module))
                         .accessibilityIdentifier("auralis.library.track.\(track.id.rawValue)")
                         .contextMenu {
-                            Button(String(localized: "立即播放", bundle: .module)) { model.selectAndPlay(track) }
+                            Button(String(localized: "立即播放", bundle: .module)) { model.playTrack(track, in: model.catalog.tracks) }
                             Button(String(localized: "下一首播放", bundle: .module)) { insertNext(track) }
                             Button(String(localized: "加入队列", bundle: .module)) {
                                 // R05：queueStore.append 直调，不重建 entry UUID——
@@ -692,7 +718,8 @@ struct LibraryView: View {
             } else {
                 List(model.favoriteTracks) { track in
                     Button {
-                        model.selectAndPlay(track)
+                        // 收藏列表同样作为一个真实播放上下文，下一首沿收藏顺序推进。
+                        model.playTrack(track, in: model.favoriteTracks)
                     } label: {
                         TrackRow(track: track, isCurrent: track.isSame(as: model.currentTrack), theme: theme)
                             .contentShape(Rectangle())
@@ -700,7 +727,7 @@ struct LibraryView: View {
                         .buttonStyle(HapticPlainButtonStyle())
                         .accessibilityLabel(String(localized: "播放《\(track.title)》，艺术家 \(track.artistName)", bundle: .module))
                         .contextMenu {
-                            Button(String(localized: "立即播放", bundle: .module)) { model.selectAndPlay(track) }
+                            Button(String(localized: "立即播放", bundle: .module)) { model.playTrack(track, in: model.favoriteTracks) }
                             Button(String(localized: "下一首播放", bundle: .module)) { insertNext(track) }
                             Button(track.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module)) { model.toggleFavorite(track) }
                         }

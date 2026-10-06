@@ -63,9 +63,10 @@ final class AuralisMusicHapticsUITests: XCTestCase {
     func testNowPlayingExposesMusicHapticsToggle() throws {
         launchSmokeApp(with: "-auralis-ui-smoke-now-playing")
 
-        XCTAssertTrue(app.staticTexts["正在播放"].waitForExistence(timeout: 15), "Now Playing sheet did not open from the deterministic smoke-test route")
+        // iOS Now Playing no longer has the old top segmented "正在播放" label;
+        // the stable more-actions identifier proves the full player is on screen.
         let more = app.buttons["auralis.nowPlaying.moreActions"].firstMatch
-        XCTAssertTrue(more.waitForExistence(timeout: 10), "Now Playing more-actions entry is missing")
+        XCTAssertTrue(more.waitForExistence(timeout: 15), "Now Playing sheet did not open from the deterministic smoke-test route")
         more.tap()
 
         // SwiftUI renders a Menu Toggle as a menu control rather than an
@@ -90,12 +91,11 @@ final class AuralisMusicHapticsUITests: XCTestCase {
     func testNowPlayingMoreMenuActionFiresOnFirstTap() throws {
         launchSmokeApp(with: "-auralis-ui-smoke-now-playing")
 
+        let more = app.buttons["auralis.nowPlaying.moreActions"].firstMatch
         XCTAssertTrue(
-            app.staticTexts["正在播放"].waitForExistence(timeout: 15),
+            more.waitForExistence(timeout: 15),
             "Now Playing sheet did not open from the deterministic smoke-test route"
         )
-        let more = app.buttons["auralis.nowPlaying.moreActions"].firstMatch
-        XCTAssertTrue(more.waitForExistence(timeout: 10), "Now Playing more-actions entry is missing")
         more.tap()
 
         // This regression used to require reopening/tapping the system Menu
@@ -111,6 +111,85 @@ final class AuralisMusicHapticsUITests: XCTestCase {
             title.waitForExistence(timeout: 4) || basicInfo.waitForExistence(timeout: 4),
             "A single tap on a Now Playing system Menu item must execute its action"
         )
+    }
+
+    func testNowPlayingTransportAndBottomTogglesAreInteractive() throws {
+        launchSmokeApp(with: "-auralis-ui-smoke-now-playing")
+
+        let trackIdentity = app.descendants(matching: .any)["auralis.nowPlaying.trackIdentity"].firstMatch
+        XCTAssertTrue(trackIdentity.waitForExistence(timeout: 15), "Now Playing track identity is missing")
+        XCTAssertTrue(trackIdentity.label.contains("Now Playing Smoke A"))
+
+        let playMode = app.buttons["auralis.nowPlaying.playMode"].firstMatch
+        XCTAssertTrue(playMode.waitForExistence(timeout: 10), "Playback mode button is missing")
+        XCTAssertTrue(
+            playMode.label.contains("列表"),
+            "Smoke fixture must always start in deterministic list order"
+        )
+
+        let next = app.buttons["auralis.nowPlaying.next"].firstMatch
+        XCTAssertTrue(next.waitForExistence(timeout: 10), "Next button is missing")
+        XCTAssertTrue(next.isEnabled, "Next button must be enabled for a three-track queue")
+        func waitForLabelContaining(_ expected: String, element: XCUIElement, message: String) {
+            let expectation = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "label CONTAINS %@", expected),
+                object: element
+            )
+            XCTAssertEqual(
+                XCTWaiter.wait(for: [expectation], timeout: 5),
+                .completed,
+                message
+            )
+        }
+
+        func waitForValue(_ expected: String, element: XCUIElement, message: String) {
+            let expectation = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value == %@", expected),
+                object: element
+            )
+            XCTAssertEqual(
+                XCTWaiter.wait(for: [expectation], timeout: 5),
+                .completed,
+                message
+            )
+        }
+
+        next.tap()
+        waitForLabelContaining(
+            "Now Playing Smoke B",
+            element: trackIdentity,
+            message: "A single tap on Next must advance to the next queue item"
+        )
+
+        // Previous restarts the current song after three seconds. Stop playback and
+        // seek to the beginning so this assertion specifically checks queue navigation.
+        app.buttons["auralis.nowPlaying.playPause"].firstMatch.tap()
+        let progress = app.descendants(matching: .any)["播放进度"].firstMatch
+        XCTAssertTrue(progress.waitForExistence(timeout: 5))
+        progress.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).tap()
+
+        let previous = app.buttons["auralis.nowPlaying.previous"].firstMatch
+        XCTAssertTrue(previous.waitForExistence(timeout: 5), "Previous button is missing")
+        previous.tap()
+        waitForLabelContaining(
+            "Now Playing Smoke A",
+            element: trackIdentity,
+            message: "Previous must return to the prior queue item when playback position is at the start"
+        )
+
+        let lyrics = app.buttons["auralis.nowPlaying.lyrics"].firstMatch
+        XCTAssertTrue(lyrics.waitForExistence(timeout: 5), "Lyrics button is missing")
+        lyrics.tap()
+        waitForValue("已打开", element: lyrics, message: "Lyrics must enter lyrics mode on first tap")
+        lyrics.tap()
+        waitForValue("未打开", element: lyrics, message: "Lyrics must return to artwork mode on second tap")
+
+        let queue = app.buttons["auralis.nowPlaying.queue"].firstMatch
+        XCTAssertTrue(queue.waitForExistence(timeout: 5), "Queue button is missing")
+        queue.tap()
+        waitForValue("已打开", element: queue, message: "Queue must enter queue mode on first tap")
+        queue.tap()
+        waitForValue("未打开", element: queue, message: "Queue must return to artwork mode on second tap")
     }
 
     func testAssistantSessionSheetSurvivesColdBootstrap() throws {
@@ -189,15 +268,17 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         // On the iPhone target the expanded player center is about 98pt above
         // the bottom edge (126pt container, 28pt player center). This coordinate
         // is intentionally outside the 62pt terminal Dock.
+        let nowPlayingIdentity = app.descendants(matching: .any)["auralis.nowPlaying.trackIdentity"].firstMatch
+
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.88)).tap()
         XCTAssertFalse(
-            app.staticTexts["正在播放"].waitForExistence(timeout: 1),
+            nowPlayingIdentity.waitForExistence(timeout: 1),
             "The old expanded player region must not open Now Playing after collapse"
         )
 
         compactPlayer.tap()
         XCTAssertTrue(
-            app.staticTexts["正在播放"].waitForExistence(timeout: 10),
+            nowPlayingIdentity.waitForExistence(timeout: 10),
             "The real compact player capsule must still open Now Playing"
         )
     }

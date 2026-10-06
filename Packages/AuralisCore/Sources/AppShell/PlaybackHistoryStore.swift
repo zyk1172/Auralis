@@ -39,7 +39,7 @@ struct PlaybackHistoryStore: Sendable {
             }
         }
         self.counts = migratedCounts
-        self.recentKeys = Array(Self.uniqued(migratedRecent).prefix(100))
+        self.recentKeys = Array(Self.uniqued(migratedRecent).prefix(50))
         self.deferredLegacyCounts = deferredCounts
         self.deferredLegacyRecentKeys = deferredRecent
     }
@@ -53,7 +53,7 @@ struct PlaybackHistoryStore: Sendable {
         let migratedRecent = deferredLegacyRecentKeys.map {
             GlobalID(serverID: serverID, remoteID: $0).description
         }
-        recentKeys = Array(Self.uniqued(migratedRecent + recentKeys).prefix(100))
+        recentKeys = Array(Self.uniqued(migratedRecent + recentKeys).prefix(50))
         deferredLegacyCounts.removeAll()
         deferredLegacyRecentKeys.removeAll()
         return true
@@ -75,7 +75,7 @@ struct PlaybackHistoryStore: Sendable {
             existing != globalID.description && seen.insert(existing).inserted
         }
         next.insert(globalID.description, at: 0)
-        if next.count > 100 { next.removeSubrange(100...) }
+        if next.count > 50 { next.removeSubrange(50...) }
         guard next != recentKeys else { return false }
         recentKeys = next
         return true

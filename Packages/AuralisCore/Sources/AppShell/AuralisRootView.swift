@@ -30,6 +30,79 @@ struct BottomDockProgressReducer: Sendable {
         else { return nil }
         return translation.height < 0 ? 1 : 0
     }
+
+    /// 将连续 scroll offset 量化为低频桶值。顶部 rubber-band 的负 offset
+    /// 始终归零，因此松手回弹不会反向触发 Dock 动画。
+    static func scrollBucket(for zeroBasedOffset: CGFloat) -> Int {
+        Int(floor(max(zeroBasedOffset, 0) / minimumVerticalSwipeDistance))
+    }
+
+    /// 同时裁掉底部 rubber-band。ScrollView 到达内容末尾后继续拖动时，
+    /// contentOffset 会短暂超过正常最大值；若直接量化，回弹过程会跨桶，
+    /// 被误判成一次“向回滚”，从而让 Dock 展开后又再次收拢。
+    static func scrollBucket(
+        for zeroBasedOffset: CGFloat,
+        maximumOffset: CGFloat
+    ) -> Int {
+        let clampedMaximum = max(maximumOffset, 0)
+        let clampedOffset = min(max(zeroBasedOffset, 0), clampedMaximum)
+        return Int(floor(clampedOffset / minimumVerticalSwipeDistance))
+    }
+
+    /// 内容向下推进（offset 桶增大）时收拢 Dock；用户向回滚（桶减小）时展开。
+    /// 同一桶内的高频滚动完全不发布状态变化。
+    static func terminalProgress(oldScrollBucket: Int, newScrollBucket: Int) -> CGFloat? {
+        if newScrollBucket > oldScrollBucket { return 1 }
+        if newScrollBucket < oldScrollBucket { return 0 }
+        return nil
+    }
+
+    /// Dock 的滚动方向判定不能直接依赖“相邻 bucket 增减”。到达底部后，
+    /// ScrollView settling 可能从 177pt 回到 175pt；旧实现会跨过 176pt
+    /// bucket 边界并误判成一次反向滚动。这里记录当前方向的极值，只有真正
+    /// 反向移动满一个 44pt 触控距离才允许切换终态。
+    struct HysteresisStep: Equatable, Sendable {
+        let anchor: CGFloat
+        let terminalProgress: CGFloat?
+    }
+
+    static func hysteresisStep(
+        anchor: CGFloat,
+        offset: CGFloat,
+        collapseProgress: CGFloat
+    ) -> HysteresisStep {
+        let clampedOffset = max(offset, 0)
+        let isCollapsed = collapseProgress >= 0.5
+
+        if isCollapsed {
+            // 收拢态持续向下滚时不断更新最大值；只有从这个最大值真正回滚
+            // minimumVerticalSwipeDistance 才展开。
+            let extreme = max(anchor, clampedOffset)
+            guard extreme - clampedOffset >= minimumVerticalSwipeDistance else {
+                return HysteresisStep(anchor: extreme, terminalProgress: nil)
+            }
+            return HysteresisStep(anchor: clampedOffset, terminalProgress: 0)
+        }
+
+        // 展开态持续向上（回滚）时不断更新最小值；只有从这个最小值真正
+        // 向内容末尾推进 minimumVerticalSwipeDistance 才收拢。
+        let extreme = min(anchor, clampedOffset)
+        guard clampedOffset - extreme >= minimumVerticalSwipeDistance else {
+            return HysteresisStep(anchor: extreme, terminalProgress: nil)
+        }
+        return HysteresisStep(anchor: clampedOffset, terminalProgress: 1)
+    }
+
+    /// 同时裁掉顶部与底部 rubber-band，并量化到整点，避免每个亚像素变化
+    /// 都触发 SwiftUI action。Hysteresis 再负责真正的 44pt 方向阈值。
+    static func clampedScrollSample(
+        zeroBasedOffset: CGFloat,
+        maximumOffset: CGFloat
+    ) -> Int {
+        let maximum = max(maximumOffset, 0)
+        let clamped = min(max(zeroBasedOffset, 0), maximum)
+        return Int(floor(clamped))
+    }
 }
 
 /// Dock 本体、页面预留空间和 AI 输入框共用同一套固定节奏。
@@ -293,6 +366,7 @@ public struct AuralisRootView: View {
             model.selectTopLevelSection(.home)
         }
         if arguments.contains("-auralis-ui-smoke-now-playing") {
+            model.installNowPlayingControlsUISmokeFixture()
             model.isNowPlayingPresented = true
         }
         if isDockInteractionSmoke {
@@ -314,6 +388,16 @@ public struct AuralisRootView: View {
 /// - 浮动控件（Bottom Dock / AI 输入框）在 iPad 宽屏不铺满，居中、最大约 760pt；
 /// - 可读内容宽度上限约 960pt；
 /// - 播放页内容宽度上限约 680pt（与 NowPlayingView 既有策略一致）。
+/// 一级页面自定义顶部 Chrome。三页使用同一左边距和标题基线；
+/// 首页标题可随向上滚动离场，音乐库 / AI 助手保持固定。
+enum IOSTopLevelChromeMetrics {
+    static let horizontalPadding: CGFloat = AuralisSpacing.large
+    static let verticalPadding: CGFloat = AuralisSpacing.small
+    static let titleOnlyHeight: CGFloat = 60
+    static let titleWithSubtitleHeight: CGFloat = 76
+    static let scopeVerticalPadding: CGFloat = 6
+}
+
 enum IOSLayoutMetrics {
     /// 底部浮动控件（Dock / 输入框）在宽屏的最大宽度。
     static let floatingChromeMaxWidth: CGFloat = 760
@@ -427,11 +511,12 @@ private struct IOSMusicShell: View {
                         reduceMotion: reduceMotion
                     )
                 }
-                .navigationTitle(model.selectedSection.title)
-                // 顶部标题用系统大标题：字体大、与正文内容有明显区分（Apple Music 风格）。
-                // 不覆盖系统导航栏材质。iOS 26+ 会为标准导航栏自动采用 Liquid Glass；
-                // 之前把这里强制涂成主题纯色，导致顶部仍是旧式、不透明的导航栏。
-                .navigationBarTitleDisplayMode(.large)
+                // Home / Library / Assistant 使用自己的顶部 Chrome，完全关闭
+                // 系统 NavigationBar，避免 Large Title 预留大片空白，也避免上滑后
+                // 自动生成 inline 小标题。Search / Settings 仍保留系统导航栏。
+                .navigationTitle(usesCustomTopLevelChrome ? "" : model.selectedSection.title)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar(usesCustomTopLevelChrome ? .hidden : .visible, for: .navigationBar)
         }
         // Dock 切换的是应用一级分区；若当前停在设置/资料库的二级 NavigationLink，
         // 必须丢弃旧路径并回到新分区根页，不能让二级页面“悬在”新的根内容之上。
@@ -445,15 +530,16 @@ private struct IOSMusicShell: View {
             dockOverlay
                 .ignoresSafeArea(.keyboard, edges: .bottom)
         }
-        .sheet(isPresented: nowPlayingBinding) {
+        // 正在播放页必须真正覆盖整块屏幕。iOS 26 的 large sheet 会保留
+        // 明显的顶部外露区域和圆角，视觉上仍像半屏卡片；改为 fullScreenCover，
+        // 背景可延伸到状态栏，关闭手势由 NowPlayingView 自己的顶部拖拽柄承担。
+        .fullScreenCover(isPresented: nowPlayingBinding) {
             NowPlayingView(model: model, theme: themeStore.current)
                 .auralisZoomNavigationTransition(
                     sourceID: IOSNowPlayingTransitionID.player,
                     in: nowPlayingTransitionNamespace,
                     reduceMotion: reduceMotion
                 )
-                .presentationDragIndicator(.visible)
-                .presentationDetents([.large])
         }
         .sheet(isPresented: $model.shouldPresentServerSetup) {
             ServerConnectionSheet(model: model, theme: themeStore.current)
@@ -484,6 +570,15 @@ private struct IOSMusicShell: View {
                     Text(message)
                 }
             }
+        }
+    }
+
+    private var usesCustomTopLevelChrome: Bool {
+        switch model.selectedSection {
+        case .home, .library, .assistant:
+            true
+        case .search, .settings:
+            false
         }
     }
 
@@ -567,16 +662,13 @@ private struct IOSMusicShell: View {
 /// 将 Dock clearance 订阅限制在真正的滚动容器上，避免 NavigationStack、
 /// 当前页面和非滚动内容因 collapseProgress 变化而整体重新求值。
 private struct BottomDockScrollClearanceHost: View {
-    @ObservedObject var coordinator: HomeChromeState
+    let metrics: BottomChromeMetrics
 
     var body: some View {
+        // 始终预留展开态的最大空间。Dock 自身仍可做视觉 morph，但滚动容器的
+        // safe-area 高度不再跟着 0→1 动画逐帧改变，避免每帧重新 layout/measure。
         Color.clear
-            .frame(
-                height: coordinator.metrics.reservedHeight(
-                    hasAccessory: true,
-                    collapseProgress: coordinator.collapseProgress
-                )
-            )
+            .frame(height: metrics.expandedReservation)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
@@ -607,10 +699,13 @@ private enum DockPresentation: Equatable {
 /// 应加在真正可纵向滚动的 ScrollView 或 List 上。手势与系统滚动同时识别，
 /// 只读取纵向位移来驱动 Dock，不接管列表点击和横向货架。
 struct BottomDockScrollReportingModifier: ViewModifier {
-    /// 普通 Environment 值只传递引用，不会订阅 objectWillChange；滚动内容自身不应因
-    /// Dock 的每次进度发布而重新计算。只有下方 ProgressHost 负责重绘。
+    /// 只持有协调器引用；不以 @ObservedObject 订阅每一帧动画。
     @Environment(\.homeChromeState) private var coordinator
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// 当前滚动方向的极值锚点。它只在真实反向移动满 44pt 后翻转，
+    /// 因此底部 settling / rubber-band 不会让 Dock 连续弹跳。
+    @State private var scrollHysteresisAnchor: CGFloat?
+    @State private var isUserScrolling = false
     let source: HomeChromeScrollSource
 
     init(source: HomeChromeScrollSource = .home) {
@@ -619,34 +714,70 @@ struct BottomDockScrollReportingModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            // clearance 必须附着在实际的 ScrollView/List 上，才能把最后一项
-            // 的可滚动范围延伸到 compact Dock 上方；AssistantView 的输入框
-            // 已经拥有自己的 safeAreaInset，不能在这里再算一层。
+            // 始终使用系统 ScrollView/List 的原生橡皮筋。即使内容不足一屏，
+            // 向下拉也会与导航标题分离，松手由系统自动回弹。
+            .scrollBounceBehavior(.always, axes: .vertical)
+            // clearance 必须附着在实际滚动容器上；高度保持稳定，不能再把
+            // Dock 的动画进度喂给 safeAreaInset 触发逐帧重排。
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if let coordinator,
                    BottomDockReservationPolicy.scrollOwnsReservation(for: source) {
-                    BottomDockScrollClearanceHost(coordinator: coordinator)
+                    BottomDockScrollClearanceHost(metrics: coordinator.metrics)
+                }
+            }
+            // 不再向 ScrollView 叠加 DragGesture。原生 ScrollGeometry 只提供
+            // 裁掉 rubber-band 后的整点 offset；真正的方向变化由 44pt hysteresis
+            // 判定。这样 177→175 这类底部 settling 不会被当成“用户向回滚”。
+            .onScrollPhaseChange { _, phase in
+                // Lazy content measurement and deceleration settling can move the
+                // reported offset without a new user gesture. Only deliberate drag
+                // travel may select a Dock endpoint.
+                isUserScrolling = phase == .interacting
+                if !isUserScrolling { scrollHysteresisAnchor = nil }
+            }
+            .onScrollGeometryChange(for: Int.self) { geometry in
+                let zeroBasedOffset =
+                    geometry.contentOffset.y + geometry.contentInsets.top
+                let maximumOffset = max(
+                    geometry.contentSize.height
+                        - geometry.containerSize.height
+                        + geometry.contentInsets.top
+                        + geometry.contentInsets.bottom,
+                    0
+                )
+                return BottomDockProgressReducer.clampedScrollSample(
+                    zeroBasedOffset: zeroBasedOffset,
+                    maximumOffset: maximumOffset
+                )
+            } action: { oldSample, newSample in
+                guard let coordinator else { return }
+                guard isUserScrolling else {
+                    scrollHysteresisAnchor = CGFloat(newSample)
+                    return
+                }
+                let oldOffset = CGFloat(oldSample)
+                let newOffset = CGFloat(newSample)
+                let step = BottomDockProgressReducer.hysteresisStep(
+                    anchor: scrollHysteresisAnchor ?? oldOffset,
+                    offset: newOffset,
+                    collapseProgress: coordinator.collapseProgress
+                )
+                scrollHysteresisAnchor = step.anchor
+                guard let terminal = step.terminalProgress else { return }
+
+                coordinator.beginInteraction(source: source)
+                withAnimation(BottomDockMotion.animation(reduceMotion: reduceMotion)) {
+                    coordinator.setCollapseProgress(terminal)
                 }
             }
             .onAppear {
+                scrollHysteresisAnchor = nil
                 coordinator?.beginInteraction(source: source)
             }
             .onDisappear {
+                scrollHysteresisAnchor = nil
                 coordinator?.endInteraction(source: source)
             }
-            .simultaneousGesture(
-                DragGesture(minimumDistance: BottomDockProgressReducer.minimumVerticalSwipeDistance)
-                    .onChanged { value in
-                        guard BottomDockProgressReducer.terminalProgress(for: value.translation) != nil else { return }
-                        coordinator?.beginInteraction(source: source)
-                    }
-                    .onEnded { value in
-                        guard BottomDockProgressReducer.terminalProgress(for: value.translation) != nil else { return }
-                        withAnimation(BottomDockMotion.animation(reduceMotion: reduceMotion)) {
-                            coordinator?.finishInteraction(source: source, translation: value.translation)
-                        }
-                    }
-            )
     }
 }
 
@@ -1630,6 +1761,8 @@ struct BrowseDetailSheet: View {
         content
             .navigationTitle(title)
             #if os(iOS)
+            // 一级页面隐藏系统栏，但 push 进入详情后必须恢复系统返回栏。
+            .toolbar(.visible, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {

@@ -1154,7 +1154,7 @@ public struct AgentToolkit {
             guard !gids.isEmpty else { return .fail(call, descriptor, "该艺术家没有可播放的歌曲") }
             return mutationToolResult(call, descriptor, await bridge.replaceQueue(globalIDs: gids))
         case "playback_play_random":
-            let limit = min(max((try? intParam(call, "limit")) ?? 30, 1), 200)
+            let limit = min(max((try? intParam(call, "limit")) ?? 24, 1), 200)
             return mutationToolResult(call, descriptor, await bridge.playRandom(limit: limit))
         case "playback_play_playlist":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)

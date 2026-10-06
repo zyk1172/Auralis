@@ -13,6 +13,25 @@ private enum HomeCardMetrics {
     static let titleHeight: CGFloat = 20
 }
 
+/// 首页顶部标题的纯滚动策略：顶部 overscroll 不移动标题；
+/// 只有真实向上滚动才推动标题，最多移动一个标题高度。
+struct HomeTopHeaderPolicy: Sendable {
+    static func offset(for zeroBasedScrollOffset: CGFloat) -> CGFloat {
+        min(
+            max(zeroBasedScrollOffset, 0),
+            IOSTopLevelChromeMetrics.titleOnlyHeight
+        )
+    }
+
+    static func visibleHeight(for zeroBasedScrollOffset: CGFloat) -> CGFloat {
+        max(
+            IOSTopLevelChromeMetrics.titleOnlyHeight
+                - offset(for: zeroBasedScrollOffset),
+            0
+        )
+    }
+}
+
 /// 首页：由模块注册表驱动，不再写死 `if showX` 分支。
 /// - 渲染列表来自用户布局偏好（HomeLayoutStore，UserDefaults 持久化）；
 /// - 关闭的模块完全不渲染、不留空白、不查询数据、不加载封面（从模块列表移除）；
@@ -21,6 +40,8 @@ struct HomeView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     let browseTransitionNamespace: Namespace.ID?
+    /// 首页标题只跟随向上的真实滚动离场；顶部下拉 overscroll 不移动标题。
+    @State private var topHeaderScrollOffset: CGFloat = 0
 
     init(
         model: AuralisAppModel,
@@ -35,24 +56,70 @@ struct HomeView: View {
     private var colors: ThemeColors { theme.colorTokens }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: AuralisSpacing.xLarge) {
-                quickEntriesSection
-                ForEach(visibleContentModules) { module in
-                    moduleSection(module)
+        ZStack(alignment: .top) {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: AuralisSpacing.xLarge) {
+                    quickEntriesSection
+                    ForEach(visibleContentModules) { module in
+                        moduleSection(module)
+                    }
+                    librarySummary
                 }
-                librarySummary
+                .padding(.horizontal, AuralisSpacing.large)
+                // 标题占位是固定值，不跟随滚动动画改 layout。
+                // 下拉时只有内容被橡皮筋拉开；向上滚动时标题与内容同步向上，直到标题完全离场。
+                .padding(.top, IOSTopLevelChromeMetrics.titleOnlyHeight + AuralisSpacing.small)
+                .padding(.bottom, AuralisSpacing.large)
+                // iPad 宽屏：主内容限宽并居中（可读宽度），卡片仍是固定 140pt，
+                // 宽屏只是自然多显示几张，不拉伸成超宽卡片。
+                .frame(maxWidth: IOSLayoutMetrics.readableContentMaxWidth)
+                .frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, AuralisSpacing.large)
-            .padding(.top, AuralisSpacing.medium)
-            .padding(.bottom, AuralisSpacing.large)
-            // iPad 宽屏：主内容限宽并居中（可读宽度），卡片仍是固定 140pt，
-            // 宽屏只是自然多显示几张，不拉伸成超宽卡片。
-            .frame(maxWidth: IOSLayoutMetrics.readableContentMaxWidth)
-            .frame(maxWidth: .infinity)
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                max(0, geometry.contentOffset.y + geometry.contentInsets.top)
+            } action: { _, offset in
+                topHeaderScrollOffset = HomeTopHeaderPolicy.offset(
+                    for: offset
+                )
+            }
+            .reportsBottomDockScroll(source: .home)
+
+            // 用固定高度 viewport 裁掉已经被向上推出的标题。
+            // 之前只做 offset、没有 clip，标题虽然离开内容区仍会继续画进状态栏，
+            // 看起来像“吸附”在最顶层。现在滑满一个标题高度后会完全消失。
+            Color.clear
+                .frame(height: IOSTopLevelChromeMetrics.titleOnlyHeight)
+                .overlay(alignment: .top) {
+                    homeTopHeader
+                        .offset(y: -topHeaderScrollOffset)
+                }
+                .clipped()
+                .allowsHitTesting(
+                    HomeTopHeaderPolicy.visibleHeight(for: topHeaderScrollOffset) > 0
+                )
         }
-        .reportsBottomDockScroll(source: .home)
         .background(ambientBackground)
+    }
+
+    /// 首页标题位于状态栏下第一排。它不使用 NavigationBar：
+    /// - 下拉 overscroll 时标题固定、内容独立下拉并原生回弹；
+    /// - 上滑时整排向上离场；
+    /// - 离场后不会生成系统 inline 小标题。
+    private var homeTopHeader: some View {
+        HStack(spacing: AuralisSpacing.medium) {
+            Text(String(localized: "首页", bundle: .module))
+                .font(.largeTitle.bold())
+                .foregroundStyle(colors.primaryText.color)
+                .lineLimit(1)
+                .accessibilityAddTraits(.isHeader)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, IOSTopLevelChromeMetrics.horizontalPadding)
+        .frame(height: IOSTopLevelChromeMetrics.titleOnlyHeight)
+        .frame(maxWidth: IOSLayoutMetrics.readableContentMaxWidth)
+        .frame(maxWidth: .infinity)
+        .accessibilityIdentifier("auralis.home.title")
     }
 
     // MARK: - 模块可见性（用户开启 + 有数据）
