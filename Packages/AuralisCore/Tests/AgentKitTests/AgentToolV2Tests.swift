@@ -1285,6 +1285,19 @@ struct PlaybackRandomAndSystemToolsTests {
         #expect(bridge.randomLimits == [10])
     }
 
+    @Test("playback_play_random 未指定数量时默认 24 首")
+    func playRandomDefaultsToTwentyFour() async throws {
+        let store = try makeV2Store()
+        try await seedV2(store, [makeV2Track(serverID: "s", remoteID: "1", title: "A")])
+        let bridge = MockAgentBridge(activeServerID: "s")
+        let result = await AgentToolkit.executeV2(
+            ToolCall(name: "playback_play_random", arguments: [:]),
+            bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: nil
+        )
+        #expect(result.success)
+        #expect(bridge.randomLimits == [24])
+    }
+
     @Test("ios_siri_get_status 走系统服务")
     func siriStatus() async throws {
         let store = try makeV2Store()

@@ -26,6 +26,21 @@ func playbackHistoryQualification() {
     #expect(store.counts["server:song"] == 1)
 }
 
+@Test("最近播放最多保留 50 首并保留最新顺序")
+func recentPlaybackIsCappedAtFifty() {
+    var store = PlaybackHistoryStore(counts: [:], recentKeys: [])
+
+    for index in 0..<60 {
+        _ = store.markStarted(
+            GlobalID(serverID: "server", remoteID: "song-\(index)")
+        )
+    }
+
+    #expect(store.recentKeys.count == 50)
+    #expect(store.recentKeys.first == "server:song-59")
+    #expect(store.recentKeys.last == "server:song-10")
+}
+
 @Test("短曲播放到一半即可计数并按服务器隔离")
 func shortPlaybackQualifiesAtHalf() {
     let first = GlobalID(serverID: "one", remoteID: "same")

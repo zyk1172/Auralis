@@ -46,7 +46,7 @@ enum HomeSnapshotBuilder {
         let mostPlayed = tracks
             .filter { (playCounts[$0.id] ?? 0) > 0 }
             .sorted { (playCounts[$0.id] ?? 0, $0.title) > (playCounts[$1.id] ?? 0, $1.title) }
-        let recentlyPlayed = recentIDs.compactMap { trackByID[$0] }
+        let recentlyPlayed = Array(recentIDs.compactMap { trackByID[$0] }.prefix(50))
         let recentlyAdded = tracks.sorted { addedDate($0) > addedDate($1) }
         let longUnplayed = Array(mostPlayed.filter { !recentSet.contains($0.id) && !isDisliked($0) }.prefix(24))
         let neverPlayed = Array(recentlyAdded
@@ -83,7 +83,7 @@ enum HomeSnapshotBuilder {
             longUnplayed: longUnplayed,
             neverPlayed: neverPlayed,
             recentlyAdded30Days: recentlyAdded30Days,
-            favoriteRandom: Array(favorites.filter { !isDisliked($0) }.shuffled().prefix(18)),
+            favoriteRandom: Array(favorites.filter { !isDisliked($0) }.shuffled().prefix(24)),
             topArtists: topArtists,
             topAlbums: topAlbums,
             artistPlayCounts: artistTotals,

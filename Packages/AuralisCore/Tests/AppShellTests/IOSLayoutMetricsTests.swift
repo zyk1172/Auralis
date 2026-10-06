@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import CoreGraphics
+import Domain
 import Testing
 @testable import AppShell
 
@@ -59,9 +60,82 @@ struct IOSLayoutMetricsTests {
         #expect(IOSLayoutMetrics.readableContentWidth(containerWidth: -1) == 0)
     }
 
+    @Test("首页标题下拉固定、上滑后完整离场")
+    func homeHeaderSeparatesPullDownFromUpwardScroll() {
+        #expect(HomeTopHeaderPolicy.offset(for: -120) == 0)
+        #expect(HomeTopHeaderPolicy.visibleHeight(for: -120) == IOSTopLevelChromeMetrics.titleOnlyHeight)
+
+        #expect(HomeTopHeaderPolicy.offset(for: 0) == 0)
+        #expect(HomeTopHeaderPolicy.offset(for: 24) == 24)
+        #expect(
+            HomeTopHeaderPolicy.offset(for: 500)
+                == IOSTopLevelChromeMetrics.titleOnlyHeight
+        )
+        #expect(HomeTopHeaderPolicy.visibleHeight(for: 500) == 0)
+    }
+
     @Test("播放页内容宽度 token 与浮动控件上限一致（不铺满宽屏）")
     func playerAndFloatingTokensStayBounded() {
         #expect(IOSLayoutMetrics.playerContentMaxWidth < IOSLayoutMetrics.readableContentMaxWidth)
         #expect(IOSLayoutMetrics.floatingChromeMaxWidth <= IOSLayoutMetrics.readableContentMaxWidth)
+    }
+
+    @Test("正在播放页按实际容器宽高切换横屏双栏")
+    func nowPlayingUsesLandscapeLayoutForWideContainers() {
+        #expect(!NowPlayingLayoutPolicy.usesLandscapeLayout(containerSize: CGSize(width: 390, height: 844)))
+        #expect(NowPlayingLayoutPolicy.usesLandscapeLayout(containerSize: CGSize(width: 844, height: 390)))
+        #expect(NowPlayingLayoutPolicy.usesLandscapeLayout(containerSize: CGSize(width: 1194, height: 834)))
+        #expect(!NowPlayingLayoutPolicy.usesLandscapeLayout(containerSize: CGSize(width: 0, height: 0)))
+    }
+
+    @Test("播放时封面放大，暂停时保持同布局内缩小")
+    func nowPlayingArtworkFollowsPlaybackState() {
+        #expect(NowPlayingArtworkMotionPolicy.scale(for: .playing) == 1)
+        #expect(NowPlayingArtworkMotionPolicy.scale(for: .buffering) == 1)
+        #expect(NowPlayingArtworkMotionPolicy.scale(for: .paused) == 0.82)
+        #expect(NowPlayingArtworkMotionPolicy.scale(for: .idle) == 0.82)
+    }
+
+    @Test("歌词与队列按钮再次点击回到封面页")
+    func bottomNowPlayingButtonsToggleBackToArtwork() {
+        #expect(
+            NowPlayingPageTogglePolicy.toggled(current: .player, target: .lyrics)
+                == .lyrics
+        )
+        #expect(
+            NowPlayingPageTogglePolicy.toggled(current: .lyrics, target: .lyrics)
+                == .player
+        )
+        #expect(
+            NowPlayingPageTogglePolicy.toggled(current: .player, target: .queue)
+                == .queue
+        )
+        #expect(
+            NowPlayingPageTogglePolicy.toggled(current: .queue, target: .queue)
+                == .player
+        )
+        #expect(
+            NowPlayingPageTogglePolicy.toggled(current: .lyrics, target: .queue)
+                == .queue
+        )
+    }
+
+    @Test("横屏封面受窗口高度和平台上限约束")
+    func nowPlayingLandscapeArtworkStaysBounded() {
+        let phone = NowPlayingLayoutPolicy.landscapeArtworkSide(
+            containerSize: CGSize(width: 844, height: 390),
+            isPad: false
+        )
+        #expect(phone >= 220)
+        #expect(phone <= 360)
+        #expect(phone <= 390 * 0.78 + 0.001)
+
+        let pad = NowPlayingLayoutPolicy.landscapeArtworkSide(
+            containerSize: CGSize(width: 1194, height: 834),
+            isPad: true
+        )
+        #expect(pad >= phone)
+        #expect(pad <= 520)
+        #expect(pad <= 1194 * 0.40 + 0.001)
     }
 }

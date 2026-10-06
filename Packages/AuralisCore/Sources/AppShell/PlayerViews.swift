@@ -11,26 +11,14 @@ import ThemeEngine
 import UIKit
 #endif
 
-private extension View {
-    @ViewBuilder
-    func iPadNowPlayingPresentationSizing(_ enabled: Bool) -> some View {
-#if os(iOS)
-        if enabled {
-            self.presentationSizing(.page)
-        } else {
-            self
-        }
-#else
-        self
-#endif
-    }
-}
-
 /// 迷你播放条内部内容（不含背景与外壳）。iOS 双层 Dock 共用同一套布局，
 /// 外层尺寸、玻璃材质与边距由调用方（BottomGlassBarShell）统一决定。
 struct MiniPlayerContent: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject private var playbackStore: PlaybackStore
+    /// canGoNext / canGoPrevious 由队列状态决定；只观察 AppModel/PlaybackStore
+    /// 无法感知“当前歌曲不变但队列被追加/替换”的情况。
+    @ObservedObject private var queueStore: PlaybackQueuePresentationStore
     let theme: BuiltInTheme
     var height: CGFloat = 56
     /// 展开态为 1；收拢为底部中间胶囊时连续收至 0。
@@ -53,6 +41,7 @@ struct MiniPlayerContent: View {
     ) {
         self.model = model
         self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
+        self._queueStore = ObservedObject(wrappedValue: model.queueStore)
         self.theme = theme
         self.height = height
         self.skipControlsVisibility = skipControlsVisibility
@@ -145,7 +134,7 @@ struct MiniPlayerContent: View {
                 .foregroundStyle(theme.colorTokens.primaryText.color)
         }
         .frame(width: 44 * normalizedSkipControlsVisibility, height: 44)
-        .opacity(normalizedSkipControlsVisibility)
+        .opacity(normalizedSkipControlsVisibility * (isEnabled ? 1 : 0.32))
         .scaleEffect(normalizedSkipControlsVisibility, anchor: systemImage == "backward.fill" ? .trailing : .leading)
         .disabled(!isEnabled || normalizedSkipControlsVisibility < 0.05)
         .allowsHitTesting(normalizedSkipControlsVisibility >= 0.05)
@@ -155,8 +144,8 @@ struct MiniPlayerContent: View {
 
 }
 
-/// 紧凑 Dock 内的播放内容。与展开态共用真实播放状态与操作，但缩为单行，
-/// 让首页入口和 AI 助手入口保持独立的圆形触控区域。
+/// 紧凑 Dock 内的播放内容。与展开态保持相同的“两行曲目信息”层级：
+/// 歌曲名 + 歌手始终存在，只收掉前后切歌按钮，避免终态切换时内容高度和重心跳变。
 struct CompactMiniPlayerContent: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject private var playbackStore: PlaybackStore
@@ -186,10 +175,21 @@ struct CompactMiniPlayerContent: View {
                 cornerRadius: 8
             )
 
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(theme.colorTokens.primaryText.color)
-                .lineLimit(1)
+            // 必须与展开态 MiniPlayerContent 保持相同的两行信息层级。
+            // 之前紧凑终态只保留歌名，Morphing 完成切树时歌手行突然消失，
+            // 导致文字块高度/视觉重心变化，看起来像 Dock 又缩了一次。
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(theme.colorTokens.primaryText.color)
+                    .lineLimit(1)
+                Text(playbackStore.currentTrack.artistName)
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    .lineLimit(1)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(accessibilityPlaybackLabel)
 
             Spacer(minLength: 4)
 
@@ -208,6 +208,218 @@ struct CompactMiniPlayerContent: View {
         .padding(.horizontal, 10)
         .frame(maxHeight: .infinity)
     }
+
+    private var accessibilityPlaybackLabel: String {
+        let state: String
+        switch playbackStore.state {
+        case .playing: state = String(localized: "播放中", bundle: .module)
+        case .paused: state = String(localized: "已暂停", bundle: .module)
+        default: state = String(localized: "未播放", bundle: .module)
+        }
+        return String(
+            localized: "\(playbackStore.currentTrack.title)，\(playbackStore.currentTrack.artistName)，\(state)",
+            bundle: .module
+        )
+    }
+}
+
+
+/// iOS 正在播放页的响应式布局规则。只根据当前容器几何决定横/竖布局，
+/// 不读取 UIDevice.orientation，因此旋转、iPad 分屏和台前调度都能随实际窗口实时重排。
+struct NowPlayingLayoutPolicy: Sendable {
+    static let minimumLandscapeWidth: CGFloat = 600
+
+    static func usesLandscapeLayout(containerSize: CGSize) -> Bool {
+        guard containerSize.width > 0, containerSize.height > 0 else { return false }
+        return containerSize.width > containerSize.height
+            && containerSize.width >= minimumLandscapeWidth
+    }
+
+    static func landscapeArtworkSide(containerSize: CGSize, isPad: Bool) -> CGFloat {
+        let maximum: CGFloat = isPad ? 520 : 360
+        let widthShare = containerSize.width * (isPad ? 0.40 : 0.42)
+        let heightShare = containerSize.height * 0.78
+        return max(220, min(maximum, min(widthShare, heightShare)))
+    }
+}
+
+
+/// 歌词页 Chrome 使用和底部 Dock 相同的“终态吸附”思路：
+/// 手势只决定显示/隐藏，不把每一像素位移映射到布局，避免歌词 ScrollView 卡顿。
+struct LyricsChromePolicy: Sendable {
+    static let autoHideDelay: Duration = .seconds(5)
+    static let minimumVerticalSwipeDistance: CGFloat = 44
+
+    /// 向上滑隐藏，向下滑显示；横向翻页和短划不改变 Chrome。
+    static func terminalHidden(for translation: CGSize) -> Bool? {
+        guard abs(translation.height) > abs(translation.width),
+              abs(translation.height) >= minimumVerticalSwipeDistance
+        else { return nil }
+        return translation.height < 0
+    }
+}
+
+enum LyricsChromeMotion {
+    static let duration: TimeInterval = 0.42
+
+    static func animation(reduceMotion: Bool) -> Animation {
+        reduceMotion
+            ? .linear(duration: 0.16)
+            : .smooth(duration: duration)
+    }
+}
+
+/// 当前歌词的轻量逐字强调。歌词源目前只有“逐行”时间戳，因此不能伪装成
+/// 真正的逐字 timing；这里仅在当前行与下一行之间做均匀插值。
+struct LyricCharacterAnimationPolicy: Sendable {
+    /// 当前句整体先轻微放大，正在唱到的字符再形成更明显的 1.12× 波峰。
+    /// 之前 1.05× 配合 0.5s 的进度 tick 肉眼几乎不可见。
+    static let currentLineBaseScale: CGFloat = 1.02
+    static let maximumScale: CGFloat = 1.12
+    static let fallbackLineScale: CGFloat = 1.06
+
+    static func lineProgress(
+        position: TimeInterval,
+        lineStart: TimeInterval?,
+        nextLineStart: TimeInterval?
+    ) -> Double? {
+        guard let lineStart,
+              let nextLineStart,
+              nextLineStart > lineStart
+        else { return nil }
+        return min(max((position - lineStart) / (nextLineStart - lineStart), 0), 1)
+    }
+
+    static func scale(
+        unitIndex: Int,
+        unitCount: Int,
+        progress: Double?
+    ) -> CGFloat {
+        guard unitCount > 0 else { return 1 }
+        guard let progress else { return fallbackLineScale }
+
+        let lastIndex = max(unitCount - 1, 0)
+        let cursor = progress * Double(lastIndex)
+        let distance = abs(Double(unitIndex) - cursor)
+        // 相邻字符之间连续交叉淡入缩放，形成从左到右移动的轻量“波峰”。
+        let influence = max(0, 1 - distance)
+        return currentLineBaseScale
+            + (maximumScale - currentLineBaseScale) * CGFloat(influence)
+    }
+}
+
+/// 按 Character 流式换行，避免为了逐字动画把长歌词强行塞进一行。
+/// 每一行仍以整体居中，scaleEffect 不参与测量，因此 1.05× 不会引发布局抖动。
+private struct LyricCharacterFlowLayout: Layout {
+    var horizontalSpacing: CGFloat = 0
+    var verticalSpacing: CGFloat = 4
+
+    private struct Row {
+        var indices: [Int] = []
+        var sizes: [CGSize] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func rows(
+        proposal: ProposedViewSize,
+        subviews: Subviews
+    ) -> [Row] {
+        let maximumWidth = proposal.width ?? .greatestFiniteMagnitude
+        var rows: [Row] = []
+        var row = Row()
+
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            let extraSpacing = row.indices.isEmpty ? 0 : horizontalSpacing
+            let proposedWidth = row.width + extraSpacing + size.width
+
+            if !row.indices.isEmpty, proposedWidth > maximumWidth {
+                rows.append(row)
+                row = Row()
+            }
+
+            if !row.indices.isEmpty {
+                row.width += horizontalSpacing
+            }
+            row.indices.append(index)
+            row.sizes.append(size)
+            row.width += size.width
+            row.height = max(row.height, size.height)
+        }
+
+        if !row.indices.isEmpty {
+            rows.append(row)
+        }
+        return rows
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let rows = rows(proposal: proposal, subviews: subviews)
+        let width = min(
+            proposal.width ?? rows.map(\.width).max() ?? 0,
+            rows.map(\.width).max() ?? 0
+        )
+        let height = rows.enumerated().reduce(CGFloat.zero) { partial, item in
+            partial + item.element.height + (item.offset == 0 ? 0 : verticalSpacing)
+        }
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let rows = rows(
+            proposal: ProposedViewSize(width: bounds.width, height: proposal.height),
+            subviews: subviews
+        )
+        var y = bounds.minY
+
+        for row in rows {
+            var x = bounds.minX + max((bounds.width - row.width) / 2, 0)
+            for (offset, index) in row.indices.enumerated() {
+                let size = row.sizes[offset]
+                subviews[index].place(
+                    at: CGPoint(x: x + size.width / 2, y: y + row.height / 2),
+                    anchor: .center,
+                    proposal: ProposedViewSize(width: size.width, height: size.height)
+                )
+                x += size.width + horizontalSpacing
+            }
+            y += row.height + verticalSpacing
+        }
+    }
+}
+
+
+/// Apple Music 风格的播放态封面几何：播放时铺开，暂停/空闲时缩小。
+/// 只做 render transform，不改变父级测量尺寸，因此标题和控制区不会随暂停跳位。
+struct NowPlayingArtworkMotionPolicy: Sendable {
+    static let pausedScale: CGFloat = 0.82
+    static let activeScale: CGFloat = 1
+
+    static func scale(for state: PlaybackState) -> CGFloat {
+        switch PlaybackControlPresentation(state: state) {
+        case .pause, .loading:
+            activeScale
+        case .play:
+            pausedScale
+        }
+    }
+}
+
+/// 底部歌词 / 队列按钮采用 toggle 语义：当前已经打开时再点一次回到封面页。
+struct NowPlayingPageTogglePolicy: Sendable {
+    static func toggled(current: NowPlayingPage, target: NowPlayingPage) -> NowPlayingPage {
+        current == target ? .player : target
+    }
 }
 
 struct NowPlayingView: View {
@@ -222,10 +434,16 @@ struct NowPlayingView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var page = NowPlayingPage.player
     @State private var isPlaylistSheetPresented = false
-    @State private var showsAudioTechnicalInfo = false
     @State private var showsTrackInformation = false
     @State private var lyricScrollTarget: Int?
     @State private var lyricTimeline: [LyricsIndexResolver.TimedLine] = []
+    /// PlaybackStore 为避免全局重绘只每 0.5s 发布一次 position。
+    /// 歌词逐字动画在本地用时间锚点插值到约 30fps，不提高全局播放进度发布频率。
+    @State private var lyricPositionAnchorDate = Date()
+    @State private var lyricPositionAnchorValue: TimeInterval = 0
+    /// 歌词页 5 秒无操作后进入沉浸态：保留歌曲名 + 歌手，其余 Chrome 向下收缩消失。
+    @State private var lyricsChromeHidden = false
+    @State private var lyricsChromeAutoHideTask: Task<Void, Never>?
     /// 拖动进度条时暂存的 seek 目标：松手才真正 seek（Apple Music 行为）。
     @State private var pendingSeek: Double?
 #if os(iOS)
@@ -246,6 +464,14 @@ struct NowPlayingView: View {
             actualPosition: playbackStore.position,
             duration: model.effectivePlaybackDuration
         )
+    }
+
+    private var mainControlPresentation: PlaybackControlPresentation {
+        PlaybackControlPresentation(state: playbackStore.state)
+    }
+
+    private var artworkPresentationScale: CGFloat {
+        NowPlayingArtworkMotionPolicy.scale(for: playbackStore.state)
     }
 
     /// 纯函数：供 UI 显示与回归测试共用。
@@ -288,33 +514,27 @@ struct NowPlayingView: View {
     }
 
     var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [theme.colorTokens.accent.color.opacity(0.42), theme.colorTokens.background.color, theme.colorTokens.accentSecondary.color.opacity(0.22)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-            VStack(spacing: AuralisSpacing.large) {
-                header
-                Picker(String(localized: "播放页面", bundle: .module), selection: $page) {
-                    ForEach(NowPlayingPage.allCases) { page in Text(page.title).tag(page) }
+        GeometryReader { outer in
+            ZStack {
+                LinearGradient(
+                    colors: [theme.colorTokens.accent.color.opacity(0.42), theme.colorTokens.background.color, theme.colorTokens.accentSecondary.color.opacity(0.22)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+
+#if os(iOS)
+                if NowPlayingLayoutPolicy.usesLandscapeLayout(containerSize: outer.size) {
+                    landscapeBody(in: outer.size)
+                } else {
+                    portraitBody
                 }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 460)
-                GeometryReader { geo in
-                    playbackContent(in: geo)
-                }
+#else
+                portraitBody
+#endif
             }
-            .padding(AuralisSpacing.large)
-            // 900pt 只是大尺寸 iPad 的内容上限；较小 iPad、分屏和台前调度窗口
-            // 会由 SwiftUI 根据实际可用宽度自然收缩，不依赖具体设备型号。
-            .frame(maxWidth: nowPlayingContentMaxWidth)
         }
         .foregroundStyle(theme.colorTokens.primaryText.color)
-        // iOS 18+ 的默认 automatic sizing 在 iPad 会收敛为较窄的 form sheet。
-        // 仅 iPad 改为系统 page sizing，扩大播放页同时保留原生下拉关闭手势。
-        .iPadNowPlayingPresentationSizing(isPad)
         .sheet(isPresented: $isPlaylistSheetPresented) {
             AddToPlaylistSheet(model: model, theme: theme, track: model.currentTrack)
         }
@@ -324,8 +544,228 @@ struct NowPlayingView: View {
         // 切歌时旧歌曲的 pendingSeek 不能污染下一首歌（拖动中切歌保护）。
         .onChange(of: currentTrackIdentity) { _, _ in
             pendingSeek = nil
+            if page == .lyrics {
+                showLyricsChromeAndScheduleAutoHide()
+            }
+        }
+        .onChange(of: page) { oldPage, newPage in
+            if newPage == .lyrics {
+                syncLyricPositionAnchor()
+                showLyricsChromeAndScheduleAutoHide()
+            } else if oldPage == .lyrics {
+                lyricsChromeAutoHideTask?.cancel()
+                lyricsChromeAutoHideTask = nil
+                lyricsChromeHidden = false
+            }
+        }
+        .onChange(of: playbackStore.position) { _, newPosition in
+            lyricPositionAnchorValue = newPosition
+            lyricPositionAnchorDate = Date()
+        }
+        .onChange(of: playbackStore.state) { _, _ in
+            syncLyricPositionAnchor()
+        }
+        .onAppear {
+            syncLyricPositionAnchor()
+        }
+        .onDisappear {
+            lyricsChromeAutoHideTask?.cancel()
+            lyricsChromeAutoHideTask = nil
         }
     }
+
+    private var portraitBody: some View {
+        VStack(spacing: AuralisSpacing.medium) {
+#if os(iOS)
+            // 歌词沉浸态隐藏顶部 Chrome；向下滑后恢复。
+            if !lyricsImmersiveMode {
+                dismissHandle
+                    .transition(lyricsChromeTransition)
+            }
+#else
+            header
+#endif
+            GeometryReader { geo in
+                playbackContent(in: geo)
+            }
+        }
+        .padding(.horizontal, AuralisSpacing.large)
+        .padding(.bottom, AuralisSpacing.large)
+        .padding(.top, portraitTopPadding)
+        // 900pt 只是大尺寸 iPad 的内容上限；较小 iPad、分屏和台前调度窗口
+        // 会由 SwiftUI 根据实际可用宽度自然收缩，不依赖具体设备型号。
+        .frame(maxWidth: nowPlayingContentMaxWidth)
+    }
+
+    private var portraitTopPadding: CGFloat {
+#if os(iOS)
+        2
+#else
+        AuralisSpacing.large
+#endif
+    }
+
+    private var lyricsImmersiveMode: Bool {
+        page == .lyrics && lyricsChromeHidden
+    }
+
+    private var lyricsChromeTransition: AnyTransition {
+        .asymmetric(
+            insertion: .move(edge: .bottom).combined(with: .opacity),
+            removal: .move(edge: .bottom).combined(with: .opacity)
+        )
+    }
+
+#if os(iOS)
+    /// 横屏采用与 Apple Music 同类的左右双栏：封面固定在左，右侧承载播放信息、
+    /// 歌词或队列。旋转时只重排视图，不重建播放状态、队列或当前页面选择。
+    private func landscapeBody(in size: CGSize) -> some View {
+        let artworkSide = NowPlayingLayoutPolicy.landscapeArtworkSide(
+            containerSize: size,
+            isPad: isPad
+        )
+        let horizontalPadding: CGFloat = isPad ? 28 : 16
+        let columnSpacing: CGFloat = isPad ? 36 : 24
+        let compactLandscape = size.height < 460
+        let controlsSpacing: CGFloat = compactLandscape ? 10 : 15
+        let playButtonSize: CGFloat = compactLandscape ? 48 : 56
+
+        return VStack(spacing: compactLandscape ? 2 : AuralisSpacing.xSmall) {
+            if !lyricsImmersiveMode {
+                dismissHandle
+                    .transition(lyricsChromeTransition)
+            }
+
+            // 横屏骨架永远保持“左封面 + 右内容”，沉浸模式只隐藏 Chrome，
+            // 不再删除封面或把歌词突然扩成全屏。
+            HStack(spacing: columnSpacing) {
+                landscapeArtwork(side: artworkSide)
+                    .frame(width: artworkSide)
+                    .frame(maxHeight: .infinity)
+
+                VStack(spacing: compactLandscape ? 8 : AuralisSpacing.medium) {
+                    landscapePageContent(
+                        sectionSpacing: controlsSpacing,
+                        playButtonSize: playButtonSize
+                    )
+                }
+                .frame(maxWidth: 600, maxHeight: .infinity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .animation(LyricsChromeMotion.animation(reduceMotion: reduceMotion), value: lyricsChromeHidden)
+        .padding(.horizontal, horizontalPadding)
+        .padding(.top, 2)
+        .padding(.bottom, compactLandscape ? 6 : AuralisSpacing.small)
+    }
+
+    private func landscapeArtwork(side: CGFloat) -> some View {
+        ZStack {
+            NowPlayingArtworkGlowView(
+                isPlaying: model.playbackState == .playing,
+                artworkKey: model.currentTrack.artworkKey,
+                colors: theme.colorTokens,
+                size: side,
+                serverID: model.currentTrack.serverID,
+                maxCanvasSize: side * 1.16
+            )
+            ArtworkView(
+                title: model.currentTrack.albumTitle,
+                artworkKey: model.currentTrack.artworkKey,
+                colors: theme.colorTokens,
+                size: side,
+                serverID: model.currentTrack.serverID
+            )
+            .shadow(color: Color.black.opacity(0.24), radius: 14, x: 0, y: 3)
+        }
+        .frame(width: side, height: side)
+        .scaleEffect(artworkPresentationScale)
+        .animation(
+            reduceMotion ? nil : .smooth(duration: 0.42, extraBounce: 0),
+            value: artworkPresentationScale
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(String(localized: "专辑封面，\(model.currentTrack.albumTitle)", bundle: .module))
+    }
+
+    @ViewBuilder
+    private func landscapePageContent(
+        sectionSpacing: CGFloat,
+        playButtonSize: CGFloat
+    ) -> some View {
+        switch page {
+        case .player:
+            playbackControls(
+                sectionSpacing: sectionSpacing,
+                playButtonSize: playButtonSize
+            )
+            .frame(maxWidth: 560)
+            .frame(maxHeight: .infinity, alignment: .center)
+            .fixedSize(horizontal: false, vertical: true)
+
+        case .lyrics:
+            VStack(spacing: AuralisSpacing.small) {
+                lyrics
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(lyricsChromeSwipeGesture)
+                    .simultaneousGesture(lyricsActivityTapGesture)
+
+                if lyricsImmersiveMode {
+                    lyricsTrackIdentityHeader(showActions: false)
+                        .frame(maxWidth: 560)
+                } else {
+                    nowPlayingBottomNavigation
+                        .frame(maxWidth: 420)
+                }
+            }
+
+        case .queue:
+            VStack(spacing: AuralisSpacing.small) {
+                queue
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                nowPlayingBottomNavigation
+                    .frame(maxWidth: 420)
+            }
+        }
+    }
+#endif
+
+#if os(iOS)
+    /// Full-screen cover 不提供 sheet 自带的拖拽柄；在安全区内保留一个轻量入口，
+    /// 向下拖动或轻点即可关闭，避免为了铺满状态栏而丢失原来的退出路径。
+    private var dismissHandle: some View {
+        Capsule(style: .continuous)
+            .fill(theme.colorTokens.primaryText.color.opacity(0.34))
+            .frame(width: 48, height: 5)
+            // 只保留足够的手势命中高度，不再用 24pt 可见布局把横条向下推。
+            .frame(maxWidth: .infinity, minHeight: 12)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                dismissNowPlaying()
+            }
+            .gesture(
+                DragGesture(minimumDistance: 10)
+                    .onEnded { value in
+                        guard value.translation.height > 60,
+                              abs(value.translation.height) > abs(value.translation.width)
+                        else { return }
+                        dismissNowPlaying()
+                    }
+            )
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(String(localized: "关闭播放页", bundle: .module))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction {
+                dismissNowPlaying()
+            }
+    }
+
+    private func dismissNowPlaying() {
+        model.isNowPlayingPresented = false
+        dismiss()
+    }
+#endif
 
     private var header: some View {
         HStack {
@@ -408,17 +848,19 @@ struct NowPlayingView: View {
         .accessibilityIdentifier(Self.moreActionsButtonIdentifier)
     }
 
-    /// 三个页面只替换上方内容区；曲目信息、进度和控制区始终是同一套视图固定在底部。
-    /// 这样切到歌词 / 队列时不会把整个播放界面换走，布局也不会上下跳动。
+    /// 普通播放/队列保持完整底部控制；歌词页额外支持沉浸 Chrome：
+    /// 5 秒无操作或向上滑后只保留歌曲名，其余控制向下收缩退出。
     private func playbackContent(in geo: GeometryProxy) -> some View {
         // iPhone 保持既有按高度收紧的规则；iPad 额外根据当前窗口宽度判断。
         // 因此 iPad mini、Split View、台前调度窄窗口都会自动进入更紧凑的控制区。
         let compactHeight = geo.size.height < 650
         let compactPadWidth = isPad && geo.size.width < 620
         let compactLayout = compactHeight || compactPadWidth
-        let sectionSpacing: CGFloat = compactLayout ? 10 : 15
+        // 去掉顶部重复标题后，把节省出的高度还给播放控制区。
+        // 歌曲信息、进度、传输键、音量和底部状态之间保持更舒展的 Apple Music 式节奏。
+        let sectionSpacing: CGFloat = compactLayout ? 14 : 20
         let playButtonSize: CGFloat = compactLayout ? 56 : 64
-        let estimatedControlHeight: CGFloat = compactLayout ? 264 : 294
+        let estimatedControlHeight: CGFloat = compactLayout ? 292 : 330
         let heroHeight = max(geo.size.height - estimatedControlHeight, 190)
         let maxArtworkSide = artworkSizeCap(for: geo.size.width)
         let artworkSide = min(maxArtworkSide, geo.size.width * 0.84, heroHeight * 0.88)
@@ -429,6 +871,9 @@ struct NowPlayingView: View {
         return VStack(spacing: sectionSpacing) {
             TabView(selection: $page) {
                 lyrics
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(lyricsChromeSwipeGesture)
+                    .simultaneousGesture(lyricsActivityTapGesture)
                     .tag(NowPlayingPage.lyrics)
                 artworkHero(side: artworkSide, compactHeight: compactHeight, glowCanvasSize: glowCanvasSize)
                     .tag(NowPlayingPage.player)
@@ -442,10 +887,22 @@ struct NowPlayingView: View {
 #endif
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            playbackControls(sectionSpacing: sectionSpacing, playButtonSize: playButtonSize)
-                .frame(maxWidth: 560)
-                // 控制区贴近可用区域底部，不再用下方 Spacer 把它悬在页面中间。
-                .fixedSize(horizontal: false, vertical: true)
+            Group {
+                if page == .lyrics {
+                    lyricsPlaybackChrome(
+                        sectionSpacing: sectionSpacing,
+                        playButtonSize: playButtonSize
+                    )
+                } else {
+                    playbackControls(
+                        sectionSpacing: sectionSpacing,
+                        playButtonSize: playButtonSize
+                    )
+                }
+            }
+            .frame(maxWidth: 560)
+            // 控制区贴近可用区域底部，不再用下方 Spacer 把它悬在页面中间。
+            .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, AuralisSpacing.medium)
@@ -473,48 +930,194 @@ struct NowPlayingView: View {
                     size: side,
                     serverID: model.currentTrack.serverID
                 )
-                .shadow(color: Color.black.opacity(0.22), radius: 12, x: 0, y: 2)
+                .shadow(
+                    color: Color.black.opacity(playbackStore.state == .playing ? 0.24 : 0.16),
+                    radius: playbackStore.state == .playing ? 14 : 9,
+                    x: 0,
+                    y: 2
+                )
             }
+            // Apple Music：播放时封面舒展，暂停时明显缩小；scaleEffect 不改布局尺寸，
+            // 因此下面歌曲信息不会跟着上下跳动。
+            .scaleEffect(artworkPresentationScale)
+            .animation(
+                reduceMotion ? nil : .smooth(duration: 0.42, extraBounce: 0),
+                value: artworkPresentationScale
+            )
             Spacer(minLength: AuralisSpacing.xSmall)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func playbackControls(sectionSpacing: CGFloat, playButtonSize: CGFloat) -> some View {
-        VStack(spacing: sectionSpacing) {
-            // 标题和艺术家始终以整行中心为基准；超长内容只从头到尾慢速移动一次。
-            // 左右各预留 56pt 对称安全区：长标题滚动时不会滑到不喜欢/收藏按钮下面，
-            // 也不会把歌名从屏幕中心推走。
-            ZStack {
-                VStack(spacing: AuralisSpacing.xSmall) {
-                    OneShotMarqueeText(
-                        text: model.currentTrack.title,
-                        font: .title2.bold(),
-                        color: theme.colorTokens.primaryText.color,
-                        height: 30
-                    )
-                    OneShotMarqueeText(
-                        text: model.currentTrack.artistName,
-                        font: .subheadline,
-                        color: theme.colorTokens.secondaryText.color,
-                        height: 22
-                    )
-                }
-                .padding(.horizontal, 56)
-                .frame(maxWidth: .infinity)
-                .clipped()
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(nowPlayingAccessibilityLabel)
+    /// 与 main 分支播放控制区完全相同的歌曲信息位置。
+    /// 沉浸态只隐藏左右按钮，歌曲名和歌手仍占据同一几何位置，不做二次搬家。
+    private func lyricsTrackIdentityHeader(showActions: Bool) -> some View {
+        ZStack {
+            VStack(spacing: AuralisSpacing.xSmall) {
+                OneShotMarqueeText(
+                    text: model.currentTrack.title,
+                    font: .title2.bold(),
+                    color: theme.colorTokens.primaryText.color,
+                    height: 30
+                )
+                OneShotMarqueeText(
+                    text: model.currentTrack.artistName,
+                    font: .subheadline,
+                    color: theme.colorTokens.secondaryText.color,
+                    height: 22
+                )
+            }
+            .padding(.horizontal, 56)
+            .frame(maxWidth: .infinity)
+            .clipped()
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(nowPlayingAccessibilityLabel)
+            .accessibilityIdentifier("auralis.nowPlaying.trackIdentity")
 
-                // 不喜欢（左）与收藏（右）严格镜像：距屏幕边缘一致、frame 一致、
-                // 命中区域一致、symbol 大小一致；标题以屏幕中心为基准独立居中。
-                HStack(spacing: 0) {
-                    dislikeButton
-                    Spacer(minLength: 0)
-                    favoriteButton
+            HStack(spacing: 0) {
+                dislikeButton
+                    .opacity(showActions ? 1 : 0)
+                    .allowsHitTesting(showActions)
+                    .accessibilityHidden(!showActions)
+                Spacer(minLength: 0)
+                favoriteButton
+                    .opacity(showActions ? 1 : 0)
+                    .allowsHitTesting(showActions)
+                    .accessibilityHidden(!showActions)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// 歌词页完整态复用主分支歌曲信息位置；沉浸态保留歌曲名 + 歌手，
+    /// 其余进度、控制、音量与状态向下收缩消失。
+    private func lyricsPlaybackChrome(
+        sectionSpacing: CGFloat,
+        playButtonSize: CGFloat
+    ) -> some View {
+        VStack(spacing: sectionSpacing) {
+            lyricsTrackIdentityHeader(showActions: !lyricsChromeHidden)
+
+            if !lyricsChromeHidden {
+                VStack(spacing: sectionSpacing) {
+                    VStack(spacing: AuralisSpacing.xSmall) {
+                        ThinSlider(
+                            value: model.playbackProgress,
+                            accent: theme.colorTokens.accent.color,
+                            track: theme.colorTokens.separator.color.opacity(0.4),
+                            thumb: Color.white,
+                            onEditingChanged: { editing in
+                                registerLyricsInteraction()
+                                if !editing, let pending = pendingSeek {
+                                    model.playbackProgress = pending
+                                    pendingSeek = nil
+                                }
+                            },
+                            onValueChanged: {
+                                registerLyricsInteraction()
+                                pendingSeek = $0
+                            },
+                            accessibilityStep: min(1, 5 / max(model.effectivePlaybackDuration, 1))
+                        )
+                        .accessibilityLabel(String(localized: "播放进度", bundle: .module))
+                        .accessibilityValue(Text("\(formatDuration(displayedPlaybackPosition)) / \(formatDuration(model.effectivePlaybackDuration))"))
+
+                        HStack {
+                            Text(formatDuration(displayedPlaybackPosition))
+                            Spacer()
+                            Text("-" + formatDuration(max(model.effectivePlaybackDuration - displayedPlaybackPosition, 0)))
+                        }
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    }
+
+                    transportControls(playButtonSize: playButtonSize)
+                    volumeControl
+                    nowPlayingBottomNavigation
+                }
+                .transition(lyricsChromeTransition)
+            }
+        }
+        .animation(LyricsChromeMotion.animation(reduceMotion: reduceMotion), value: lyricsChromeHidden)
+        .simultaneousGesture(lyricsActivityTapGesture)
+    }
+
+    private var lyricsChromeSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { _ in
+                lyricsChromeAutoHideTask?.cancel()
+                lyricsChromeAutoHideTask = nil
+            }
+            .onEnded { value in
+                guard page == .lyrics else { return }
+                guard let shouldHide = LyricsChromePolicy.terminalHidden(for: value.translation) else {
+                    scheduleLyricsChromeAutoHide()
+                    return
+                }
+                if shouldHide {
+                    hideLyricsChrome()
+                } else {
+                    showLyricsChromeAndScheduleAutoHide()
                 }
             }
-            .frame(maxWidth: .infinity)
+    }
+
+    private var lyricsActivityTapGesture: some Gesture {
+        TapGesture()
+            .onEnded {
+                registerLyricsInteraction()
+            }
+    }
+
+    private func registerLyricsInteraction() {
+        guard page == .lyrics else { return }
+        if lyricsChromeHidden {
+            // 沉浸态不因普通点击意外弹出；按要求只由“向下滑”恢复。
+            return
+        }
+        scheduleLyricsChromeAutoHide()
+    }
+
+    private func hideLyricsChrome() {
+        lyricsChromeAutoHideTask?.cancel()
+        lyricsChromeAutoHideTask = nil
+        guard !lyricsChromeHidden else { return }
+        withAnimation(LyricsChromeMotion.animation(reduceMotion: reduceMotion)) {
+            lyricsChromeHidden = true
+        }
+    }
+
+    private func showLyricsChromeAndScheduleAutoHide() {
+        lyricsChromeAutoHideTask?.cancel()
+        lyricsChromeAutoHideTask = nil
+        if lyricsChromeHidden {
+            withAnimation(LyricsChromeMotion.animation(reduceMotion: reduceMotion)) {
+                lyricsChromeHidden = false
+            }
+        }
+        scheduleLyricsChromeAutoHide()
+    }
+
+    private func scheduleLyricsChromeAutoHide() {
+        lyricsChromeAutoHideTask?.cancel()
+        lyricsChromeAutoHideTask = nil
+        guard page == .lyrics, !lyricsChromeHidden else { return }
+
+        lyricsChromeAutoHideTask = Task { @MainActor in
+            do {
+                try await Task.sleep(for: LyricsChromePolicy.autoHideDelay)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, page == .lyrics, !lyricsChromeHidden else { return }
+            hideLyricsChrome()
+        }
+    }
+
+    private func playbackControls(sectionSpacing: CGFloat, playButtonSize: CGFloat) -> some View {
+        VStack(spacing: sectionSpacing) {
+            // 与歌词页共用同一歌曲信息布局，避免模式切换后标题位置漂移。
+            lyricsTrackIdentityHeader(showActions: true)
 
             VStack(spacing: AuralisSpacing.xSmall) {
                 ThinSlider(
@@ -545,7 +1148,7 @@ struct NowPlayingView: View {
 
             transportControls(playButtonSize: playButtonSize)
             volumeControl
-            bottomInfo
+            nowPlayingBottomNavigation
         }
     }
 
@@ -564,6 +1167,7 @@ struct NowPlayingView: View {
         .frame(width: 44, height: 44)
         .contentShape(Rectangle())
         .accessibilityLabel(model.currentTrack.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
+        .accessibilityIdentifier("auralis.nowPlaying.favorite")
     }
 
     /// “不喜欢”按钮：与收藏按钮严格镜像。只影响未来自动推荐，
@@ -585,6 +1189,7 @@ struct NowPlayingView: View {
         .accessibilityLabel(isDisliked ? String(localized: "取消不喜欢", bundle: .module) : String(localized: "不喜欢", bundle: .module))
         .accessibilityHint(String(localized: "不喜欢的歌曲不会再出现在自动推荐中。", bundle: .module))
         .accessibilityValue(isDisliked ? String(localized: "已标记不喜欢", bundle: .module) : String(localized: "未标记不喜欢", bundle: .module))
+        .accessibilityIdentifier("auralis.nowPlaying.dislike")
     }
 
     private func transportControls(playButtonSize: CGFloat) -> some View {
@@ -605,6 +1210,7 @@ struct NowPlayingView: View {
                 }
                 .buttonStyle(HapticPlainButtonStyle())
                 .accessibilityLabel(String(localized: "播放模式：\(model.playMode.title)", bundle: .module))
+                .accessibilityIdentifier("auralis.nowPlaying.playMode")
             }
             transportItem {
                 Button(action: model.previous) {
@@ -615,21 +1221,29 @@ struct NowPlayingView: View {
                 }
                 .buttonStyle(HapticPlainButtonStyle())
                 .disabled(!model.canGoPrevious)
+                .opacity(model.canGoPrevious ? 1 : 0.32)
                 .accessibilityLabel(String(localized: "上一首", bundle: .module))
+                .accessibilityIdentifier("auralis.nowPlaying.previous")
             }
             transportItem {
                 Button(action: model.togglePlayback) {
-                    Image(systemName: model.playbackState == .playing ? "pause.fill" : "play.fill")
-                        .font(.system(size: playButtonSize * 0.4, weight: .bold))
-                        .contentTransition(.symbolEffect(.replace))
-                        .frame(width: playButtonSize, height: playButtonSize)
-                        .background(theme.colorTokens.accent.color)
-                        .foregroundStyle(theme.colorTokens.background.color)
-                        .clipShape(Circle())
+                    PlaybackControlIndicator(
+                        presentation: mainControlPresentation,
+                        color: theme.colorTokens.background.color,
+                        fontSize: playButtonSize * 0.4
+                    )
+                    .frame(width: playButtonSize, height: playButtonSize)
+                    .background(theme.colorTokens.accent.color)
+                    .clipShape(Circle())
+                    .scaleEffect(mainControlPresentation == .pause ? 1 : 0.97)
                 }
                 .buttonStyle(HapticPlainButtonStyle())
-                .animation(AuralisMotion.micro(reduceMotion: reduceMotion), value: model.playbackState)
-                .accessibilityLabel(model.playbackState == .playing ? String(localized: "暂停", bundle: .module) : String(localized: "播放", bundle: .module))
+                .animation(
+                    reduceMotion ? nil : .smooth(duration: 0.28, extraBounce: 0),
+                    value: mainControlPresentation
+                )
+                .accessibilityLabel(mainControlPresentation.accessibilityLabel)
+                .accessibilityIdentifier("auralis.nowPlaying.playPause")
             }
             transportItem {
                 Button(action: model.next) {
@@ -640,7 +1254,11 @@ struct NowPlayingView: View {
                 }
                 .buttonStyle(HapticPlainButtonStyle())
                 .disabled(!model.canGoNext)
+                // 自定义 HapticPlainButtonStyle 不会自动绘制 disabled 外观。
+                // 必须明确变淡，否则“没有下一首”时看起来仍像一个可用按钮。
+                .opacity(model.canGoNext ? 1 : 0.32)
                 .accessibilityLabel(String(localized: "下一首", bundle: .module))
+                .accessibilityIdentifier("auralis.nowPlaying.next")
             }
             transportItem {
                 moreMenu
@@ -670,35 +1288,79 @@ struct NowPlayingView: View {
         .frame(maxWidth: 420)
     }
 
-    private var bottomInfo: some View {
-        HStack(spacing: AuralisSpacing.medium) {
-            Button {
-                withAnimation(AuralisMotion.quick(reduceMotion: reduceMotion)) {
-                    showsAudioTechnicalInfo.toggle()
-                }
-            } label: {
-                Label(audioTechnicalLabel, systemImage: "waveform")
-                    .font(.caption)
-                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+    /// Apple Music 式底部三入口：歌词 / AirPlay / 队列。
+    /// 歌词与队列都是 toggle：再次点击当前入口回到封面页。
+    private var nowPlayingBottomNavigation: some View {
+        HStack(spacing: 0) {
+            bottomNavigationButton(
+                systemImage: page == .lyrics ? "quote.bubble.fill" : "quote.bubble",
+                title: String(localized: "歌词", bundle: .module),
+                identifier: "auralis.nowPlaying.lyrics",
+                isSelected: page == .lyrics
+            ) {
+                setPageFromBottomNavigation(.lyrics)
             }
-            .buttonStyle(HapticPlainButtonStyle())
-            .accessibilityLabel(String(localized: "音频格式，点击切换采样率", bundle: .module))
-            Spacer()
+
+            Spacer(minLength: 0)
+
             RoutePickerView()
-                .frame(width: 44, height: 44)
-                .accessibilityLabel(String(localized: "AirPlay 输出设备", bundle: .module))
+                .frame(width: 52, height: 44)
+                .contentShape(Rectangle())
+                .accessibilityLabel(String(localized: "隔空播放", bundle: .module))
+                .accessibilityIdentifier("auralis.nowPlaying.airPlay")
+
+            Spacer(minLength: 0)
+
+            bottomNavigationButton(
+                systemImage: "list.bullet",
+                title: String(localized: "队列", bundle: .module),
+                identifier: "auralis.nowPlaying.queue",
+                isSelected: page == .queue
+            ) {
+                setPageFromBottomNavigation(.queue)
+            }
         }
         .frame(maxWidth: 420)
     }
 
-    private var audioTechnicalLabel: String {
-        guard showsAudioTechnicalInfo else {
-            return model.currentTrack.effectiveCodec?.uppercased() ?? String(localized: "未知", bundle: .module)
+    private func bottomNavigationButton(
+        systemImage: String,
+        title: String,
+        identifier: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 21, weight: .medium))
+                .foregroundStyle(
+                    isSelected
+                        ? theme.colorTokens.accent.color
+                        : theme.colorTokens.secondaryText.color
+                )
+                .frame(width: 52, height: 44)
+                .contentShape(Rectangle())
+                .scaleEffect(isSelected ? 1.06 : 1)
         }
-        let info = model.currentTrack.sourceInfo
-        let sampleRate = info.sampleRate.map { "\($0 / 1_000) kHz" } ?? String(localized: "采样率未知", bundle: .module)
-        if let bitDepth = info.bitDepth { return "\(bitDepth)-bit · \(sampleRate)" }
-        return sampleRate
+        .buttonStyle(HapticPlainButtonStyle())
+        .animation(
+            reduceMotion ? nil : .smooth(duration: 0.24, extraBounce: 0),
+            value: isSelected
+        )
+        .accessibilityLabel(title)
+        .accessibilityIdentifier(identifier)
+        .accessibilityValue(
+            isSelected
+                ? String(localized: "已打开", bundle: .module)
+                : String(localized: "未打开", bundle: .module)
+        )
+    }
+
+    private func setPageFromBottomNavigation(_ target: NowPlayingPage) {
+        let next = NowPlayingPageTogglePolicy.toggled(current: page, target: target)
+        withAnimation(reduceMotion ? nil : .smooth(duration: 0.34, extraBounce: 0)) {
+            page = next
+        }
     }
 
     /// 传输区按钮的等宽容器，保证五键严格对称。
@@ -807,26 +1469,137 @@ struct NowPlayingView: View {
         model.currentLyrics?.id
     }
 
+    private func syncLyricPositionAnchor() {
+        lyricPositionAnchorValue = playbackStore.position
+        lyricPositionAnchorDate = Date()
+    }
+
+    /// PlaybackStore 只每 0.5 秒发布一次进度。逐字动画不能直接吃这个离散值，
+    /// 否则会每半秒跳一两个字，看起来像“没有动画”。这里仅在歌词视图内部做时间插值。
+    private func interpolatedLyricPosition(at date: Date) -> TimeInterval {
+        guard playbackStore.state == .playing else {
+            return playbackStore.position
+        }
+        let elapsed = min(max(date.timeIntervalSince(lyricPositionAnchorDate), 0), 0.75)
+        return lyricPositionAnchorValue + elapsed * Double(model.playbackRate)
+    }
+
+    private func lyricLineProgress(
+        document: LyricsDocument,
+        index: Int,
+        position: TimeInterval
+    ) -> Double? {
+        guard document.isSynced,
+              document.lines.indices.contains(index)
+        else { return nil }
+
+        let line = document.lines[index]
+        let nextStart = document.lines
+            .dropFirst(index + 1)
+            .compactMap { $0.startTime }
+            .first
+
+        return LyricCharacterAnimationPolicy.lineProgress(
+            position: position,
+            lineStart: line.startTime,
+            nextLineStart: nextStart
+        )
+    }
+
+    @ViewBuilder
+    private func animatedLyricCharacters(
+        text: String,
+        progress: Double
+    ) -> some View {
+        let characters = Array(text)
+        let animatedIndices = characters.indices.filter { index in
+            !String(characters[index]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        let animatedOrdinals = Dictionary(
+            uniqueKeysWithValues: animatedIndices.enumerated().map { ($0.element, $0.offset) }
+        )
+
+        LyricCharacterFlowLayout(horizontalSpacing: 0, verticalSpacing: 4) {
+            ForEach(characters.indices, id: \.self) { characterIndex in
+                let ordinal = animatedOrdinals[characterIndex]
+                let scale = ordinal.map {
+                    LyricCharacterAnimationPolicy.scale(
+                        unitIndex: $0,
+                        unitCount: animatedIndices.count,
+                        progress: progress
+                    )
+                } ?? 1
+
+                Text(String(characters[characterIndex]))
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(theme.colorTokens.accent.color)
+                    .scaleEffect(scale)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .opacity(1)
+    }
+
+    @ViewBuilder
+    private func lyricLineView(
+        document: LyricsDocument,
+        index: Int,
+        activeIndex: Int?
+    ) -> some View {
+        let line = document.lines[index]
+        let isCurrent = index == activeIndex
+
+        if isCurrent, !reduceMotion,
+           lyricLineProgress(
+               document: document,
+               index: index,
+               position: playbackStore.position
+           ) != nil {
+            // 只给当前歌词行开 30fps 本地 Timeline；不会提高整个 App 的 playback tick。
+            TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { context in
+                let progress = lyricLineProgress(
+                    document: document,
+                    index: index,
+                    position: interpolatedLyricPosition(at: context.date)
+                ) ?? 0
+                animatedLyricCharacters(text: line.text, progress: progress)
+            }
+        } else {
+            Text(line.text)
+                .font(.title2.weight(isCurrent ? .bold : .semibold))
+                // 缺少下一行时间戳时不伪造逐字 timing，只保留明显但克制的整句强调。
+                .scaleEffect(
+                    isCurrent && !reduceMotion
+                        ? LyricCharacterAnimationPolicy.fallbackLineScale
+                        : 1
+                )
+                .opacity(isCurrent ? 1 : 0.62)
+                .foregroundStyle(
+                    isCurrent
+                        ? theme.colorTokens.accent.color
+                        : theme.colorTokens.secondaryText.color
+                )
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .animation(
+                    reduceMotion ? nil : .smooth(duration: 0.22, extraBounce: 0),
+                    value: isCurrent
+                )
+        }
+    }
+
     private var lyrics: some View {
         let activeIndex = currentLyricIndex
         return ScrollView {
             LazyVStack(alignment: .center, spacing: AuralisSpacing.large) {
                 if let document = model.currentLyrics {
                     ForEach(document.lines.indices, id: \.self) { index in
-                        let line = document.lines[index]
-                        let isCurrent = index == activeIndex
-                        Text(line.text)
-                            .font(.title3.weight(.semibold))
-                            .scaleEffect(isCurrent ? 1 : 0.92)
-                            .opacity(isCurrent ? 1 : 0.62)
-                            .foregroundStyle(isCurrent ? theme.colorTokens.accent.color : theme.colorTokens.secondaryText.color)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .animation(
-                                reduceMotion ? nil : .smooth(duration: 0.22, extraBounce: 0),
-                                value: isCurrent
-                            )
-                            .id(index)
+                        lyricLineView(
+                            document: document,
+                            index: index,
+                            activeIndex: activeIndex
+                        )
+                        .id(index)
                     }
                 } else {
                     AuralisEmptyState(
@@ -910,7 +1683,7 @@ struct NowPlayingView: View {
     }
 }
 
-private enum NowPlayingPage: String, CaseIterable, Identifiable {
+enum NowPlayingPage: String, CaseIterable, Identifiable {
     case lyrics, player, queue
     var id: String { rawValue }
     var title: String {
