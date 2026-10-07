@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 package com.auralis.feature.player
 
-import android.os.SystemClock
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -20,8 +19,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -138,7 +135,6 @@ import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.yield
 
 /**
  * 正在播放全屏页（对齐 Swift `NowPlayingView`，S5/R10）。
@@ -173,17 +169,28 @@ fun NowPlayingScreen(
     val navigationScope = rememberCoroutineScope()
     var chromeHidden by remember { mutableStateOf(false) }
     var lyricsActivity by remember { mutableStateOf(0) }
+    val lyricFollow = remember(track.globalId, page) { LyricsScrollFollowState() }
+    var pendingChromeHidden by remember(track.globalId, page) { mutableStateOf<Boolean?>(null) }
     var dragging by remember(track.globalId) { mutableStateOf(false) }
     fun registerActivity() {
-        chromeHidden = false
-        lyricsActivity++
+        // Ordinary taps keep immersive lyrics immersive, as on iOS.
+        if (!chromeHidden) lyricsActivity++
     }
     val bottomNavigation: @Composable () -> Unit = {
         PlayerPageNavigation(pagerState, navigationScope, onActivity = ::registerActivity)
     }
-    LaunchedEffect(page, track.globalId, lyricsActivity, dragging) {
-        chromeHidden = false
-        if (page == PlayerTab.Lyrics && !dragging) {
+    LaunchedEffect(page, track.globalId) { chromeHidden = false }
+    LaunchedEffect(lyricFollow.isUserScrolling, pendingChromeHidden) {
+        if (!lyricFollow.isUserScrolling) {
+            pendingChromeHidden?.let {
+                chromeHidden = it
+                pendingChromeHidden = null
+                lyricsActivity++
+            }
+        }
+    }
+    LaunchedEffect(page, lyricsActivity, dragging, lyricFollow.isUserScrolling, chromeHidden) {
+        if (page == PlayerTab.Lyrics && !chromeHidden && !dragging && !lyricFollow.isUserScrolling) {
             delay(NowPlayingUiPolicy.lyricsAutoHideDelayMs)
             chromeHidden = true
         }
@@ -196,13 +203,14 @@ fun NowPlayingScreen(
     val density = LocalDensity.current
     val thresholdPx = with(density) { 44.dp.toPx() }
     val activityModifier =
-        Modifier.pointerInput(page, thresholdPx) {
+        Modifier.pointerInput(page, track.globalId, thresholdPx) {
             if (page != PlayerTab.Lyrics) return@pointerInput
             // Observe after child controls without consuming their events. Taps, scrolling,
             // sliders and horizontal paging keep their native gesture handling.
             awaitEachGesture {
                 val down =
                     awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                lyricsActivity++
                 var last = down.position
                 do {
                     val event = awaitPointerEvent(PointerEventPass.Initial)
@@ -212,7 +220,7 @@ fun NowPlayingScreen(
                 val travel = last - down.position
                 when {
                     abs(travel.y) >= thresholdPx && abs(travel.y) > abs(travel.x) -> {
-                        if (travel.y < 0) chromeHidden = true else registerActivity()
+                        pendingChromeHidden = travel.y < 0
                     }
                     abs(travel.x) < thresholdPx -> registerActivity()
                 }
@@ -250,6 +258,9 @@ fun NowPlayingScreen(
                                 track,
                                 positionMs = displayMs,
                                 isPlaying = playback.state is PlaybackState.Playing,
+                                isPageActive = page == PlayerTab.Lyrics,
+                                followState = lyricFollow,
+                                speed = playback.speed,
                             )
                         PlayerTab.Player ->
                             if (!landscape)
@@ -311,11 +322,12 @@ internal fun NowPlayingChromeLayout(
     val reduceMotion = LocalReduceMotion.current
     BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         val landscape = NowPlayingUiPolicy.usesLandscape(maxWidth.value, maxHeight.value)
+        val isTablet = minOf(maxWidth, maxHeight) >= 600.dp
         val landscapeSide =
             NowPlayingUiPolicy.landscapeArtworkSide(
                     maxWidth.value,
                     maxHeight.value,
-                    isTablet = minOf(maxWidth, maxHeight) >= 600.dp,
+                    isTablet = isTablet,
                 )
                 .dp
         val compactLandscape = landscape && maxHeight < 460.dp
@@ -324,7 +336,7 @@ internal fun NowPlayingChromeLayout(
             Modifier.align(Alignment.TopCenter)
                 .widthIn(max = if (landscape) Dp.Unspecified else 900.dp)
                 .fillMaxSize()
-                .padding(horizontal = if (landscape) 16.dp else AuralisSpacing.large)
+                .padding(horizontal = if (landscape) NowPlayingUiPolicy.landscapeHorizontalPadding(isTablet).dp else AuralisSpacing.large)
                 .padding(top = 2.dp, bottom = if (compactLandscape) 6.dp else AuralisSpacing.large),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement =
@@ -337,10 +349,11 @@ internal fun NowPlayingChromeLayout(
             ) {
                 var drag by remember { mutableStateOf(0f) }
                 val density = LocalDensity.current
-                IconButton(
-                    onClick = onClose,
+                Box(
+                    contentAlignment = Alignment.Center,
                     modifier =
-                        Modifier.size(44.dp)
+                        Modifier.size(width = 52.dp, height = if (compactLandscape) 12.dp else 44.dp)
+                            .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClose)
                             .testTag("player.dismiss")
                             .semantics { contentDescription = dismissDescription }
                             .pointerInput(density) {
@@ -366,7 +379,7 @@ internal fun NowPlayingChromeLayout(
                 Row(
                     Modifier.weight(1f).fillMaxWidth().testTag("player.landscape"),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                    horizontalArrangement = Arrangement.spacedBy(NowPlayingUiPolicy.landscapeColumnSpacing(isTablet).dp),
                 ) {
                     Box(Modifier.size(side).testTag("player.artwork")) { artwork(side) }
                     Column(
@@ -540,11 +553,17 @@ private fun HeroContent(track: Track, isPlaying: Boolean, artworkSide: Dp? = nul
 }
 
 @Composable
-private fun LyricsContent(graph: AuralisGraph, track: Track, positionMs: Long, isPlaying: Boolean) {
+private fun LyricsContent(
+    graph: AuralisGraph,
+    track: Track,
+    positionMs: Long,
+    isPlaying: Boolean,
+    isPageActive: Boolean,
+    followState: LyricsScrollFollowState,
+    speed: Float,
+) {
     val colors = LocalAuralisTheme.current.colors
     val context = LocalContext.current
-    val reduceMotion = LocalReduceMotion.current
-    val density = LocalDensity.current
     var loadState by remember { mutableStateOf<LyricsLoad>(LyricsLoad.Loading) }
     var reloadKey by remember { mutableStateOf(0) }
     LaunchedEffect(track.globalId, reloadKey) {
@@ -560,7 +579,6 @@ private fun LyricsContent(graph: AuralisGraph, track: Track, positionMs: Long, i
                     )
             }
     }
-    val listState = rememberLazyListState()
     when (val state = loadState) {
         LyricsLoad.Loading ->
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -587,154 +605,8 @@ private fun LyricsContent(graph: AuralisGraph, track: Track, positionMs: Long, i
                 }
             }
         LyricsLoad.None -> EmptyLyricsHint(colors.primaryText, colors.secondaryText)
-        is LyricsLoad.Ready -> {
-            val doc = state.doc
-            val synced = doc.isSynced && doc.lines.all { it.startTimeSeconds != null }
-            val activeIndex =
-                if (synced) {
-                    val sec = positionMs / 1000.0
-                    val idx =
-                        doc.lines.indexOfLast {
-                            (it.startTimeSeconds ?: Double.MAX_VALUE) <= sec + 0.05
-                        }
-                    if (idx < 0) null else idx
-                } else {
-                    null
-                }
-
-            LaunchedEffect(activeIndex, doc.globalId, reduceMotion) {
-                val target = activeIndex ?: return@LaunchedEffect
-                if (target !in doc.lines.indices) return@LaunchedEffect
-                yield()
-                val viewportHeight = listState.layoutInfo.viewportSize.height
-                val estimatedHalfLine = with(density) { 12.dp.roundToPx() }
-                val centerOffset =
-                    if (viewportHeight > 0) {
-                        -(viewportHeight / 2 - estimatedHalfLine).coerceAtLeast(0)
-                    } else {
-                        0
-                    }
-                if (reduceMotion) {
-                    listState.scrollToItem(target, centerOffset)
-                } else {
-                    listState.animateScrollToItem(target, centerOffset)
-                }
-            }
-
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(AuralisSpacing.large),
-                contentPadding = PaddingValues(vertical = AuralisSpacing.huge),
-            ) {
-                itemsIndexed(doc.lines) { index, line ->
-                    val isCurrent = index == activeIndex
-                    AnimatedLyricLine(
-                        text = line.text,
-                        isCurrent = isCurrent,
-                        isPlaying = isPlaying,
-                        positionMs = positionMs,
-                        start = line.startTimeSeconds,
-                        nextStart =
-                            doc.lines.drop(index + 1).firstNotNullOfOrNull { it.startTimeSeconds },
-                    )
-                }
-            }
-        }
-    }
-}
-
-/** Only the active line owns a 30fps clock; playback publications stay unchanged. */
-@Composable
-@OptIn(ExperimentalLayoutApi::class)
-private fun AnimatedLyricLine(
-    text: String,
-    isCurrent: Boolean,
-    isPlaying: Boolean,
-    positionMs: Long,
-    start: Double?,
-    nextStart: Double?,
-) {
-    val colors = LocalAuralisTheme.current.colors
-    val reduceMotion = LocalReduceMotion.current
-    val anchor = remember(positionMs) { positionMs to SystemClock.uptimeMillis() }
-    val latestAnchor by rememberUpdatedState(anchor)
-    var now by remember { mutableStateOf(SystemClock.uptimeMillis()) }
-    LaunchedEffect(isCurrent, isPlaying, reduceMotion, start, nextStart) {
-        if (isCurrent && isPlaying && !reduceMotion && start != null && nextStart != null) {
-            while (true) {
-                now = SystemClock.uptimeMillis()
-                delay(33)
-            }
-        }
-    }
-    val position =
-        if (isPlaying) latestAnchor.first + (now - latestAnchor.second).coerceAtLeast(0)
-        else positionMs
-    val progress = NowPlayingUiPolicy.lineProgress(position / 1000.0, start, nextStart)
-    val characters =
-        remember(text) {
-            val iterator = android.icu.text.BreakIterator.getCharacterInstance()
-            iterator.setText(text)
-            buildList {
-                var begin = iterator.first()
-                var end = iterator.next()
-                while (end != android.icu.text.BreakIterator.DONE) {
-                    add(text.substring(begin, end))
-                    begin = end
-                    end = iterator.next()
-                }
-            }
-        }
-    if (isCurrent && !reduceMotion && progress != null) {
-        val count = characters.count { it.isNotBlank() }
-        var ordinal = 0
-        FlowRow(
-            modifier =
-                Modifier.widthIn(max = 600.dp)
-                    .fillMaxWidth()
-                    .padding(horizontal = AuralisSpacing.large)
-                    .clearAndSetSemantics { contentDescription = text },
-            horizontalArrangement = Arrangement.Center,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            characters.forEach { character ->
-                val scale =
-                    if (character.isBlank()) 1f
-                    else NowPlayingUiPolicy.characterScale(ordinal++, count, progress)
-                Text(
-                    character,
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                    color = colors.accent,
-                    modifier =
-                        Modifier.graphicsLayer {
-                            scaleX = scale
-                            scaleY = scale
-                        },
-                )
-            }
-        }
-    } else {
-        val scale = if (isCurrent && !reduceMotion) 1.06f else 1f
-        Text(
-            text,
-            style =
-                MaterialTheme.typography.titleLarge.copy(
-                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.SemiBold
-                ),
-            color = if (isCurrent) colors.accent else colors.secondaryText,
-            textAlign = TextAlign.Center,
-            modifier =
-                Modifier.widthIn(max = 600.dp)
-                    .fillMaxWidth()
-                    .padding(horizontal = AuralisSpacing.large)
-                    .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                        alpha = if (isCurrent) 1f else 0.62f
-                    },
-        )
+        is LyricsLoad.Ready ->
+            SyncedLyricsContent(state.doc, positionMs, isPlaying, isPageActive, followState, speed = speed)
     }
 }
 
