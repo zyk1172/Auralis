@@ -337,10 +337,10 @@ internal fun NowPlayingChromeLayout(
                 .widthIn(max = if (landscape) Dp.Unspecified else 900.dp)
                 .fillMaxSize()
                 .padding(horizontal = if (landscape) NowPlayingUiPolicy.landscapeHorizontalPadding(isTablet).dp else AuralisSpacing.large)
-                .padding(top = 2.dp, bottom = if (compactLandscape) 6.dp else AuralisSpacing.large),
+                .padding(top = 2.dp, bottom = if (compactLandscape) 6.dp else if (landscape) AuralisSpacing.small else AuralisSpacing.large),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement =
-                Arrangement.spacedBy(if (landscape) 2.dp else AuralisSpacing.medium),
+                Arrangement.spacedBy(if (compactLandscape) 2.dp else if (landscape) AuralisSpacing.xSmall else AuralisSpacing.medium),
         ) {
             AnimatedVisibility(
                 visible = !chromeHidden,
@@ -352,7 +352,7 @@ internal fun NowPlayingChromeLayout(
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier =
-                        Modifier.size(width = 52.dp, height = if (compactLandscape) 12.dp else 44.dp)
+                        Modifier.size(width = 52.dp, height = 12.dp)
                             .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClose)
                             .testTag("player.dismiss")
                             .semantics { contentDescription = dismissDescription }
@@ -375,32 +375,36 @@ internal fun NowPlayingChromeLayout(
                 }
             }
             if (landscape) {
-                val side = landscapeSide
-                Row(
-                    Modifier.weight(1f).fillMaxWidth().testTag("player.landscape"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(NowPlayingUiPolicy.landscapeColumnSpacing(isTablet).dp),
-                ) {
-                    Box(Modifier.size(side).testTag("player.artwork")) { artwork(side) }
-                    Column(
-                        Modifier.weight(1f).fillMaxHeight().widthIn(max = 600.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().testTag("player.landscape")) {
+                    // System bars and chrome can reduce the row after the window budget is
+                    // computed. Constrain both axes together and keep at least 12dp above/below.
+                    val side = minOf(landscapeSide, (maxHeight - 24.dp).coerceAtLeast(0.dp))
+                    Row(
+                        Modifier.fillMaxSize(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(NowPlayingUiPolicy.landscapeColumnSpacing(isTablet).dp),
                     ) {
-                        // The landscape player keeps artwork on the left. Lyrics/queue
-                        // occupy the right column; the artwork page needs only controls.
-                        Box(Modifier.weight(1f).fillMaxWidth()) { pageContent(true) }
-                        if (page == PlayerTab.Player) {
-                            controls(
-                                if (compactLandscape) 10.dp else 15.dp,
-                                if (compactLandscape) 48.dp else 56.dp,
-                            )
-                            Spacer(Modifier.weight(1f))
-                        } else {
-                            // Match iOS: secondary pages use the entire right column,
-                            // with only navigation or immersive track identity below.
-                            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                pageFooter()
+                        Box(Modifier.size(side).testTag("player.artwork")) { artwork(side) }
+                        Column(
+                            Modifier.weight(1f).fillMaxHeight().widthIn(max = 600.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(if (compactLandscape) 8.dp else AuralisSpacing.medium),
+                        ) {
+                            // The landscape player keeps artwork on the left. Lyrics/queue
+                            // occupy the right column; the artwork page needs only controls.
+                            Box(Modifier.weight(1f).fillMaxWidth()) { pageContent(true) }
+                            if (page == PlayerTab.Player) {
+                                controls(
+                                    if (compactLandscape) 10.dp else 15.dp,
+                                    if (compactLandscape) 48.dp else 56.dp,
+                                )
+                                Spacer(Modifier.weight(1f))
+                            } else {
+                                // Match iOS: secondary pages use the entire right column,
+                                // with only navigation or immersive track identity below.
+                                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                    pageFooter()
+                                }
                             }
                         }
                     }
@@ -409,7 +413,7 @@ internal fun NowPlayingChromeLayout(
                 Column(
                     Modifier.weight(1f).fillMaxWidth().testTag("player.portrait"),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(if (compactPortrait) 14.dp else 20.dp),
                 ) {
                     Box(
                         Modifier.weight(1f)

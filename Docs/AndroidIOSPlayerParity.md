@@ -13,8 +13,8 @@ Android 手机端使用原生 Jetpack Compose；仓库没有独立 Android Web U
 | 倍速播放 | 字符插值默认使用 1 倍速度 | 跟随实际播放速度；预测上限与 iOS 一样为 750ms |
 | 沉浸歌词 | 松手即重排；普通点击会显示控制区 | 等惯性结束再应用滑动的显示/隐藏选择；普通点击保持沉浸状态 |
 | 横屏封面 | 手机/平板上限 360/520dp；旧宽高比例 | 上限 420/600dp；扣除左右边距和列间距后分配 48%/50%；高度保留 48/64dp |
-| 横屏边距 | 左右 16dp；列间距固定 24dp | 手机左右 20dp / 列间距 24dp；平板左右 32dp / 列间距 36dp；系统安全区另行保留 |
-| 紧凑横屏关闭入口 | Material 按钮占用较高布局 | 使用轻量拖拽柄，保留原生按钮语义与点击/下拉关闭，避免挤压封面 |
+| 横屏边距 | 左右 16dp；列间距固定 24dp | 手机左右 20dp / 列间距 24dp；平板左右 32dp / 列间距 36dp；系统安全区另行保留；按实际栏高同时约束正方形的两轴，上下至少各留 12dp |
+| 关闭入口 | Material 按钮占用较高布局 | 使用与 iOS 对应的 12dp 布局拖拽柄，保留原生按钮语义与点击/下拉关闭，避免挤压封面 |
 
 歌词源仍只有逐行时间戳，逐字进度是在相邻行之间均匀插值；无下一行时间戳时使用 1.06 倍整行强调。
 横屏尺寸以扣除 Android 系统栏后的可用窗口计算，因此同一物理分辨率下不必等于 iOS 的点数。
@@ -33,7 +33,7 @@ Android 手机端使用原生 Jetpack Compose；仓库没有独立 Android Web U
 
 ```sh
 ./gradlew testDebugUnitTest :app-mobile:assembleDebug :app-tv:assembleDebug :app-mobile:assemblePerf :app-tv:assemblePerf
-./gradlew :feature:player:connectedDebugAndroidTest
+./gradlew :feature:player:connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true
 ```
 
 第二条命令需要启动 Android Emulator 或连接设备；本次验证使用软件模拟器，验证渲染与行为，不据此作真机性能结论。

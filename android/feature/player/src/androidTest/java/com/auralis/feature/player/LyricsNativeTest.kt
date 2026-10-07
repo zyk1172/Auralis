@@ -2,13 +2,16 @@
 package com.auralis.feature.player
 
 import android.graphics.Bitmap
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -40,14 +43,16 @@ class LyricsNativeTest : LyricsUiTestCases() {
                         page = PlayerTab.Lyrics,
                         chromeHidden = false,
                         onClose = {},
-                        artwork = { Box(Modifier.fillMaxSize()) },
+                        artwork = { Box(Modifier.fillMaxSize().background(Color(0xFF547B98))) },
                         pageContent = { Text("Lyrics", Modifier.testTag("nativeLyrics")) },
                         pageFooter = { Text("Track identity") },
                         controls = { _, _ -> },
                     )
                 }
             }
-            compose.waitForIdle()
+            compose.waitUntil(timeoutMillis = 15_000) {
+                compose.onAllNodesWithTag("player.landscape").fetchSemanticsNodes().isNotEmpty()
+            }
             val artwork = compose.onNodeWithTag("player.artwork").fetchSemanticsNode().boundsInRoot
             val lyrics = compose.onNodeWithTag("nativeLyrics").fetchSemanticsNode().boundsInRoot
             val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
