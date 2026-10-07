@@ -2918,7 +2918,7 @@ public final class AuralisAppModel: ObservableObject {
             for track in tracks {
                 catalog.lyrics[track.id] = LyricsDocument(
                     trackID: track.id,
-                    lines: (0..<40).map { index in
+                    lines: (0..<180).map { index in
                         TimedLyricLine(
                             startTime: Double(index),
                             text: "Smoke lyric \(String(format: "%02d", index + 1)) — 顺滑滚动"

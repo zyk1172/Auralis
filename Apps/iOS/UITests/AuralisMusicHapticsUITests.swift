@@ -202,7 +202,7 @@ final class AuralisMusicHapticsUITests: XCTestCase {
     }
 
     func testLyricsManualScrollDoesNotSnapBackDuringPlayback() throws {
-        launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics")
+        launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics", "-auralis-ui-smoke-lyrics-scroll")
         let playPause = app.buttons["auralis.nowPlaying.playPause"].firstMatch
         XCTAssertTrue(playPause.waitForExistence(timeout: 15))
         waitForLabelContaining("播放", element: playPause, message: "The smoke player must be ready before its first Play tap")
@@ -212,22 +212,19 @@ final class AuralisMusicHapticsUITests: XCTestCase {
 
         let scroll = app.scrollViews["auralis.nowPlaying.lyricsScroll"].firstMatch
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
-        // 一个已知歌词行避免逐行 AX 查询耗尽真实的五秒浏览暂停期。
-        let marker = scroll.staticTexts["auralis.nowPlaying.lyric.12"].firstMatch
-        for _ in 0..<4 {
-            scroll.swipeUp(velocity: .slow)
-            if marker.exists, marker.isHittable { break }
-        }
-        Thread.sleep(forTimeInterval: 0.6) // Let native deceleration and the deferred Chrome transition finish.
-        XCTAssertTrue(marker.isHittable, "Manual browsing must expose the deterministic lyric row")
-        let originalY = marker.frame.midY
-        Thread.sleep(forTimeInterval: 1.1) // Playback crosses another lyric boundary during the browsing grace period.
-        XCTAssertTrue(marker.isHittable, "Playback must not snap the manual viewport back to the active lyric")
-        XCTAssertEqual(marker.frame.midY, originalY, accuracy: 3, "Changing the active row must not move the manual viewport")
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Manual lyrics browsing during playback"
-        screenshot.lifetime = .keepAlways
-        add(screenshot)
+        scroll.swipeUp(velocity: .slow)
+        // 应用在真实浏览窗口内记录原生滚动偏移及歌词推进；AX 查询再慢也不会
+        // 将合法的五秒后恢复跟随误判为回跳，或查找已被播放进度越过的固定行。
+        let sample = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value BEGINSWITH %@", "passed:"),
+            object: scroll
+        )
+        let result = XCTWaiter.wait(for: [sample], timeout: 30)
+        XCTAssertEqual(result, .completed, "Playback must advance while the manual viewport stays within 3pt; actual sample: \(String(describing: scroll.value))")
+        let evidence = XCTAttachment(string: String(describing: scroll.value))
+        evidence.name = "Native lyrics viewport and playback sample"
+        evidence.lifetime = .keepAlways
+        add(evidence)
     }
 
     func testLandscapeArtworkIsLargerAndRetainsEdgeClearance() throws {

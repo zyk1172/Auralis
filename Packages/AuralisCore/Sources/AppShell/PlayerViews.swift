@@ -430,6 +430,12 @@ struct NowPlayingView: View {
     @State private var lyricScrollFollow = LyricsScrollFollowState()
     @State private var lyricFollowResumeTask: Task<Void, Never>?
     @State private var pendingLyricsChromeHidden: Bool?
+#if DEBUG
+    private let recordsLyricsScrollSmoke = CommandLine.arguments.contains("-auralis-ui-smoke-lyrics-scroll")
+    @State private var lyricsScrollSmokeOffset: CGFloat?
+    @State private var lyricsScrollSmokeResult = "waiting"
+    @State private var lyricsScrollSmokeTask: Task<Void, Never>?
+#endif
     @State private var lyricTimeline: [LyricsIndexResolver.TimedLine] = []
     /// PlaybackStore 为避免全局重绘只每 0.5s 发布一次 position。
     /// 歌词逐字动画在本地用时间锚点插值到约 30fps，不提高全局播放进度发布频率。
@@ -1498,6 +1504,11 @@ struct NowPlayingView: View {
     }
 
     private func resetLyricsScrollInteraction() {
+#if DEBUG
+        lyricsScrollSmokeTask?.cancel()
+        lyricsScrollSmokeTask = nil
+        lyricsScrollSmokeResult = "waiting"
+#endif
         lyricFollowResumeTask?.cancel()
         lyricFollowResumeTask = nil
         lyricScrollFollow = LyricsScrollFollowState()
@@ -1508,6 +1519,11 @@ struct NowPlayingView: View {
         let wasUserScrolling = lyricScrollFollow.isUserScrolling
         lyricScrollFollow.update(phase: phase)
         if lyricScrollFollow.isUserScrolling {
+#if DEBUG
+            lyricsScrollSmokeTask?.cancel()
+            lyricsScrollSmokeTask = nil
+            if recordsLyricsScrollSmoke { lyricsScrollSmokeResult = "waiting" }
+#endif
             lyricFollowResumeTask?.cancel()
             lyricFollowResumeTask = nil
             cancelLyricsChromeAutoHide()
@@ -1515,7 +1531,74 @@ struct NowPlayingView: View {
             applyPendingLyricsChromeChange()
             scheduleLyricsChromeAutoHide()
             scheduleLyricFollowResume()
+#if DEBUG
+            sampleLyricsScrollSmokeIfRequested()
+#endif
         }
+    }
+
+#if DEBUG
+    /// 在真实的五秒浏览窗口内采样原生 ScrollView，结果保留给可能很慢的 AX 查询。
+    /// 不更改播放、跟随策略或恢复时限；仅由 UI smoke 启动参数启用。
+    private func sampleLyricsScrollSmokeIfRequested() {
+        guard recordsLyricsScrollSmoke else { return }
+        lyricsScrollSmokeTask?.cancel()
+        lyricsScrollSmokeTask = Task { @MainActor in
+            do {
+                try await Task.sleep(for: .milliseconds(600)) // Chrome 的终态动画结束后再采样。
+                guard !Task.isCancelled else { return }
+                guard let initialOffset = lyricsScrollSmokeOffset,
+                      let initialLine = currentLyricIndex,
+                      playbackStore.state == .playing,
+                      !lyricScrollFollow.isUserScrolling,
+                      !lyricScrollFollow.isFollowingPlayback else {
+                    lyricsScrollSmokeResult = "failed: browsing sample unavailable"
+                    lyricsScrollSmokeTask = nil
+                    return
+                }
+                try await Task.sleep(for: .milliseconds(1100))
+                guard !Task.isCancelled else { return }
+                guard let finalOffset = lyricsScrollSmokeOffset,
+                      let finalLine = currentLyricIndex,
+                      playbackStore.state == .playing,
+                      finalLine > initialLine else {
+                    lyricsScrollSmokeResult = "failed: playback did not cross a lyric boundary"
+                    lyricsScrollSmokeTask = nil
+                    return
+                }
+                let stable = !lyricScrollFollow.isUserScrolling
+                    && !lyricScrollFollow.isFollowingPlayback
+                    && abs(finalOffset - initialOffset) <= 3
+                lyricsScrollSmokeResult = String(
+                    format: "%@: line=%ld→%ld, offset=%.2f→%.2f",
+                    stable ? "passed" : "failed",
+                    initialLine, finalLine, Double(initialOffset), Double(finalOffset)
+                )
+                lyricsScrollSmokeTask = nil
+            } catch {
+                return
+            }
+        }
+    }
+#endif
+
+    @ViewBuilder
+    private func observeLyricsScrollSmoke<Content: View>(_ content: Content) -> some View {
+#if DEBUG
+        if recordsLyricsScrollSmoke {
+            content
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.contentOffset.y
+                } action: { _, offset in
+                    lyricsScrollSmokeOffset = offset
+                }
+                .accessibilityValue(lyricsScrollSmokeResult)
+        } else {
+            content
+        }
+#else
+        content
+#endif
     }
 
     private func scheduleLyricFollowResume() {
@@ -1605,7 +1688,7 @@ struct NowPlayingView: View {
 
     private var lyrics: some View {
         let activeIndex = currentLyricIndex
-        return ScrollView {
+        let content = ScrollView {
             LazyVStack(alignment: .center, spacing: AuralisSpacing.large) {
                 if let document = model.currentLyrics {
                     ForEach(document.lines.indices, id: \.self) { index in
@@ -1648,6 +1731,7 @@ struct NowPlayingView: View {
             lyricTimeline = LyricsIndexResolver.timeline(for: document.lines)
             lyricScrollTarget = LyricsIndexResolver.index(at: playbackStore.position, in: lyricTimeline)
         }
+        return observeLyricsScrollSmoke(content)
     }
 
     private var queue: some View {
