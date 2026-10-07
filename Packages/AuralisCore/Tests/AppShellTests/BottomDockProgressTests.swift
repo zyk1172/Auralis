@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 @testable import AppShell
 import CoreGraphics
+import SwiftUI
 import Testing
 
 @Suite("底部 Dock 滚动进度")
@@ -219,21 +220,21 @@ struct LyricCharacterAnimationPolicyTests {
         )
     }
 
-    @Test("逐字强调波峰 1.12 倍，当前句基线 1.02 倍")
+    @Test("逐字强调上限 1.1 倍，未唱到的字符基线 1.02 倍")
     func characterScaleIsVisibleAndBounded() {
         let active = LyricCharacterAnimationPolicy.scale(
             unitIndex: 2,
             unitCount: 5,
             progress: 0.5
         )
-        #expect(abs(active - 1.12) < 0.0001)
+        #expect(abs(active - 1.1) < 0.0001)
 
-        let distant = LyricCharacterAnimationPolicy.scale(
-            unitIndex: 0,
+        let upcoming = LyricCharacterAnimationPolicy.scale(
+            unitIndex: 4,
             unitCount: 5,
             progress: 0.5
         )
-        #expect(abs(distant - 1.02) < 0.0001)
+        #expect(abs(upcoming - 1.02) < 0.0001)
 
         let fallback = LyricCharacterAnimationPolicy.scale(
             unitIndex: 0,
@@ -241,6 +242,34 @@ struct LyricCharacterAnimationPolicyTests {
             progress: nil
         )
         #expect(abs(fallback - 1.06) < 0.0001)
+    }
+
+    @Test("唱过的字符保持放大，后续字符平滑加入")
+    func sungCharactersRetainTheirScale() {
+        for progress in [0.25, 0.5, 0.75, 1.0] {
+            let sung = LyricCharacterAnimationPolicy.scale(
+                unitIndex: 1,
+                unitCount: 5,
+                progress: progress
+            )
+            #expect(abs(sung - 1.1) < 0.0001)
+        }
+
+        let entering = LyricCharacterAnimationPolicy.scale(
+            unitIndex: 2,
+            unitCount: 5,
+            progress: 0.375
+        )
+        #expect(abs(entering - 1.06) < 0.0001)
+
+        for index in 0..<5 {
+            let finished = LyricCharacterAnimationPolicy.scale(
+                unitIndex: index,
+                unitCount: 5,
+                progress: 1
+            )
+            #expect(abs(finished - 1.1) < 0.0001)
+        }
     }
 }
 
@@ -255,5 +284,45 @@ struct MarqueeLayoutPolicyTests {
     @Test("真实超出最小缩放范围的名称才滚动")
     func trulyOverflowingNameScrolls() {
         #expect(MarqueeLayoutPolicy.shouldScroll(textWidth: 350, containerWidth: 300))
+    }
+}
+
+@Suite("歌词手动滚动与自动跟随")
+struct LyricsScrollFollowStateTests {
+    @Test("拖动及惯性过程中不允许自动跟随抢占滚动位置")
+    func userScrollSuppressesPlaybackFollowing() {
+        var state = LyricsScrollFollowState()
+        #expect(state.isFollowingPlayback)
+        for phase in [ScrollPhase.tracking, .interacting, .decelerating] {
+            state.update(phase: phase)
+            #expect(state.isUserScrolling)
+            #expect(!state.isFollowingPlayback)
+            let resumedWhileScrolling = state.resumeFollowing()
+            #expect(!resumedWhileScrolling)
+        }
+        state.update(phase: .idle)
+        #expect(!state.isUserScrolling)
+        #expect(!state.isFollowingPlayback)
+        let resumedAfterIdle = state.resumeFollowing()
+        #expect(resumedAfterIdle)
+        #expect(state.isFollowingPlayback)
+    }
+
+    @Test("程序滚动动画不打断跟随，再次触摸会暂停已恢复的跟随")
+    func programmaticScrollDoesNotBecomeManualBrowsing() {
+        var state = LyricsScrollFollowState()
+        state.update(phase: .animating)
+        #expect(!state.isUserScrolling)
+        #expect(state.isFollowingPlayback)
+        state.update(phase: .idle)
+        #expect(state.isFollowingPlayback)
+        state.update(phase: .tracking)
+        state.update(phase: .idle)
+        let resumedAfterIdle = state.resumeFollowing()
+        #expect(resumedAfterIdle)
+        state.update(phase: .tracking)
+        #expect(!state.isFollowingPlayback)
+        let resumedDuringNewTouch = state.resumeFollowing()
+        #expect(!resumedDuringNewTouch)
     }
 }

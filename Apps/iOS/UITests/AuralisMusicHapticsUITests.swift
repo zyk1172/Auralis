@@ -9,6 +9,13 @@ final class AuralisMusicHapticsUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
         app.terminate()
+        XCUIDevice.shared.orientation = .portrait
+    }
+
+    override func tearDownWithError() throws {
+        // XCTest 的失败中止不能保证执行测试方法中的 Swift defer。
+        // 每个用例都必须恢复方向，避免一项横屏失败污染后续播放 / Dock 检查。
+        XCUIDevice.shared.orientation = .portrait
     }
 
     private func launchSmokeApp(with arguments: String...) {
@@ -130,30 +137,6 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         let next = app.buttons["auralis.nowPlaying.next"].firstMatch
         XCTAssertTrue(next.waitForExistence(timeout: 10), "Next button is missing")
         XCTAssertTrue(next.isEnabled, "Next button must be enabled for a three-track queue")
-        func waitForLabelContaining(_ expected: String, element: XCUIElement, message: String) {
-            let expectation = XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "label CONTAINS %@", expected),
-                object: element
-            )
-            XCTAssertEqual(
-                XCTWaiter.wait(for: [expectation], timeout: 5),
-                .completed,
-                message
-            )
-        }
-
-        func waitForValue(_ expected: String, element: XCUIElement, message: String) {
-            let expectation = XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "value == %@", expected),
-                object: element
-            )
-            XCTAssertEqual(
-                XCTWaiter.wait(for: [expectation], timeout: 5),
-                .completed,
-                message
-            )
-        }
-
         next.tap()
         waitForLabelContaining(
             "Now Playing Smoke B",
@@ -163,10 +146,19 @@ final class AuralisMusicHapticsUITests: XCTestCase {
 
         // Previous restarts the current song after three seconds. Stop playback and
         // seek to the beginning so this assertion specifically checks queue navigation.
-        app.buttons["auralis.nowPlaying.playPause"].firstMatch.tap()
+        let playPause = app.buttons["auralis.nowPlaying.playPause"].firstMatch
+        waitForLabelContaining("暂停", element: playPause, message: "Next must finish starting the local audio before Pause is tapped")
+        playPause.tap()
+        waitForLabelContaining("播放", element: playPause, message: "Playback must finish pausing before seeking")
         let progress = app.descendants(matching: .any)["播放进度"].firstMatch
         XCTAssertTrue(progress.waitForExistence(timeout: 5))
-        progress.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).tap()
+        progress.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: progress.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)))
+        let seekFinished = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value BEGINSWITH %@", "0:01 /"),
+            object: progress
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [seekFinished], timeout: 5), .completed, "Seek must finish within the first three seconds before Previous is tapped")
 
         let previous = app.buttons["auralis.nowPlaying.previous"].firstMatch
         XCTAssertTrue(previous.waitForExistence(timeout: 5), "Previous button is missing")
@@ -207,6 +199,58 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         XCTAssertTrue(title.waitForExistence(timeout: 10), "Session sheet did not present")
         Thread.sleep(forTimeInterval: 2)
         XCTAssertTrue(title.exists, "Session sheet must survive delayed launch bootstrap")
+    }
+
+    func testLyricsManualScrollDoesNotSnapBackDuringPlayback() throws {
+        launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics", "-auralis-ui-smoke-lyrics-scroll")
+        let playPause = app.buttons["auralis.nowPlaying.playPause"].firstMatch
+        XCTAssertTrue(playPause.waitForExistence(timeout: 15))
+        waitForLabelContaining("播放", element: playPause, message: "The smoke player must be ready before its first Play tap")
+        playPause.tap()
+        waitForLabelContaining("暂停", element: playPause, timeout: 15, message: "The local smoke audio must be playing")
+        app.buttons["auralis.nowPlaying.lyrics"].firstMatch.tap()
+
+        let scroll = app.scrollViews["auralis.nowPlaying.lyricsScroll"].firstMatch
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        scroll.swipeUp(velocity: .slow)
+        // 应用在真实浏览窗口内记录原生滚动偏移及歌词推进；AX 查询再慢也不会
+        // 将合法的五秒后恢复跟随误判为回跳，或查找已被播放进度越过的固定行。
+        let sample = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value BEGINSWITH %@", "passed:"),
+            object: scroll
+        )
+        let result = XCTWaiter.wait(for: [sample], timeout: 30)
+        XCTAssertEqual(result, .completed, "Playback must advance while the manual viewport stays within 3pt; actual sample: \(String(describing: scroll.value))")
+        let evidence = XCTAttachment(string: String(describing: scroll.value))
+        evidence.name = "Native lyrics viewport and playback sample"
+        evidence.lifetime = .keepAlways
+        add(evidence)
+    }
+
+    func testLandscapeArtworkIsLargerAndRetainsEdgeClearance() throws {
+        launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics")
+        let playPause = app.buttons["auralis.nowPlaying.playPause"].firstMatch
+        XCTAssertTrue(playPause.waitForExistence(timeout: 15))
+        waitForLabelContaining("播放", element: playPause, message: "The smoke player must be ready before its first Play tap")
+        playPause.tap()
+        waitForLabelContaining("暂停", element: playPause, timeout: 15, message: "Artwork must use the active playback size")
+        XCUIDevice.shared.orientation = .landscapeLeft
+
+        let artwork = app.descendants(matching: .any)["auralis.nowPlaying.landscapeArtwork"].firstMatch
+        XCTAssertTrue(artwork.waitForExistence(timeout: 10))
+        let screen = app.frame
+        XCTAssertGreaterThan(artwork.frame.height, screen.height * 0.78, "The landscape cover must grow beyond the previous height allocation")
+        XCTAssertGreaterThanOrEqual(artwork.frame.minX - screen.minX, 16)
+        XCTAssertGreaterThanOrEqual(artwork.frame.minY - screen.minY, 16)
+        XCTAssertGreaterThanOrEqual(screen.maxY - artwork.frame.maxY, 16)
+
+        app.buttons["auralis.nowPlaying.lyrics"].firstMatch.tap()
+        XCTAssertTrue(app.scrollViews["auralis.nowPlaying.lyricsScroll"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(artwork.exists, "The enlarged cover must remain beside landscape lyrics")
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Landscape artwork and lyrics"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
     }
 
     func testHomeCollapsedDockDoesNotHitExpandedPlayerRegion() throws {
@@ -255,6 +299,32 @@ final class AuralisMusicHapticsUITests: XCTestCase {
             description: "The last library track must remain above the compact Dock player"
         )
     }
+
+    private func waitForLabelContaining(_ expected: String, element: XCUIElement, timeout: TimeInterval = 5, message: String) {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", expected),
+            object: element
+        )
+        let result = XCTWaiter.wait(for: [expectation], timeout: timeout)
+        XCTAssertEqual(
+            result,
+            .completed,
+            result == .completed ? message : "\(message); actual label: \(element.label)"
+        )
+    }
+
+    private func waitForValue(_ expected: String, element: XCUIElement, message: String) {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", expected),
+            object: element
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [expectation], timeout: 5),
+            .completed,
+            message
+        )
+    }
+
 
     private func assertCollapsedDockHitTesting(with smokeArgument: String) {
         launchSmokeApp(with: smokeArgument)

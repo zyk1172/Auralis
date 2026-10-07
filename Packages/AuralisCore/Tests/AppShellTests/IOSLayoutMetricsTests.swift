@@ -127,15 +127,32 @@ struct IOSLayoutMetricsTests {
             isPad: false
         )
         #expect(phone >= 220)
-        #expect(phone <= 360)
-        #expect(phone <= 390 * 0.78 + 0.001)
+        #expect(phone <= 420)
+        #expect(phone > 390 * 0.78)
+        #expect(phone <= 390 - 48)
 
         let pad = NowPlayingLayoutPolicy.landscapeArtworkSide(
             containerSize: CGSize(width: 1194, height: 834),
             isPad: true
         )
         #expect(pad >= phone)
-        #expect(pad <= 520)
-        #expect(pad <= 1194 * 0.40 + 0.001)
+        #expect(pad <= 600)
+        #expect(pad > 1194 * 0.40)
+        #expect(pad <= 834 - 64)
+        #expect(pad <= (1194 - 64 - 36) / 2)
     }
+
+    @Test("超短横屏窗口仍保留边距，封面不会被固定最小尺寸撑出窗口")
+    func landscapeArtworkFitsShortWindows() {
+        for isPad in [false, true] {
+            let size = CGSize(width: 700, height: 180)
+            let side = NowPlayingLayoutPolicy.landscapeArtworkSide(containerSize: size, isPad: isPad)
+            #expect(side >= 0)
+            #expect(side <= size.height - (isPad ? 64 : 48))
+            #expect(side < 220)
+            #expect(NowPlayingLayoutPolicy.landscapeHorizontalPadding(isPad: isPad) >= 20)
+            #expect(NowPlayingLayoutPolicy.landscapeArtworkSide(containerSize: .zero, isPad: isPad) == 0)
+        }
+    }
+
 }

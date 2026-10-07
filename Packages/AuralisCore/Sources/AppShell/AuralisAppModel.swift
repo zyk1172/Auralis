@@ -2870,7 +2870,7 @@ public final class AuralisAppModel: ObservableObject {
 
     /// Now Playing 控件 UI smoke：构造一个无需网络/音频引擎即可切换的三首队列。
     /// 只验证 UI → AppModel → QueueStore 的同步控制路径。
-    func installNowPlayingControlsUISmokeFixture() {
+    func installNowPlayingControlsUISmokeFixture(withLyrics: Bool = false) {
         let serverID: ServerID = "now-playing-smoke"
         let albumID: AlbumID = "now-playing-smoke-album"
         let artistID: ArtistID = "now-playing-smoke-artist"
@@ -2914,6 +2914,21 @@ public final class AuralisAppModel: ObservableObject {
             )
         }
 
+        if withLyrics {
+            for track in tracks {
+                catalog.lyrics[track.id] = LyricsDocument(
+                    trackID: track.id,
+                    lines: (0..<180).map { index in
+                        TimedLyricLine(
+                            startTime: Double(index),
+                            text: "Smoke lyric \(String(format: "%02d", index + 1)) — 顺滑滚动"
+                        )
+                    },
+                    isSynced: true
+                )
+            }
+        }
+
         // UI smoke 必须与开发机 / 模拟器之前持久化的播放模式完全隔离。
         // 若残留 shuffle，点击一次“下一首”可能合法地跳到 C，测试却会误报按钮失效。
         setShuffle(false)
@@ -2924,7 +2939,8 @@ public final class AuralisAppModel: ObservableObject {
         queue = tracks
         currentTrack = tracks[0]
         playbackPosition = 0
-        playbackState = .paused
+        // 引擎尚未加载这段本地音频；必须走 idle → play，而不是对空引擎 resume。
+        playbackState = .idle
     }
 
 #endif
