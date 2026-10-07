@@ -220,7 +220,7 @@ struct LyricCharacterAnimationPolicyTests {
         )
     }
 
-    @Test("逐字强调波峰 1.1 倍，当前句基线 1.02 倍")
+    @Test("逐字强调上限 1.1 倍，未唱到的字符基线 1.02 倍")
     func characterScaleIsVisibleAndBounded() {
         let active = LyricCharacterAnimationPolicy.scale(
             unitIndex: 2,
@@ -229,12 +229,12 @@ struct LyricCharacterAnimationPolicyTests {
         )
         #expect(abs(active - 1.1) < 0.0001)
 
-        let distant = LyricCharacterAnimationPolicy.scale(
-            unitIndex: 0,
+        let upcoming = LyricCharacterAnimationPolicy.scale(
+            unitIndex: 4,
             unitCount: 5,
             progress: 0.5
         )
-        #expect(abs(distant - 1.02) < 0.0001)
+        #expect(abs(upcoming - 1.02) < 0.0001)
 
         let fallback = LyricCharacterAnimationPolicy.scale(
             unitIndex: 0,
@@ -242,6 +242,34 @@ struct LyricCharacterAnimationPolicyTests {
             progress: nil
         )
         #expect(abs(fallback - 1.06) < 0.0001)
+    }
+
+    @Test("唱过的字符保持放大，后续字符平滑加入")
+    func sungCharactersRetainTheirScale() {
+        for progress in [0.25, 0.5, 0.75, 1.0] {
+            let sung = LyricCharacterAnimationPolicy.scale(
+                unitIndex: 1,
+                unitCount: 5,
+                progress: progress
+            )
+            #expect(abs(sung - 1.1) < 0.0001)
+        }
+
+        let entering = LyricCharacterAnimationPolicy.scale(
+            unitIndex: 2,
+            unitCount: 5,
+            progress: 0.375
+        )
+        #expect(abs(entering - 1.06) < 0.0001)
+
+        for index in 0..<5 {
+            let finished = LyricCharacterAnimationPolicy.scale(
+                unitIndex: index,
+                unitCount: 5,
+                progress: 1
+            )
+            #expect(abs(finished - 1.1) < 0.0001)
+        }
     }
 }
 

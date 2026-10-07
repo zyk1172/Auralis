@@ -314,7 +314,7 @@ enum LyricsChromeMotion {
 /// 当前歌词的轻量逐字强调。歌词源目前只有“逐行”时间戳，因此不能伪装成
 /// 真正的逐字 timing；这里仅在当前行与下一行之间做均匀插值。
 struct LyricCharacterAnimationPolicy: Sendable {
-    /// 当前句整体先轻微放大，正在唱到的字符形成 1.1× 波峰。
+    /// 当前句整体先轻微放大，唱过的字符累积保持 1.1×。
     static let currentLineBaseScale: CGFloat = 1.02
     static let maximumScale: CGFloat = 1.1
     static let fallbackLineScale: CGFloat = 1.06
@@ -341,9 +341,8 @@ struct LyricCharacterAnimationPolicy: Sendable {
 
         let lastIndex = max(unitCount - 1, 0)
         let cursor = progress * Double(lastIndex)
-        let distance = abs(Double(unitIndex) - cursor)
-        // 相邻字符之间连续交叉淡入缩放，形成从左到右移动的轻量“波峰”。
-        let influence = max(0, 1 - distance)
+        // 后续字符连续放大；游标越过后保持最大比例，不再回落。
+        let influence = min(max(1 + cursor - Double(unitIndex), 0), 1)
         return currentLineBaseScale
             + (maximumScale - currentLineBaseScale) * CGFloat(influence)
     }
