@@ -83,6 +83,13 @@ class NowPlayingLayoutTest {
         val artwork = compose.onNodeWithTag("player.artwork").fetchSemanticsNode().boundsInRoot
         val lyrics = compose.onNodeWithTag("lyricsContent").fetchSemanticsNode().boundsInRoot
         val footer = compose.onNodeWithTag("footer").fetchSemanticsNode().boundsInRoot
+        val row = compose.onNodeWithTag("player.landscape").fetchSemanticsNode()
+        val dp = row.layoutInfo.density.density
+        assertThat(artwork.width / dp).isWithin(0.1f).of(294f)
+        assertThat(artwork.width).isWithin(0.1f).of(artwork.height)
+        assertThat((artwork.top - row.boundsInRoot.top) / dp).isAtLeast(12f)
+        assertThat((row.boundsInRoot.bottom - artwork.bottom) / dp).isAtLeast(12f)
+        assertThat(artwork.left / dp).isAtLeast(20f)
         assertThat(artwork.right).isAtMost(lyrics.left)
         assertThat(lyrics.bottom).isAtMost(footer.top)
         compose.onNodeWithTag("footer").assertIsDisplayed()
