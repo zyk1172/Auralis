@@ -219,12 +219,26 @@ enum SemanticCollisionRecommendation {
         }
         let targetCount = min(max((try? call.int("targetCount")) ?? 20, 1), 100)
         let maxPerArtist = min(max((try? call.int("maxPerArtist")) ?? 2, 1), 10)
+        var tagQuery = try TagRecommendationTool.query(call, limit: targetCount)
+        let hasTagIntent = TagRecommendationTool.hasIntent(tagQuery)
+        if hasTagIntent || !tagQuery.excludeTags.isEmpty { tagQuery = try tagQuery.validated() }
 
         // Ground against the user's complete playable catalog: active server + true local files.
         // `auralis-local` is a catalog namespace, never a remote server route.
-        let remoteTracks = try await catalog.allTracks(serverID: serverID)
+        let remoteTracks: [Track]
+        if let serverID { remoteTracks = try await catalog.allTracks(serverID: serverID) }
+        else { remoteTracks = [] }
         let localTracks = try await catalog.allTracks(serverID: LocalCatalogOverlay.localServerID)
-        let tracks = TrackQuality.deduplicatedPreferringQuality(remoteTracks + localTracks)
+        var tracks = TrackQuality.deduplicatedPreferringQuality(remoteTracks + localTracks)
+        tracks.removeAll { tagQuery.excludedTrackIDs.contains(GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue).description) }
+        let servers = [serverID, LocalCatalogOverlay.localServerID].compactMap { $0 }
+        if !tagQuery.includeTags.isEmpty || !tagQuery.excludeTags.isEmpty || !tagQuery.numericRanges.isEmpty {
+            let indexed = try await catalog.tagRecommendationCandidates(serverIDs: servers, minimumConfidence: tagQuery.minimumConfidence)
+            let allowed = Set(indexed.filter { TagRecommendationRanker.satisfiesHardConstraints($0, query: tagQuery) }.map {
+                GlobalID(serverID: $0.track.serverID, remoteID: $0.track.id.rawValue)
+            })
+            tracks.removeAll { !allowed.contains(GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue)) }
+        }
 
         var disliked = Set<GlobalID>()
         if let serverID {
@@ -234,27 +248,36 @@ enum SemanticCollisionRecommendation {
             (try? await catalog.dislikedTrackIDs(serverID: LocalCatalogOverlay.localServerID)) ?? []
         )
 
-        let grounded = SemanticCollisionMatcher.match(
+        let matched = SemanticCollisionMatcher.match(
             candidates: candidates,
             tracks: tracks,
             disliked: disliked,
             targetCount: targetCount,
             maxPerArtist: maxPerArtist
         )
-        let fallbackNeeded = grounded.count < targetCount
+        let grounded = TagRecommendationRanker.applyDiversityLimits(matched, query: tagQuery)
+        var supplements: [TagRecommendationPick] = []
+        if grounded.count < targetCount, hasTagIntent {
+            tagQuery.limit = targetCount - grounded.count
+            supplements = try await catalog.recommendByTags(serverIDs: servers, query: tagQuery, existingTracks: grounded)
+        }
+        let finalTracks = grounded + supplements.map(\.track)
+        let fallbackNeeded = finalTracks.count < targetCount
         let summary = fallbackNeeded
-            ? "语义撞库：模型候选 \(candidates.count) 首，统一本地目录高置信度命中 \(grounded.count)/\(targetCount) 首；请用 Recommendation Index / 本地推荐继续补足，未命中的模型歌曲不得直接展示。"
-            : "语义撞库：模型候选 \(candidates.count) 首，统一本地目录高置信度命中目标 \(grounded.count) 首。"
+            ? "语义撞库命中 \(grounded.count) 首，标签补足 \(supplements.count) 首，合计 \(finalTracks.count)/\(targetCount) 首；不足部分请用 recommend_by_tags 明确意图标签，不能随机补足或展示未命中的歌曲。"
+            : "语义撞库命中 \(grounded.count) 首，标签补足 \(supplements.count) 首，合计达到目标 \(finalTracks.count) 首。"
         return ToolResult(
             call: call,
             permission: descriptor.permission,
             success: true,
             summary: summary,
-            payload: .trackCards(grounded.map(TrackCard.from)),
+            payload: .trackCards(finalTracks.map(TrackCard.from)),
             facts: [
                 "recommendation.collision.generated": String(candidates.count),
                 "recommendation.collision.matched": String(grounded.count),
                 "recommendation.collision.target": String(targetCount),
+                "recommendation.collision.tag_supplemented": String(supplements.count),
+                "recommendation.collision.returned": String(finalTracks.count),
                 "recommendation.collision.fallback_needed": fallbackNeeded ? "true" : "false",
             ],
             presentationRole: .candidate

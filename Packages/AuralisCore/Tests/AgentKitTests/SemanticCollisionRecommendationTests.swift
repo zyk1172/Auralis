@@ -1,12 +1,42 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 @testable import AgentKit
 import Domain
+import AIKit
+import Foundation
 import LocalCatalog
 import Testing
 
 @Suite("Semantic collision recommendation")
 struct SemanticCollisionRecommendationTests {
     private let server = ServerID(rawValue: "server")
+
+    @Test("Collision shortfall is filled by real indexed tracks with a shared artist budget")
+    func automaticTagFallback() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let store = try LocalCatalogStore(url: directory.appendingPathComponent("catalog.sqlite"))
+        let tracks = [track("seed", title: "Seed", artist: "A"), track("same", title: "Same Artist", artist: "A"),
+                      track("fallback", title: "Fallback", artist: "B"), track("disliked", title: "Disliked", artist: "C")]
+        let sync = try await store.beginSync(serverID: server, mode: .full)
+        try await store.stageTracks(tracks, session: sync)
+        try await store.completeSync(sync, completedAt: .now)
+        _ = try await store.writeRecommendationIndex(tracks.map {
+            .init(id: "server:\($0.id.rawValue)", moods: ["mood.calm"], confidence: 0.9)
+        }, serverID: server)
+        try await store.setDisliked(GlobalID(serverID: server, remoteID: "disliked"), value: true)
+        let call = ToolCall(name: "recommendation_ground_candidates", arguments: [
+            "candidates": .array([.object(["title": .string("Seed"), "artist": .string("A")])]),
+            "targetCount": .number(2), "maxPerArtist": .number(1), "preferTags": .array([.string("mood.calm")]),
+        ])
+        let descriptor = try #require(AgentToolRegistry.descriptor(for: call.name))
+        let result = try await SemanticCollisionRecommendation.execute(call, descriptor: descriptor, catalog: store, serverID: server)
+        #expect(result.facts["recommendation.collision.matched"] == "1")
+        #expect(result.facts["recommendation.collision.tag_supplemented"] == "1")
+        #expect(result.facts["recommendation.collision.fallback_needed"] == "false")
+        if case let .trackCards(cards) = result.payload {
+            #expect(cards.map(\.globalID.remoteID) == ["seed", "fallback"])
+        } else { Issue.record("Expected grounded track cards") }
+    }
 
     private func track(
         _ id: String,

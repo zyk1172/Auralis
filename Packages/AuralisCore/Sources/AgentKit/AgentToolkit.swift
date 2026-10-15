@@ -129,6 +129,8 @@ public struct AgentToolkit {
         }
         switch call.name {
         // MARK: Catalog reads
+        case "recommend_by_tags":
+            return try await TagRecommendationTool.execute(call, descriptor: descriptor, catalog: catalog, serverID: serverID)
         case "recommendation_ground_candidates":
             return try await SemanticCollisionRecommendation.execute(
                 call,

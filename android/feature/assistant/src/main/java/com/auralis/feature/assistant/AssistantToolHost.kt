@@ -18,6 +18,8 @@ import com.auralis.core.domain.QueueEntry
 import com.auralis.core.domain.QueueEntryId
 import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
+import com.auralis.core.domain.RecommendationIndexTaxonomy
+import com.auralis.core.domain.TagRecommendationRanker
 import com.auralis.core.playback.LocalPlaybackHost
 import com.auralis.core.playback.PlaybackController
 import com.auralis.core.playback.awaitPlaybackController
@@ -260,10 +262,42 @@ class AssistantToolHost(
             }.toString()
         }
 
+        ro("recommendation_taxonomy_search", "搜索本地固定标签（TagID/名称），请用稳定ID构造多标签推荐。", """{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"]}""") { args ->
+            val query = args.string("query")?.trim().orEmpty()
+            require(query.isNotEmpty()) { "query 不能为空" }
+            buildJsonObject {
+                putJsonArray("tags") {
+                    RecommendationIndexTaxonomy.definitions.filter { it.id.contains(query, true) || it.displayName.contains(query, true) }
+                        .sortedWith(compareByDescending<com.auralis.core.domain.RecommendationTagDefinition> { it.id == query || it.displayName == query }.thenBy { it.id })
+                        .take(args.int("limit")?.coerceIn(1, 50) ?: 12).forEach { tag ->
+                            addJsonObject { put("id", tag.id); put("dimension", tag.dimension); put("displayName", tag.displayName) }
+                        }
+                }
+            }.toString()
+        }
+
+        ro("recommend_by_tags", "指定本地标签推荐/撞库回退：多维标签与数值范围、置信度评分、录音去重、艺人/专辑多样性。标签未知或候选不足时如实说明，不随机凑数。", TagRecommendationArguments.schema) { args ->
+            val serverId = activeServerId() ?: throw IllegalArgumentException("没有已连接的服务器")
+            val query = TagRecommendationArguments.query(args, args.int("limit") ?: 20).validated()
+            val picks = graph.recommendationIndex.recommendByTags(serverId, query)
+            buildJsonObject {
+                put("ok", true); put("source", "tag_index"); put("count", picks.size)
+                put("shortfall", (query.limit - picks.size).coerceAtLeast(0))
+                put("tracks", trackSummaries(picks.map { it.track }, query.limit))
+                putJsonArray("matches") { picks.forEach { pick ->
+                    addJsonObject {
+                        put("trackID", pick.track.globalId.serialized); put("score", pick.score)
+                        putJsonArray("matchedTags") { pick.matchedTags.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } }
+                    }
+                } }
+                put("hint", "分类是元数据推断，非音频实测；候选不足不会自动放宽硬约束。")
+            }.toString()
+        }
+
         ro(
             "recommendation_ground_candidates",
-            "开放语义推荐第一召回层：模型先按用户自由描述生成目标数量约 3-5 倍的 title+artist 候选，再一次与本地真实曲库撞库。只返回高置信度真实歌曲；命中不足再用 Recommendation Index/旧推荐补足。纯年份、格式、收藏、离线等确定性筛选不要调用。",
-            """{"properties":{"candidates":{"type":"array","minItems":1,"maxItems":200,"items":{"type":"object","properties":{"title":{"type":"string","minLength":1},"artist":{"type":"string"},"album":{"type":"string"}},"required":["title"],"additionalProperties":false}},"targetCount":{"type":"integer","minimum":1,"maximum":100},"maxPerArtist":{"type":"integer","minimum":1,"maximum":10}},"required":["candidates"],"type":"object"}""",
+            "默认开放语义推荐：模型过采样生成title+artist候选，同时传意图preferTags；撞库不足自动按标签补足。includeTags/excludeTags/numericRanges在两阶段均为硬约束。用户指定标签推荐时直接用recommend_by_tags。",
+            TagRecommendationArguments.collisionSchema("""{"properties":{"candidates":{"type":"array","minItems":1,"maxItems":200,"items":{"type":"object","properties":{"title":{"type":"string","minLength":1},"artist":{"type":"string"},"album":{"type":"string"}},"required":["title"],"additionalProperties":false}},"targetCount":{"type":"integer","minimum":1,"maximum":100},"maxPerArtist":{"type":"integer","minimum":1,"maximum":10}},"required":["candidates"],"type":"object"}"""),
         ) { args ->
             val serverId = activeServerId() ?: throw IllegalArgumentException("没有已连接的服务器")
             val candidates = args["candidates"]?.jsonArray?.mapNotNull { node ->
@@ -279,24 +313,37 @@ class AssistantToolHost(
             if (candidates.isEmpty()) throw IllegalArgumentException("candidates 至少需要一首有效候选")
             val targetCount = args.int("targetCount")?.coerceIn(1, 100) ?: 20
             val maxPerArtist = args.int("maxPerArtist")?.coerceIn(1, 10) ?: 2
-            val allTracks = graph.catalogRepository.observeTracks(serverId).first()
+            var tagQuery = TagRecommendationArguments.query(args, targetCount)
+            if (tagQuery.hasIntent || tagQuery.excludeTags.isNotEmpty()) tagQuery = tagQuery.validated()
+            var allTracks = graph.catalogRepository.observeTracks(serverId).first().filterNot { it.globalId.serialized in tagQuery.excludedTrackIds }
+            if (tagQuery.includeTags.isNotEmpty() || tagQuery.excludeTags.isNotEmpty() || tagQuery.numericRanges.isNotEmpty()) {
+                val allowed = graph.recommendationIndex.recommendationCandidates(serverId, tagQuery.minimumConfidence)
+                    .filter { TagRecommendationRanker.satisfiesHardConstraints(it, tagQuery) }.map { it.track.globalId }.toSet()
+                allTracks = allTracks.filter { it.globalId in allowed }
+            }
             val disliked = graph.catalogRepository.dislikedIds(serverId)
-            val grounded = SemanticCollisionMatcher.match(
+            val matched = SemanticCollisionMatcher.match(
                 candidates = candidates,
                 tracks = allTracks,
                 disliked = disliked,
                 targetCount = targetCount,
                 maxPerArtist = maxPerArtist,
             )
+            val grounded = TagRecommendationRanker.applyDiversityLimits(matched, tagQuery)
+            val supplemented = if (grounded.size < targetCount && tagQuery.hasIntent)
+                graph.recommendationIndex.recommendByTags(serverId, tagQuery.copy(limit = targetCount - grounded.size), grounded) else emptyList()
+            val finalTracks = grounded + supplemented.map { it.track }
             buildJsonObject {
                 put("ok", true)
                 put("generatedCount", candidates.size)
                 put("matchedCount", grounded.size)
                 put("targetCount", targetCount)
-                put("fallbackNeeded", grounded.size < targetCount)
-                put("tracks", trackSummaries(grounded, targetCount))
-                if (grounded.size < targetCount) {
-                    put("fallbackHint", "撞库命中不足：用 recommendation_category_tracks 或现有本地推荐/筛选工具补足；不要虚构未命中的歌曲。")
+                put("tagSupplementedCount", supplemented.size)
+                put("returnedCount", finalTracks.size)
+                put("fallbackNeeded", finalTracks.size < targetCount)
+                put("tracks", trackSummaries(finalTracks, targetCount))
+                if (finalTracks.size < targetCount) {
+                    put("fallbackHint", "推荐不足：用 recommend_by_tags 明确多维意图，排除已展示ID；不要随机补足或放宽硬约束。")
                 }
             }.toString()
         }
@@ -860,6 +907,7 @@ class AssistantToolHost(
             "queue_save_as_playlist" -> R.string.assistant_tool_save_queue_as_playlist
             "library_get_similar_songs" -> R.string.assistant_tool_find_similar
             "recommendation_ground_candidates" -> R.string.assistant_tool_recommendation_category
+            "recommend_by_tags", "recommendation_taxonomy_search" -> R.string.assistant_tool_recommendation_category
             "recommendation_category_tracks" -> R.string.assistant_tool_recommendation_category
             "recommendation_create_playlist" -> R.string.assistant_tool_recommendation_playlist
             "queue_replace" -> R.string.assistant_tool_replace_queue
