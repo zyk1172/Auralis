@@ -20,7 +20,9 @@ import kotlinx.serialization.json.putJsonArray
 internal object TagRecommendationArguments {
     private val properties = Json.parseToJsonElement("""{
         "includeTags":{"type":"array","items":{"type":"string"},"maxItems":200,"description":"必须同时匹配的稳定 TagID，AND，不放宽"},
-        "preferTags":{"type":"array","items":{"type":"string"},"maxItems":200,"description":"偏好 TagID，同维度备选、跨维度平衡；无正向硬条件时至少命中一项"},
+        "preferTags":{"type":"array","items":{"type":"string"},"maxItems":200,"description":"偏好TagID，跨维度平衡、多个独立命中奖励；同义词不重复计分；无正向硬条件时至少命中一项"},
+        "anyTagGroups":{"type":"array","maxItems":20,"items":{"type":"array","minItems":1,"maxItems":20,"items":{"type":"string"}},"description":"组内AND、组间OR，至少完整满足一组，同时执行includeTags及排除/范围；如[[scene.study,instrument.piano],[scene.late_night,instrument.acoustic_guitar]]"},
+        "minimumPreferredMatches":{"type":"integer","minimum":0,"maximum":200,"description":"至少命中N个不同preferTags；默认0：有正向硬条件时偏好可不命中，否则至少1；同义词只算一个"},
         "excludeTags":{"type":"array","items":{"type":"string"},"maxItems":200,"description":"排除任一命中的标签"},
         "numericRanges":{"type":"object","additionalProperties":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2},"description":"数值维度到[min,max]；energy 1..10，其余特征1..5；tempo不是BPM"},
         "excludeTrackIDs":{"type":"array","items":{"type":"string"},"maxItems":200,"description":"已展示歌曲的GlobalTrackID字符串"},
@@ -61,8 +63,23 @@ internal object TagRecommendationArguments {
         val confidence = args["minimumConfidence"]?.takeUnless { it == JsonNull }?.let {
             (it as? JsonPrimitive)?.doubleOrNull ?: throw IllegalArgumentException("无效 minimumConfidence")
         } ?: 0.35
+        val groups = args["anyTagGroups"]?.takeUnless { it == JsonNull }?.let { raw ->
+            require(raw is JsonArray && raw.size <= 20) { "anyTagGroups 最多20组" }
+            raw.map { group ->
+                require(group is JsonArray && group.isNotEmpty() && group.size <= 20) { "anyTagGroups 每组1..20个标签" }
+                group.map { node ->
+                    require(node is JsonPrimitive && node.isString && node.content.isNotBlank()) { "anyTagGroups 含无效标签" }
+                    node.content
+                }
+            }
+        }.orEmpty()
+        val minimumMatches = args["minimumPreferredMatches"]?.takeUnless { it == JsonNull }?.let {
+            require(it is JsonPrimitive && !it.isString) { "minimumPreferredMatches 必须为整数" }
+            requireNotNull(it.intOrNull) { "minimumPreferredMatches 必须为整数" }
+        } ?: 0
         return TagRecommendationQuery(includeTags = strings("includeTags"), preferTags = strings("preferTags"),
-            excludeTags = strings("excludeTags"), numericRanges = ranges, excludedTrackIds = strings("excludeTrackIDs").toSet(),
+            excludeTags = strings("excludeTags"), anyTagGroups = groups, minimumPreferredMatches = minimumMatches,
+            numericRanges = ranges, excludedTrackIds = strings("excludeTrackIDs").toSet(),
             minimumConfidence = confidence, maxPerArtist = (args["maxPerArtist"] as? JsonPrimitive)?.intOrNull ?: 2,
             maxPerAlbum = (args["maxPerAlbum"] as? JsonPrimitive)?.intOrNull ?: 2, limit = limit)
     }

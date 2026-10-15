@@ -6,6 +6,10 @@ import Foundation
 public struct TagRecommendationQuery: Sendable {
     public var includeTags: [String]
     public var preferTags: [String]
+    /// At least one group must match completely (OR of AND clauses), in addition to includeTags.
+    public var anyTagGroups: [[String]]
+    /// Zero keeps preferences soft when a positive hard condition exists.
+    public var minimumPreferredMatches: Int
     public var excludeTags: [String]
     public var numericRanges: [String: ClosedRange<Int>]
     public var excludedTrackIDs: Set<String>
@@ -16,11 +20,14 @@ public struct TagRecommendationQuery: Sendable {
 
     public init(
         includeTags: [String] = [], preferTags: [String] = [], excludeTags: [String] = [],
+        anyTagGroups: [[String]] = [], minimumPreferredMatches: Int = 0,
         numericRanges: [String: ClosedRange<Int>] = [:], excludedTrackIDs: Set<String> = [],
         minimumConfidence: Double = 0.35, maxPerArtist: Int = 2, maxPerAlbum: Int = 2, limit: Int = 20
     ) {
         self.includeTags = includeTags
         self.preferTags = preferTags
+        self.anyTagGroups = anyTagGroups
+        self.minimumPreferredMatches = minimumPreferredMatches
         self.excludeTags = excludeTags
         self.numericRanges = numericRanges
         self.excludedTrackIDs = excludedTrackIDs
@@ -35,6 +42,15 @@ public struct TagRecommendationQuery: Sendable {
         "instrumentalness": 5, "liveness": 5, "speechiness": 5, "valence": 5, "complexity": 5,
     ]
 
+    public var hasIntent: Bool {
+        !includeTags.isEmpty || !preferTags.isEmpty || !anyTagGroups.isEmpty || !numericRanges.isEmpty
+    }
+
+    public var hasHardTagConditions: Bool {
+        !includeTags.isEmpty || !anyTagGroups.isEmpty || minimumPreferredMatches > 0
+            || !excludeTags.isEmpty || !numericRanges.isEmpty
+    }
+
     public func validated() throws -> TagRecommendationQuery {
         var result = self
         func resolve(_ tags: [String]) throws -> [String] {
@@ -48,6 +64,15 @@ public struct TagRecommendationQuery: Sendable {
         result.includeTags = try resolve(includeTags)
         result.preferTags = try resolve(preferTags)
         result.excludeTags = try resolve(excludeTags)
+        guard anyTagGroups.count <= 20,
+              anyTagGroups.allSatisfy({ !$0.isEmpty && $0.count <= 20 }) else {
+            throw TagRecommendationError.invalidRange("anyTagGroups (1...20 tags per group, at most 20 groups)")
+        }
+        result.anyTagGroups = try Array(Set(anyTagGroups.map { try resolve($0) }))
+            .sorted { $0.lexicographicallyPrecedes($1) }
+        guard (0...result.preferTags.count).contains(minimumPreferredMatches) else {
+            throw TagRecommendationError.invalidRange("minimumPreferredMatches")
+        }
         for (dimension, range) in numericRanges {
             guard let upper = Self.numericUpperBounds[dimension],
                   range.lowerBound >= 1, range.upperBound <= upper else {
@@ -57,7 +82,7 @@ public struct TagRecommendationQuery: Sendable {
         guard minimumConfidence.isFinite, (0...1).contains(minimumConfidence) else {
             throw TagRecommendationError.invalidRange("minimumConfidence")
         }
-        guard !result.includeTags.isEmpty || !result.preferTags.isEmpty || !numericRanges.isEmpty else {
+        guard result.hasIntent else {
             throw TagRecommendationError.emptyIntent
         }
         return result
@@ -112,6 +137,8 @@ public enum TagRecommendationRanker {
     public static func satisfiesHardConstraints(_ candidate: TagRecommendationCandidate, query: TagRecommendationQuery) -> Bool {
         let reliable = Set(candidate.tags.filter { $0.value.isFinite && $0.value >= query.minimumConfidence }.keys)
         return Set(query.includeTags).isSubset(of: reliable)
+            && (query.anyTagGroups.isEmpty || query.anyTagGroups.contains { Set($0).isSubset(of: reliable) })
+            && reliable.intersection(query.preferTags).count >= query.minimumPreferredMatches
             && Set(query.excludeTags).isDisjoint(with: Set(candidate.tags.keys))
             && !query.excludedTrackIDs.contains(identity(candidate.track))
             && query.numericRanges.allSatisfy { dimension, range in candidate.numericFeatures[dimension].map(range.contains) == true }
@@ -123,7 +150,9 @@ public enum TagRecommendationRanker {
     ) throws -> [TagRecommendationPick] {
         let query = try raw.validated()
         let include = Set(query.includeTags), prefer = Set(query.preferTags)
-        let preferences = Dictionary(grouping: prefer, by: { $0.split(separator: ".").first.map(String.init) ?? "" })
+        let groupTags = Set(query.anyTagGroups.flatMap { $0 })
+        let scoringTags = prefer.isEmpty ? groupTags : prefer
+        let preferences = Dictionary(grouping: scoringTags.sorted(), by: { $0.split(separator: ".").first.map(String.init) ?? "" })
         let existingIDs = Set(existingTracks.map(identity))
         let existingRecordings = Set(existingTracks.map(recording))
         let eligible = candidates.filter { candidate in
@@ -131,12 +160,12 @@ public enum TagRecommendationRanker {
             return !existingIDs.contains(identity(candidate.track))
                 && !existingRecordings.contains(recording(candidate.track))
                 && satisfiesHardConstraints(candidate, query: query)
-                && (prefer.isEmpty || !include.isEmpty || !query.numericRanges.isEmpty || !prefer.isDisjoint(with: tags))
+                && (prefer.isEmpty || !include.isEmpty || !groupTags.isEmpty || !query.numericRanges.isEmpty || !prefer.isDisjoint(with: tags))
         }
         let frequencies = eligible.reduce(into: [String: Int]()) { counts, candidate in
             for (tag, confidence) in candidate.tags where confidence.isFinite && confidence >= query.minimumConfidence { counts[tag, default: 0] += 1 }
         }
-        let weights = Dictionary(uniqueKeysWithValues: prefer.map { tag in
+        let weights = Dictionary(uniqueKeysWithValues: scoringTags.map { tag in
             (tag, 1 + log(Double(eligible.count + 1) / Double(frequencies[tag, default: 0] + 1)))
         })
         let byID = Dictionary(eligible.map { (identity($0.track), $0) }, uniquingKeysWith: { a, _ in a })
@@ -150,21 +179,26 @@ public enum TagRecommendationRanker {
             guard let candidate = byID[identity(track)] else { return nil }
             let matched = Set(candidate.tags.filter { $0.value.isFinite && $0.value >= query.minimumConfidence }.keys)
             let relevance: Double
-            if prefer.isEmpty { relevance = 1 }
+            if scoringTags.isEmpty { relevance = 1 }
             else {
-                // Alternatives within a dimension compete; many mood synonyms cannot outweigh an instrument/scene.
-                relevance = preferences.values.reduce(0.0) { sum, tags in
+                // Balance dimensions, then reward additional distinct matches within each dimension.
+                let balanced = preferences.keys.sorted().reduce(0.0) { sum, dimension in
+                    let tags = preferences[dimension, default: []]
                     let denominator = tags.map { weights[$0, default: 1] }.max() ?? 1
                     let evidence = tags.map { tag in
                         matched.contains(tag) ? min(1, candidate.tags[tag, default: 0]) * weights[tag, default: 1] / denominator : 0
                     }.max() ?? 0
                     return sum + evidence
                 } / Double(preferences.count)
+                let coverage = scoringTags.sorted().reduce(0.0) { sum, tag in
+                    sum + (matched.contains(tag) ? min(1, candidate.tags[tag, default: 0]) * weights[tag, default: 1] : 0)
+                } / scoringTags.sorted().reduce(0.0) { $0 + weights[$1, default: 1] }
+                relevance = 0.75 * balanced + 0.25 * coverage
             }
             let confidence = matched.map { min(1, candidate.tags[$0, default: 0]) }.max() ?? 0
             return (TagRecommendationPick(
                 track: track, score: 0.9 * relevance + 0.1 * confidence,
-                matchedTags: Array(matched.intersection(include.union(prefer))).sorted()
+                matchedTags: Array(matched.intersection(include.union(prefer).union(groupTags))).sorted()
             ), matched, 0, artist(track), album(track), identity(track))
         }
         var artists = [String: Int](), albums = [String: Int]()

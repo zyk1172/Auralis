@@ -6,6 +6,17 @@ import LocalCatalog
 import Testing
 
 struct RecommendationIndexClassificationContractTests {
+    @Test("Multi-label classification preserves distinct same-dimension evidence and deduplicates aliases")
+    func multipleLabelsSurviveNormalization() throws {
+        let current = batch(["track"])
+        let values = Array(repeating: "自习", count: 64) + ["学习", "scene.focus", "scene.pomodoro", "instrument.piano", "instrument.oboe"]
+        let tagsJSON = String(decoding: try JSONEncoder().encode(values), as: UTF8.self)
+        let result = try RecommendationIndexClassificationParser.parse(
+            "{\"items\":[{\"id\":\"track\",\"tags\":\(tagsJSON)}]}", for: current
+        ).get().items[0]
+        #expect(Set(result.scenes) == ["scene.study", "scene.focus", "scene.pomodoro"])
+        #expect(Set(result.instruments) == ["instrument.piano", "instrument.oboe"])
+    }
     private func batch(_ ids: [String]) -> RecommendationIndexPreparedBatch {
         let tracks = ids.map { id in
             CatalogTrackLine(

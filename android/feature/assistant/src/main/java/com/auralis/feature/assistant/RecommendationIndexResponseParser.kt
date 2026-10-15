@@ -58,11 +58,13 @@ internal class RecommendationIndexResponseParser(
         val confidence = item["confidence"]?.jsonPrimitive?.contentOrNull
             ?.toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.0..1.0 } ?: 0.5
         val tags = ArrayList<RecommendationIndexTag>()
+        val seen = mutableSetOf<String>()
         item["tags"]?.let { element ->
             runCatching { element.jsonArray }.getOrNull()?.forEach { tagElement ->
                 val id = runCatching { tagElement.jsonPrimitive.contentOrNull }.getOrNull()?.trim()
                     ?: return@forEach
                 val definition = RecommendationIndexTaxonomy.definition(id) ?: return@forEach
+                if (seen.size >= 64 || !seen.add(definition.id)) return@forEach
                 tags += RecommendationIndexTag(definition.dimension, definition.id, confidence)
             }
         }
@@ -75,7 +77,7 @@ internal class RecommendationIndexResponseParser(
                 tags += RecommendationIndexTag(dimension, number.toInt().toString(), confidence)
             }
         }
-        return tags
+        return tags.distinctBy { it.dimension to it.value }
     }
 
     private fun extractJSONObject(raw: String): String? {

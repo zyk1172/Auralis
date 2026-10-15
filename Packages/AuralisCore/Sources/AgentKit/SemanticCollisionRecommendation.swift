@@ -221,7 +221,7 @@ enum SemanticCollisionRecommendation {
         let maxPerArtist = min(max((try? call.int("maxPerArtist")) ?? 2, 1), 10)
         var tagQuery = try TagRecommendationTool.query(call, limit: targetCount)
         let hasTagIntent = TagRecommendationTool.hasIntent(tagQuery)
-        if hasTagIntent || !tagQuery.excludeTags.isEmpty { tagQuery = try tagQuery.validated() }
+        if hasTagIntent || tagQuery.hasHardTagConditions { tagQuery = try tagQuery.validated() }
 
         // Ground against the user's complete playable catalog: active server + true local files.
         // `auralis-local` is a catalog namespace, never a remote server route.
@@ -232,7 +232,7 @@ enum SemanticCollisionRecommendation {
         var tracks = TrackQuality.deduplicatedPreferringQuality(remoteTracks + localTracks)
         tracks.removeAll { tagQuery.excludedTrackIDs.contains(GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue).description) }
         let servers = [serverID, LocalCatalogOverlay.localServerID].compactMap { $0 }
-        if !tagQuery.includeTags.isEmpty || !tagQuery.excludeTags.isEmpty || !tagQuery.numericRanges.isEmpty {
+        if tagQuery.hasHardTagConditions {
             let indexed = try await catalog.tagRecommendationCandidates(serverIDs: servers, minimumConfidence: tagQuery.minimumConfidence)
             let allowed = Set(indexed.filter { TagRecommendationRanker.satisfiesHardConstraints($0, query: tagQuery) }.map {
                 GlobalID(serverID: $0.track.serverID, remoteID: $0.track.id.rawValue)

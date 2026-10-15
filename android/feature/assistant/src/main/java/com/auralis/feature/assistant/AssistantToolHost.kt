@@ -267,9 +267,7 @@ class AssistantToolHost(
             require(query.isNotEmpty()) { "query 不能为空" }
             buildJsonObject {
                 putJsonArray("tags") {
-                    RecommendationIndexTaxonomy.definitions.filter { it.id.contains(query, true) || it.displayName.contains(query, true) }
-                        .sortedWith(compareByDescending<com.auralis.core.domain.RecommendationTagDefinition> { it.id == query || it.displayName == query }.thenBy { it.id })
-                        .take(args.int("limit")?.coerceIn(1, 50) ?: 12).forEach { tag ->
+                    RecommendationIndexTaxonomy.search(query, args.int("limit") ?: 12).forEach { tag ->
                             addJsonObject { put("id", tag.id); put("dimension", tag.dimension); put("displayName", tag.displayName) }
                         }
                 }
@@ -314,9 +312,9 @@ class AssistantToolHost(
             val targetCount = args.int("targetCount")?.coerceIn(1, 100) ?: 20
             val maxPerArtist = args.int("maxPerArtist")?.coerceIn(1, 10) ?: 2
             var tagQuery = TagRecommendationArguments.query(args, targetCount)
-            if (tagQuery.hasIntent || tagQuery.excludeTags.isNotEmpty()) tagQuery = tagQuery.validated()
+            if (tagQuery.hasIntent || tagQuery.hasHardTagConditions) tagQuery = tagQuery.validated()
             var allTracks = graph.catalogRepository.observeTracks(serverId).first().filterNot { it.globalId.serialized in tagQuery.excludedTrackIds }
-            if (tagQuery.includeTags.isNotEmpty() || tagQuery.excludeTags.isNotEmpty() || tagQuery.numericRanges.isNotEmpty()) {
+            if (tagQuery.hasHardTagConditions) {
                 val allowed = graph.recommendationIndex.recommendationCandidates(serverId, tagQuery.minimumConfidence)
                     .filter { TagRecommendationRanker.satisfiesHardConstraints(it, tagQuery) }.map { it.track.globalId }.toSet()
                 allTracks = allTracks.filter { it.globalId in allowed }

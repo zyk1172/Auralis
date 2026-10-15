@@ -8,12 +8,16 @@ on:
       - ".github/workflows/android.yml"
       - "Scripts/check_secrets.py"
       - "Scripts/check_license_headers.py"
+      - "Scripts/sync_recommendation_taxonomy.py"
+      - "Packages/AuralisCore/Sources/LocalCatalog/RecommendationIndexTaxonomy.swift"
   pull_request:
     paths:
       - "android/**"
       - ".github/workflows/android.yml"
       - "Scripts/check_secrets.py"
       - "Scripts/check_license_headers.py"
+      - "Scripts/sync_recommendation_taxonomy.py"
+      - "Packages/AuralisCore/Sources/LocalCatalog/RecommendationIndexTaxonomy.swift"
   workflow_dispatch:
 
 concurrency:
@@ -48,6 +52,9 @@ jobs:
 
       - name: SPDX header check
         run: python3 ../Scripts/check_license_headers.py
+
+      - name: Fixed taxonomy parity
+        run: python3 ../Scripts/sync_recommendation_taxonomy.py --check
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4

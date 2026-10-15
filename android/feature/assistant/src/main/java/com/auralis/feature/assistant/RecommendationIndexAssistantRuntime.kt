@@ -113,6 +113,7 @@ class RecommendationIndexAssistantRuntime(
             只能输出一个 JSON object，不能输出 Markdown、解释、工具调用或额外文字，形状必须是 {"items":[...]}。
             items 必须逐一覆盖输入中的全部 id，不能新增、删除、重复或改写 id。每个 item 至少包含 id；tags 是固定 taxonomy ID 的字符串数组；features 只能使用下列数值字段。
             不确定的标签或没有充分证据的字段省略，不要臆造；没有可判断标签时仍返回空 tags/features。confidence 是 0 到 1 的数字，可省略。
+            一首歌可同时具有多个情绪、场景、风格、乐器等标签，每维度均可多选，保留全部有独立证据的适用标签，不只输出主标签。同义说法只输出一次规范ID，最多64个不同标签；不要为覆盖更多标签而猜测。
             数值范围：energy=1..10，其余 tempo/acousticness/danceability/instrumentalness/liveness/speechiness/valence/complexity=1..5，且必须是整数。
             固定 taxonomy（ID=中文名）：
             ${RecommendationIndexTaxonomy.compactCatalog()}

@@ -7,7 +7,9 @@ import LocalCatalog
 enum TagRecommendationTool {
     static let parameters: [ToolParameter] = [
         .init(name: "includeTags", required: false, description: "必须同时满足的稳定 TagID（AND）；绝不自动放宽。", schemaJSON: tagArraySchema),
-        .init(name: "preferTags", required: false, description: "意图偏好 TagID；同维度为备选，跨维度平衡评分。只有偏好、没有硬性正向条件时至少命中一项。", schemaJSON: tagArraySchema),
+        .init(name: "preferTags", required: false, description: "偏好 TagID；跨维度平衡、多个独立命中奖励。同义词归一不重复计分。无正向硬条件时至少命中一项。", schemaJSON: tagArraySchema),
+        .init(name: "anyTagGroups", required: false, description: "组合条件：组内 AND，组间 OR，至少完整满足一组；同时满足 includeTags 与所有排除/数值条件。如 [[学习,钢琴],[深夜,木吉他]]，使用稳定 TagID。", schemaJSON: #"{"type":"array","maxItems":20,"items":{"type":"array","minItems":1,"maxItems":20,"items":{"type":"string"}}}"#),
+        .init(name: "minimumPreferredMatches", required: false, description: "至少命中多少个不同的 preferTags；默认0（有正向硬条件时偏好可不命中，否则至少1）。明确要求至少符合N个偏好时填写N，同义词仅算一个。", schemaJSON: #"{"type":"integer","minimum":0,"maximum":200}"#),
         .init(name: "excludeTags", required: false, description: "排除任一标签命中的歌曲。", schemaJSON: tagArraySchema),
         .init(name: "numericRanges", required: false, description: "固定数值维度到 [最小,最大] 的硬范围。energy=1...10；tempo/acousticness/danceability/instrumentalness/liveness/speechiness/valence/complexity=1...5，非 BPM。", schemaJSON: #"{"type":"object","additionalProperties":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2}}"#),
         .init(name: "excludeTrackIDs", required: false, description: "已展示/已选择的 GlobalTrackID 字符串，防止重复补足。", schemaJSON: tagArraySchema),
@@ -35,9 +37,35 @@ enum TagRecommendationTool {
         if let value = call.arguments["minimumConfidence"], value != .null {
             confidence = try call.double("minimumConfidence")
         } else { confidence = 0.35 }
+        var groups = [[String]]()
+        if let raw = call.arguments["anyTagGroups"], raw != .null {
+            guard case let .array(values) = raw, values.count <= 20 else {
+                throw ToolArgumentError.invalid("anyTagGroups", expected: "array of non-empty string arrays (max 20x20)")
+            }
+            groups = try values.map { value in
+                guard case let .array(tags) = value, !tags.isEmpty, tags.count <= 20 else {
+                    throw ToolArgumentError.invalid("anyTagGroups", expected: "non-empty string arrays (max 20)")
+                }
+                return try tags.map { tag in
+                    guard case let .string(text) = tag, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        throw ToolArgumentError.invalid("anyTagGroups", expected: "non-empty strings")
+                    }
+                    return text
+                }
+            }
+        }
+        var minimumMatches = 0
+        if let raw = call.arguments["minimumPreferredMatches"], raw != .null {
+            guard case let .number(value) = raw, value.isFinite, value.rounded() == value, (0...200).contains(value) else {
+                throw ToolArgumentError.invalid("minimumPreferredMatches", expected: "integer (0...200)")
+            }
+            minimumMatches = Int(value)
+        }
         return TagRecommendationQuery(
             includeTags: try strings(call, "includeTags"), preferTags: try strings(call, "preferTags"),
-            excludeTags: try strings(call, "excludeTags"), numericRanges: ranges,
+            excludeTags: try strings(call, "excludeTags"), anyTagGroups: groups,
+            minimumPreferredMatches: minimumMatches,
+            numericRanges: ranges,
             excludedTrackIDs: Set(try strings(call, "excludeTrackIDs")),
             minimumConfidence: confidence,
             maxPerArtist: (try? call.int("maxPerArtist")) ?? 2,
@@ -46,7 +74,7 @@ enum TagRecommendationTool {
     }
 
     static func hasIntent(_ query: TagRecommendationQuery) -> Bool {
-        !query.includeTags.isEmpty || !query.preferTags.isEmpty || !query.numericRanges.isEmpty
+        query.hasIntent
     }
 
     static func execute(_ call: ToolCall, descriptor: ToolDescriptor, catalog: LocalCatalogStore, serverID: ServerID?) async throws -> ToolResult {

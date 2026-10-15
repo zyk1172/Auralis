@@ -139,7 +139,10 @@ public enum SystemPromptBuilder {
         - 默认开放语义推荐先撞库：用 taxonomy 工具把场景、情绪、风格、乐器等意图解析为稳定 TagID，
           同时向 recommendation_ground_candidates 传 preferTags；不足时 Runtime 自动按同意图标签补足。
         - 用户指定“本地标签/按标签推荐”时直接调用 recommend_by_tags，跳过撞库。
-        - 必须满足的标签放 includeTags（AND）；偏好/同义备选放 preferTags；不要的标签放 excludeTags。
+        - 必须同时满足的标签放 includeTags（AND）；偏好放 preferTags；不要的放 excludeTags。同义词先归一到同一 ID。
+          组合的组内 AND、组间 OR 放 anyTagGroups：如 [[scene.study,instrument.piano],[scene.late_night,instrument.acoustic_guitar]]。
+          至少符合 N 个偏好用 minimumPreferredMatches=N；同义标签不重复计数。一首歌可命中多个标签/组合，但只推荐一次。
+          组合条件及最少命中数在撞库和标签补足中都必须保留，不把“或”误写成 includeTags 的“且”。
           numericRanges 用分类特征量表，不把 tempo=1...5 当作 BPM。多维意图不要缩成单个情绪标签。
         - 回退或继续推荐必须带 excludeTrackIDs 排除已展示曲目。少于目标时说明索引覆盖/约束导致缺口，
           不偷偷放宽用户硬约束，不随机凑数。分类是元数据推断，不能声称做过音频实测。

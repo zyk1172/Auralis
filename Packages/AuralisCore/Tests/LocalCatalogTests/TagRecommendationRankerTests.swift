@@ -5,6 +5,42 @@ import Testing
 
 @Suite("Multi-dimensional tag recommendation")
 struct TagRecommendationRankerTests {
+    @Test("Alternative combinations match whole groups and return multi-group songs once")
+    func alternativeGroups() throws {
+        let both = candidate("both", tags: ["scene.study", "instrument.piano", "scene.late_night", "instrument.acoustic_guitar", "vocal.instrumental"])
+        let first = candidate("first", tags: ["scene.study", "instrument.piano", "vocal.instrumental"])
+        let second = candidate("second", tags: ["scene.late_night", "instrument.acoustic_guitar", "vocal.instrumental"])
+        let crossed = candidate("crossed", tags: ["scene.study", "instrument.acoustic_guitar", "vocal.instrumental"])
+        let sad = candidate("sad", tags: Array(both.tags.keys) + ["mood.sad"])
+        let vocal = candidate("vocal", tags: ["scene.study", "instrument.piano"])
+        let query = TagRecommendationQuery(includeTags: ["纯音乐"], excludeTags: ["伤感"], anyTagGroups: [
+            ["自习", "钢琴"], ["深夜", "木吉他"], ["钢琴", "学习"],
+        ])
+        let result = try TagRecommendationRanker.recommend(candidates: [crossed, first, second, sad, vocal, both], query: query)
+        #expect(result.first?.track.id.rawValue == "both")
+        #expect(Set(result.map(\.track.id.rawValue)) == ["both", "first", "second"])
+        #expect(result.count == 3)
+        #expect(result.first?.matchedTags.count == 5)
+        #expect(try query.validated().anyTagGroups.count == 2)
+    }
+
+    @Test("Independent same-dimension matches boost rank; aliases cannot inflate minimum match counts")
+    func minimumMatchesAndCoverage() throws {
+        let full = candidate("z-full", tags: ["scene.study", "scene.focus", "instrument.piano"])
+        let partial = candidate("a-partial", tags: ["scene.study", "instrument.piano"])
+        let query = TagRecommendationQuery(preferTags: ["自习", "学习", "专心", "钢琴"], minimumPreferredMatches: 2)
+        #expect(try query.validated().preferTags.count == 3)
+        let result = try TagRecommendationRanker.recommend(candidates: [partial, full], query: query)
+        #expect(result.first?.track.id.rawValue == "z-full")
+        #expect(result.count == 2)
+        var all = query
+        all.minimumPreferredMatches = 3
+        #expect(try TagRecommendationRanker.recommend(candidates: [partial, full], query: all).map(\.track.id.rawValue) == ["z-full"])
+        #expect(throws: TagRecommendationError.self) { try TagRecommendationQuery(preferTags: ["自习", "学习"], minimumPreferredMatches: 2).validated() }
+        #expect(throws: TagRecommendationError.self) { try TagRecommendationQuery(anyTagGroups: [[]]).validated() }
+        #expect(throws: TagRecommendationError.self) { try TagRecommendationQuery(anyTagGroups: [["unknown"]]).validated() }
+    }
+
     private func candidate(_ id: String, artist: String = "", album: String = "", tags: [String], confidence: Double = 0.9) -> TagRecommendationCandidate {
         .init(track: Track(id: TrackID(rawValue: id), serverID: "server", albumID: AlbumID(rawValue: "album-\(id)"), artistID: ArtistID(rawValue: "artist-\(id)"),
                            title: "Song \(id)", artistName: artist.isEmpty ? id : artist, albumTitle: album, duration: 180),

@@ -6,6 +6,48 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class TagRecommendationTest {
+    @Test fun wholeAlternativeGroupsMatchAndMultiGroupSongsAppearOnce() {
+        val both = candidate("both", listOf("scene.study", "instrument.piano", "scene.late_night", "instrument.acoustic_guitar", "vocal.instrumental"))
+        val first = candidate("first", listOf("scene.study", "instrument.piano", "vocal.instrumental"))
+        val second = candidate("second", listOf("scene.late_night", "instrument.acoustic_guitar", "vocal.instrumental"))
+        val crossed = candidate("crossed", listOf("scene.study", "instrument.acoustic_guitar", "vocal.instrumental"))
+        val sad = candidate("sad", both.tags.keys.toList() + "mood.sad")
+        val vocal = candidate("vocal", listOf("scene.study", "instrument.piano"))
+        val query = TagRecommendationQuery(includeTags = listOf("纯音乐"), excludeTags = listOf("伤感"),
+            anyTagGroups = listOf(listOf("自习", "钢琴"), listOf("深夜", "木吉他"), listOf("钢琴", "学习")))
+        val result = TagRecommendationRanker.recommend(listOf(crossed, first, second, sad, vocal, both), query)
+        assertThat(result.first().track.id.value).isEqualTo("both")
+        assertThat(result.map { it.track.id.value }).containsExactly("both", "first", "second")
+        assertThat(result.first().matchedTags).hasSize(5)
+        assertThat(query.validated().anyTagGroups).hasSize(2)
+    }
+
+    @Test fun independentMatchesBoostRankingAndAliasesCannotInflateThresholds() {
+        val full = candidate("z-full", listOf("scene.study", "scene.focus", "instrument.piano"))
+        val partial = candidate("a-partial", listOf("scene.study", "instrument.piano"))
+        val query = TagRecommendationQuery(preferTags = listOf("自习", "学习", "专心", "钢琴"), minimumPreferredMatches = 2)
+        assertThat(query.validated().preferTags).hasSize(3)
+        assertThat(TagRecommendationRanker.recommend(listOf(partial, full), query).first().track.id.value).isEqualTo("z-full")
+        assertThat(TagRecommendationRanker.recommend(listOf(partial, full), query.copy(minimumPreferredMatches = 3)).map { it.track.id.value }).containsExactly("z-full")
+        assertThrows(IllegalArgumentException::class.java) { TagRecommendationQuery(preferTags = listOf("自习", "学习"), minimumPreferredMatches = 2).validated() }
+        assertThrows(IllegalArgumentException::class.java) { TagRecommendationQuery(anyTagGroups = listOf(emptyList())).validated() }
+        assertThrows(IllegalArgumentException::class.java) { TagRecommendationQuery(anyTagGroups = listOf(listOf("unknown"))).validated() }
+    }
+
+    @Test fun dailyAndProfessionalVocabularyPreservesAmbiguityAndCanonicalIds() {
+        val examples = mapOf("自习" to "scene.study", "下班路上" to "scene.commute", "纯音乐" to "vocal.instrumental",
+            "后摇" to "style.post_rock", "钢琴独奏" to "style.solo_piano", "爵士说唱" to "style.jazz_rap",
+            "双簧管" to "instrument.oboe", "哄宝宝睡觉" to "scene.baby_soothing", "番茄工作法" to "scene.pomodoro",
+            "Ｓｙｎｔｈ－Ｐｏｐ" to "style.synth_pop", "synth_pop" to "style.synth_pop")
+        examples.forEach { (phrase, id) ->
+            assertThat(RecommendationIndexTaxonomy.resolve(phrase)?.id).isEqualTo(id)
+            assertThat(RecommendationIndexTaxonomy.search(phrase).first().id).isEqualTo(id)
+        }
+        assertThat(RecommendationIndexTaxonomy.resolve("温暖")).isNull()
+        assertThat(RecommendationIndexTaxonomy.search("温暖").map { it.id }).containsAtLeast("mood.warm", "texture.warm")
+        assertThat(RecommendationIndexTaxonomy.definitions.map { it.id }.distinct()).hasSize(RecommendationIndexTaxonomy.definitions.size)
+    }
+
     private fun candidate(id: String, tags: List<String>, artist: String = id, album: String = "", confidence: Double = 0.9) =
         TagRecommendationCandidate(Track(TrackId(id), ServerId("server"), AlbumId("album-$id"), ArtistId("artist-$id"),
             "Song $id", artist, album, 180.0), tags.associateWith { confidence })

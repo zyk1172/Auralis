@@ -8,6 +8,23 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class TagRecommendationArgumentsTest {
+    @Test fun parsesAlternativeGroupsAndCanonicalMinimumMatchCounts() {
+        val args = Json.parseToJsonElement("""{"anyTagGroups":[["自习","钢琴"],["深夜","木吉他"]],"preferTags":["自习","学习","钢琴"],"minimumPreferredMatches":2}""").jsonObject
+        val query = TagRecommendationArguments.query(args, 10).validated()
+        assertThat(query.anyTagGroups).containsExactly(listOf("instrument.piano", "scene.study"), listOf("instrument.acoustic_guitar", "scene.late_night"))
+        assertThat(query.preferTags).hasSize(2)
+        assertThat(query.minimumPreferredMatches).isEqualTo(2)
+        for (bad in listOf("\"bad\"", "[[]]", "[[2]]", "[[\"\"]]")) {
+            assertThrows(IllegalArgumentException::class.java) {
+                TagRecommendationArguments.query(Json.parseToJsonElement("""{"anyTagGroups":$bad}""").jsonObject, 10)
+            }
+        }
+        for (bad in listOf("1.5", "1e100", "\"2\"", "-1", "4")) {
+            assertThrows(IllegalArgumentException::class.java) {
+                TagRecommendationArguments.query(Json.parseToJsonElement("""{"preferTags":["scene.study"],"minimumPreferredMatches":$bad}""").jsonObject, 10).validated()
+            }
+        }
+    }
     @Test fun parsesHardAndSoftIntentAndRanges() {
         val args = Json.parseToJsonElement("""{"includeTags":["instrument.piano"],"preferTags":["scene.late_night"],"excludeTags":["mood.sad"],"numericRanges":{"energy":[1,4]},"excludeTrackIDs":["server:1"]}""").jsonObject
         val query = TagRecommendationArguments.query(args, 10).validated()
@@ -29,7 +46,7 @@ class TagRecommendationArgumentsTest {
     @Test fun collisionSchemaRetainsCandidateContractAndAddsTagProperties() {
         val schema = TagRecommendationArguments.collisionSchema("""{"type":"object","properties":{"candidates":{"type":"array"}},"required":["candidates"]}""")
         val properties = Json.parseToJsonElement(schema).jsonObject.getValue("properties").jsonObject
-        assertThat(properties.keys).containsAtLeast("candidates", "includeTags", "preferTags", "excludeTags", "numericRanges")
+        assertThat(properties.keys).containsAtLeast("candidates", "includeTags", "preferTags", "excludeTags", "numericRanges", "anyTagGroups", "minimumPreferredMatches")
         assertThat(properties.keys).doesNotContain("limit")
     }
 }
