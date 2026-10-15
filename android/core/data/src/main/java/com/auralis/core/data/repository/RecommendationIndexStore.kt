@@ -17,9 +17,15 @@ import com.auralis.core.domain.RecommendationIndexTag
 import com.auralis.core.domain.RecommendationIndexTaxonomy
 import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
+import com.auralis.core.domain.TagRecommendationCandidate
+import com.auralis.core.domain.TagRecommendationPick
+import com.auralis.core.domain.TagRecommendationQuery
+import com.auralis.core.domain.TagRecommendationRanker
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
 /**
@@ -35,6 +41,26 @@ class RecommendationIndexStore(
     private val dao: RecommendationIndexDao = database.recommendationIndexDao(),
     private val json: Json = DataJson.json,
 ) {
+    suspend fun recommendationCandidates(serverId: ServerId, minimumConfidence: Double = 0.35): List<TagRecommendationCandidate> = database.withTransaction {
+        val disliked = database.annotationDao().dislikedIds(serverId.value).toSet()
+        val valid = validTrackIds(serverId).filterNot { it in disliked }
+        val tags = valid.chunked(SQLITE_IN_CHUNK_SIZE).flatMap { dao.tagsForValidTracks(it) }.groupBy { it.globalId }
+        valid.chunked(SQLITE_IN_CHUNK_SIZE).flatMap { database.trackDao().getMany(it) }.mapNotNull { entity ->
+            val track = decodeTrack(entity.payload, expectedServer = serverId) ?: return@mapNotNull null
+            val entries = tags[entity.globalId].orEmpty()
+            TagRecommendationCandidate(track,
+                entries.filter { RecommendationIndexTaxonomy.isKnownTextTag(it.dimension, it.value) }.associate { it.value to it.confidence },
+                entries.filter { RecommendationIndex.isNumericDimension(it.dimension) && it.confidence >= minimumConfidence }
+                    .mapNotNull { tag -> tag.value.toIntOrNull()?.let { tag.dimension to it } }.toMap())
+        }
+    }
+
+    suspend fun recommendByTags(serverId: ServerId, query: TagRecommendationQuery, existingTracks: List<Track> = emptyList()): List<TagRecommendationPick> {
+        query.validated()
+        val candidates = recommendationCandidates(serverId, query.minimumConfidence)
+        return withContext(Dispatchers.Default) { TagRecommendationRanker.recommend(candidates, query, existingTracks) }
+    }
+
     suspend fun status(serverId: ServerId): RecommendationIndexStatus {
         val total = dao.totalTrackCount(serverId.value)
         val valid = validTrackIds(serverId)

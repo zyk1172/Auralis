@@ -36,6 +36,9 @@ data class RecommendationTrackPayloadRow(
  */
 @Dao
 interface RecommendationIndexDao {
+    @Query("SELECT * FROM recommendation_index_v2_tags WHERE global_id IN (:validGlobalIds)")
+    suspend fun tagsForValidTracks(validGlobalIds: List<String>): List<RecommendationIndexTagEntity>
+
     @Query(
         """
         SELECT COUNT(*) FROM tracks

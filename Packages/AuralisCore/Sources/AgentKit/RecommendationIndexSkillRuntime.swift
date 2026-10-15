@@ -522,11 +522,14 @@ public enum RecommendationIndexClassificationParser {
         fields: [String: AIJSONValue]
     ) -> RecommendationIndexClassification {
         var buckets: [TagDimension: [String]] = [:]
+        var seen = Set<TagID>()
         if case let .array(values)? = fields["tags"] {
-            for value in values.prefix(64) {
+            for value in values {
                 guard case let .string(raw) = value,
-                      let definition = RecommendationIndexTaxonomy.resolve(raw) else { continue }
+                      let definition = RecommendationIndexTaxonomy.resolve(raw),
+                      seen.insert(definition.id).inserted else { continue }
                 buckets[definition.dimension, default: []].append(definition.id.rawValue)
+                if seen.count == 64 { break }
             }
         }
         func feature(_ name: String, upperBound: Int) -> Int? {
@@ -2323,6 +2326,7 @@ public enum RecommendationIndexSkillRuntime {
         你是 Auralis FIXED TAXONOMY CLASSIFIER。你只能从 Auralis 已定义的固定 taxonomy 中选择标签，不能发明新标签、不能创建自由文本标签。
         返回且只返回一个 JSON 对象，根字段只有 items。每个 item 必须包含输入 tracks 中的 id；如果无法判断某首歌，可以省略该 item，Runtime 会保留它为 pending，不要伪造分类。
         tags 是固定 taxonomy ID 数组；features 只填写有根据的 energy(1-10) 或其它 1-5 数值；confidence 可省略。未知标签、未知字段或没有足够证据的字段不要强行填写。
+        一首歌可同时具有多个情绪、场景、风格、乐器等标签；每个维度均可多选，保留全部有独立证据的适用标签，不只输出一个主标签。同义说法只输出一次规范 ID；不要为覆盖更多标签而猜测。
         Runtime 会自行拥有 batch identity，不要输出 batchID 或 revision。不要输出 semanticTags、mode 或解释文字。
 
         完整固定 taxonomy catalog（只允许使用这些 TagID；等号右侧是显示语义）：

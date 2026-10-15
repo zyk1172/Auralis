@@ -11,6 +11,12 @@ import com.auralis.core.domain.TrackId
 import org.junit.Test
 
 class RecommendationIndexResponseParserTest {
+    @Test fun preservesMultipleLabelsPerDimensionWithoutDuplicateBudgetLoss() {
+        val repeated = List(64) { "\"scene.study\"" }.joinToString(",")
+        val result = RecommendationIndexResponseParser().parse(
+            """{"items":[{"id":"server-a:track-1","tags":[$repeated,"scene.focus","scene.pomodoro","instrument.piano","instrument.oboe"]},{"id":"server-a:track-2"}]}""", batch)
+        assertThat(result.first().tags.map { it.value }).containsExactly("scene.study", "scene.focus", "scene.pomodoro", "instrument.piano", "instrument.oboe")
+    }
     private val server = ServerId("server-a")
     private val tracks = listOf(
         Track(

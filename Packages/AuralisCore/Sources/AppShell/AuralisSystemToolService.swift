@@ -273,82 +273,20 @@ public final class AuralisSystemToolService: AgentSystemService {
 
     // MARK: - 推荐（基于真实资料库）
 
-    /// 情绪 → 流派关键词映射。推荐结果全部来自本地资料库，模型不编造歌曲。
-    private static let moodGenres: [String: [String]] = [
-        "深夜": ["轻音乐", "钢琴", "氛围", "环境"],
-        "放松": ["放松", "爵士", "原声", "轻音乐"],
-        "通勤": ["流行", "摇滚", "电子"],
-        "学习": ["古典", "器乐", "纯音乐", "轻音乐"],
-        "运动": ["电子", "摇滚", "舞曲", "嘻哈"],
-        "伤感": ["伤感", "民谣", "蓝调"],
-        "治愈": ["治愈", "民谣", "原声"],
-        "怀旧": ["怀旧", "老歌", "经典", "经典流行"],
-        "安静": ["安静", "氛围", "环境", "原声"],
-        "高能量": ["电子", "摇滚", "舞曲"],
-    ]
-
-    /// 用户口语与推荐索引有限标签空间的映射；找不到时仍走原有流派回退。
-    private static let recommendationIndexMoodAliases: [String: String] = [
-        "伤感": "忧郁",
-        "安静": "平静",
-        "放松": "平静",
-        "高能量": "激昂",
-    ]
-
+    /// Compatibility entry point backed by the same validated tag ranking as explicit tag mode.
     public func recommendByMood(_ mood: String, limit: Int) async -> AgentRecommendationResult {
-        let genres = Self.moodGenres[mood] ?? [mood]
-        let safeLimit = min(max(limit, 1), 50)
-        // Hard Exclusion：自动推荐不得包含“不喜欢”的歌曲。
-        let disliked = Set((try? await model.catalogCoordinator.store.dislikedTrackIDs(serverID: model.catalog.activeAccount?.id)) ?? [])
-        func isDisliked(_ track: Track) -> Bool {
-            disliked.contains(GlobalID(serverID: track.serverID, remoteID: track.id.rawValue))
+        let aliases = ["伤感": "mood.sad", "安静": "mood.calm", "放松": "mood.relaxed", "高能量": "mood.uplifting"]
+        let raw = aliases[mood] ?? mood
+        guard let definition = RecommendationIndexTaxonomy.resolve(raw) else {
+            return AgentRecommendationResult(mood: mood, tracks: [])
         }
-        let query = RecommendationQuery(
-            genres: Set(genres),
-            maximumTracksPerArtist: 2,
-            limit: safeLimit * 2
-        )
-        let indexedCandidates: [Track]
-        let indexTag = Self.recommendationIndexMoodAliases[mood] ?? mood
-        if let serverID = model.catalog.activeAccount?.id,
-           let ids = try? await model.catalogCoordinator.store.recommendationIndexTrackIDs(serverID: serverID, query: indexTag) {
-            let wanted = Set(ids)
-            indexedCandidates = model.catalog.tracks.filter {
-                wanted.contains(GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue))
-            }
-        } else {
-            indexedCandidates = []
-        }
-        // 索引已覆盖该心情/场景时优先使用；未构建或没有命中时保留旧流派回退。
-        var ranked = indexedCandidates.isEmpty
-            ? HybridRecommendationEngine.recommend(tracks: model.catalog.tracks, query: query)
-            : indexedCandidates.sorted { lhs, rhs in
-                let artist = lhs.artistName.localizedStandardCompare(rhs.artistName)
-                if artist != .orderedSame { return artist == .orderedAscending }
-                let title = lhs.title.localizedStandardCompare(rhs.title)
-                if title != .orderedSame { return title == .orderedAscending }
-                return lhs.id.rawValue < rhs.id.rawValue
-            }
-        // 排除最近播放的曲目，避免刚听完又推荐。
-        let recentIDs = Set(model.recentlyPlayedTracks.prefix(20).map(\.id))
-        ranked.removeAll { recentIDs.contains($0.id) || isDisliked($0) }
-        if ranked.isEmpty {
-            // 无分类命中时从整库中立抽样，不因收藏、评分或播放历史偏置。
-            ranked = model.catalog.tracks.shuffled().filter { !isDisliked($0) }
-        }
-        ranked = TrackQuality.deduplicatedPreferringQuality(ranked)
-        let picks = Array(ranked.prefix(safeLimit))
-        let cards = picks.map { track -> TrackCard in
-            TrackCard(
-                globalID: GlobalID(serverID: track.serverID, remoteID: track.id.rawValue),
-                title: track.title,
-                artistName: track.artistName,
-                albumTitle: track.albumTitle,
-                duration: track.duration,
-                isFavorite: track.isFavorite
-            )
-        }
-        return AgentRecommendationResult(mood: mood, tracks: cards)
+        let recentIDs = Set(model.recentlyPlayedTracks.prefix(20).map {
+            GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue).description
+        })
+        let query = TagRecommendationQuery(preferTags: [definition.id.rawValue], excludedTrackIDs: recentIDs, limit: limit)
+        let servers = [model.catalog.activeAccount?.id, LocalCatalogOverlay.localServerID].compactMap { $0 }
+        let picks = (try? await model.catalogCoordinator.store.recommendByTags(serverIDs: servers, query: query)) ?? []
+        return AgentRecommendationResult(mood: mood, tracks: picks.map { TrackCard.from($0.track) })
     }
 
     /// 组合约束推荐：只从真实资料库筛选，模型不编造歌曲。

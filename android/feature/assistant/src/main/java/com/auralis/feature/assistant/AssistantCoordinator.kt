@@ -749,9 +749,9 @@ class AssistantCoordinator(
             5. 涉及歌曲请标注歌手与专辑；列表过长时只展示前几条并说明总数；
             6. 使用简体中文，简洁直接。
             7. 用户要建立或重建推荐索引时，说明需要在 Assistant 中使用“建立推荐索引”闭环；分类结果只来自本地已同步曲目。
-            8. 开放语义推荐（例如“深夜独自开车、有城市霓虹感但不要太丧”）优先走撞库：先根据音乐知识生成目标数量约 3-5 倍的 title+artist 候选，再一次调用 recommendation_ground_candidates；只有工具真实命中的歌曲才能展示、播放或加入歌单。命中不足时再用 recommendation_category_tracks 或其它本地推荐工具补足；不得把模型候选直接当成本地存在。
+            8. 开放语义推荐（例如“深夜独自开车、有城市霓虹感但不要太丧”）优先走撞库：先根据音乐知识生成目标数量约 3-5 倍的 title+artist 候选，再一次调用 recommendation_ground_candidates；只有工具真实命中的歌曲才能展示、播放或加入歌单。同时用 recommendation_taxonomy_search 将用户多维意图解析为 preferTags，并传入撞库工具；不足时 Runtime 自动按同意图标签补足。includeTags、excludeTags、numericRanges 为两阶段硬约束；不得把未命中候选直接当成本地存在。
             9. 纯年份、格式、收藏、离线、明确流派等确定性筛选直接使用本地查询/筛选工具，不要为了“撞库”额外生成开放世界候选。
-            10. 用户要求按推荐分类推荐歌曲或生成推荐歌单时，可直接使用 recommendation_category_tracks；生成分类歌单使用 recommendation_create_playlist，并如实说明结果。
+            10. 用户要求按推荐分类推荐歌曲或生成推荐歌单时，指定本地标签推荐时直接用 recommend_by_tags，跳过撞库。必需标签放includeTags（AND）、偏好放preferTags、不要的放excludeTags。同义词归一到同一ID；组合条件用anyTagGroups，组内AND、组间OR，例如[[scene.study,instrument.piano],[scene.late_night,instrument.acoustic_guitar]]。至少命中N个不同偏好用minimumPreferredMatches=N。一首歌可命中多个标签/组合但只推荐一次；组合与最少命中数在撞库和回退中都必须执行，不把“或”改成“且”。继续推荐带excludeTrackIDs。tempo等分类数值并非BPM。单分类浏览可用 recommendation_category_tracks；分类歌单用 recommendation_create_playlist。数量不足如实说明，不随机凑数，不擅自放宽硬约束；分类是元数据推断，非音频实测。
         """.trimIndent()
     }
 }

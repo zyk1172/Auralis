@@ -113,12 +113,12 @@ public enum ToolCompositionExamples {
             goal: "根据需求创建歌单",
             userExamples: ["给我建一个适合通勤的 20 首歌单"],
             steps: [
-                .oneOf(["recommendation_ground_candidates", "recommend_by_mood", "recommend_by_constraints", "library_select_tracks", "library_search"]),
+                .oneOf(["recommendation_ground_candidates", "recommend_by_tags", "recommend_by_mood", "recommend_by_constraints", "library_select_tracks", "library_search"]),
                 .tool("result_present_tracks"),
                 .tool("playlist_create"),
                 .tool("playlist_add_songs"),
             ],
-            note: "开放语义需求优先让模型过采样生成 title+artist 候选，再用 recommendation_ground_candidates 一次撞库；命中不足才用旧推荐补足。纯结构化筛选直接走本地。最终曲目必须来自真实候选，不得编造 TrackID。",
+            note: "开放语义需求优先让模型过采样生成 title+artist 候选，再用 recommendation_ground_candidates 一次撞库；撞库时传多维意图 preferTags 供 Runtime 自动标签补足；用户指定标签推荐时直接用 recommend_by_tags。纯结构化筛选直接走本地。最终曲目必须来自真实候选，不得编造 TrackID。",
             readOnly: false
         ),
         ToolCompositionExample(
@@ -126,7 +126,7 @@ public enum ToolCompositionExamples {
             goal: "推荐并立即播放",
             userExamples: ["找十首适合深夜听的然后播放"],
             steps: [
-                .oneOf(["recommendation_ground_candidates", "recommend_by_mood", "recommend_by_constraints", "library_select_tracks"]),
+                .oneOf(["recommendation_ground_candidates", "recommend_by_tags", "recommend_by_mood", "recommend_by_constraints", "library_select_tracks"]),
                 .tool("result_present_tracks"),
                 .tool("queue_replace"),
             ],

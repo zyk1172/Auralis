@@ -111,6 +111,15 @@ struct DislikeBehaviorTests {
             track("t-mood", favorite: false),
             track("t-disliked", favorite: false),
         ])
+        // Mood recommendations now require real, current classification evidence.
+        // Keep this test focused on dislike exclusion, rather than relying on the retired random fallback.
+        let store = model.catalogCoordinator.store
+        let sync = try await store.beginSync(serverID: "server", mode: .full)
+        try await store.stageTracks(model.catalog.tracks, session: sync)
+        try await store.completeSync(sync, completedAt: .now)
+        _ = try await store.writeRecommendationIndex(model.catalog.tracks.map {
+            .init(id: "server:\($0.id.rawValue)", scenes: ["scene.late_night"], confidence: 0.9)
+        }, serverID: "server")
         // 给 disliked 写库（recommendByMood 从 SQLite 读 disliked）。
         let disliked = model.catalog.tracks.first { $0.id.rawValue == "t-disliked" }!
         await model.persistDisliked(disliked, value: true, source: "user")
@@ -120,6 +129,18 @@ struct DislikeBehaviorTests {
         let ids = result.tracks.map(\.globalID.remoteID)
         #expect(!ids.contains("t-disliked"))
         #expect(ids.contains("t-mood"))
+    }
+
+    @Test("recommendByMood does not substitute unrelated tracks without index evidence")
+    @MainActor
+    func recommendByMoodRequiresClassificationEvidence() async throws {
+        let model = makeModel(connector: RecordingConnector(), tracks: [track("unclassified")])
+        let store = model.catalogCoordinator.store
+        let sync = try await store.beginSync(serverID: "server", mode: .full)
+        try await store.stageTracks(model.catalog.tracks, session: sync)
+        try await store.completeSync(sync, completedAt: .now)
+        let service = AuralisSystemToolService(model: model)
+        #expect(await service.recommendByMood("深夜", limit: 10).tracks.isEmpty)
     }
 
     @Test("recommendByConstraints excludes disliked at candidate layer")

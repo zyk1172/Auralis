@@ -207,15 +207,15 @@ public enum AgentCapabilityCatalog {
         AgentCapability(
             id: "music_recommendation",
             title: "复杂音乐推荐",
-            summary: "开放语义请求优先由云端模型生成过采样候选，再由本地曲库批量撞库与确定性过滤；旧 Recommendation Index / 情绪 / 约束推荐作为降级，所有最终歌曲都必须是真实 GlobalTrackID。",
+            summary: "开放语义请求优先由云端模型生成过采样候选，再由本地曲库批量撞库与确定性过滤；多维本地标签索引自动补足，或由用户明确指定标签模式；所有最终歌曲都必须是真实 GlobalTrackID。",
             requiresAIPlanning: true,
             runtimeDependencies: [.catalog],
             executionOwner: .agent,
-            modelRole: "区分开放语义推荐与确定性筛选：开放语义先生成目标数量约 3-5 倍的 title+artist 候选并一次调用 recommendation_ground_candidates；纯年份/格式/收藏/离线等约束直接走本地查询。",
-            runtimeRole: "对模型候选做批量实体 grounding：规范化标题/艺人、保守模糊匹配、排除不喜欢、去重与艺人多样性；命中不足时再使用推荐索引、心情/约束推荐补足。",
-            userFacingDescription: "先理解自由描述并撞入真实本地曲库，再由本地规则过滤和降级补足。",
-            relatedTools: ["recommendation_ground_candidates", "recommend_by_constraints", "recommend_by_mood", "smart_queue_generate", "library_select_tracks", "library_get_catalog_tracks", "library_index_read"],
-            limitations: ["模型候选不是最终事实；未通过本地 grounding 的歌曲不得展示或写入队列。", "Provider 不可用或撞库不足时使用现有本地推荐链路降级。"]
+            modelRole: "默认开放语义先生成约 3-5 倍 title+artist 候选并调用 recommendation_ground_candidates，同时传多维意图 preferTags，供不足时自动标签回退。用户指定本地标签推荐时直接用 recommend_by_tags；include/exclude/numericRanges 不得自动放宽。纯年份/格式/收藏/离线等约束走本地查询。",
+            runtimeRole: "对模型候选做批量实体 grounding：规范化标题/艺人、保守模糊匹配、排除不喜欢、去重与艺人多样性；命中不足且有标签意图时自动用有效分类补足，跨阶段共用硬约束、录音去重与艺人/专辑预算。",
+            userFacingDescription: "按需求撞入真实曲库并用标签补足，也可指定只按本地标签推荐。",
+            relatedTools: ["recommendation_ground_candidates", "recommend_by_tags", "recommend_by_constraints", "recommend_by_mood", "smart_queue_generate", "library_select_tracks", "library_get_catalog_tracks", "library_index_read"],
+            limitations: ["模型候选不是最终事实；未通过本地 grounding 的歌曲不得展示或写入队列。", "标签回退需要有效分类和明确意图；不足时报告缺口，不随机凑数。"]
         ),
         AgentCapability(
             id: "music_appreciation",
