@@ -30,5 +30,6 @@ class TagRecommendationArgumentsTest {
         val schema = TagRecommendationArguments.collisionSchema("""{"type":"object","properties":{"candidates":{"type":"array"}},"required":["candidates"]}""")
         val properties = Json.parseToJsonElement(schema).jsonObject.getValue("properties").jsonObject
         assertThat(properties.keys).containsAtLeast("candidates", "includeTags", "preferTags", "excludeTags", "numericRanges")
+        assertThat(properties.keys).doesNotContain("limit")
     }
 }

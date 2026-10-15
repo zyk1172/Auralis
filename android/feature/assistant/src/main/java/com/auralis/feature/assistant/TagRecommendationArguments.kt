@@ -34,7 +34,8 @@ internal object TagRecommendationArguments {
 
     fun collisionSchema(original: String): String {
         val objectValue = Json.parseToJsonElement(original).jsonObject
-        return JsonObject(objectValue + ("properties" to JsonObject(properties + objectValue.getValue("properties").jsonObject))).toString()
+        // Collision uses targetCount; advertising a second ignored limit would make model calls ambiguous.
+        return JsonObject(objectValue + ("properties" to JsonObject((properties - "limit") + objectValue.getValue("properties").jsonObject))).toString()
     }
 
     fun query(args: Map<String, JsonElement>, limit: Int): TagRecommendationQuery {
