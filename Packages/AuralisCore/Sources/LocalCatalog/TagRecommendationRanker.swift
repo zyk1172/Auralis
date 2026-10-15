@@ -146,7 +146,7 @@ public enum TagRecommendationRanker {
             let lhs = TrackQuality.score($0), rhs = TrackQuality.score($1)
             return lhs == rhs ? identity($0) < identity($1) : lhs > rhs
         }.filter { seenRecordings.insert(recording($0)).inserted }
-        var pool: [(pick: TagRecommendationPick, tags: Set<String>, redundancy: Double)] = uniqueTracks.compactMap { track in
+        var pool: [(pick: TagRecommendationPick, tags: Set<String>, redundancy: Double, artist: String, album: String?, id: String)] = uniqueTracks.compactMap { track in
             guard let candidate = byID[identity(track)] else { return nil }
             let matched = Set(candidate.tags.filter { $0.value.isFinite && $0.value >= query.minimumConfidence }.keys)
             let relevance: Double
@@ -165,7 +165,7 @@ public enum TagRecommendationRanker {
             return (TagRecommendationPick(
                 track: track, score: 0.9 * relevance + 0.1 * confidence,
                 matchedTags: Array(matched.intersection(include.union(prefer))).sorted()
-            ), matched, 0)
+            ), matched, 0, artist(track), album(track), identity(track))
         }
         var artists = [String: Int](), albums = [String: Int]()
         for track in existingTracks {
@@ -176,20 +176,19 @@ public enum TagRecommendationRanker {
         while selected.count < query.limit && !pool.isEmpty {
             var best: Int?, bestScore = -Double.infinity
             for (index, item) in pool.enumerated() {
-                let track = item.pick.track
-                let artistCount = artists[artist(track), default: 0]
-                let albumCount = album(track).map { albums[$0, default: 0] } ?? 0
+                let artistCount = artists[item.artist, default: 0]
+                let albumCount = item.album.map { albums[$0, default: 0] } ?? 0
                 guard artistCount < query.maxPerArtist, albumCount < query.maxPerAlbum else { continue }
                 let score = item.pick.score - 0.18 * Double(artistCount) - 0.10 * Double(albumCount) - 0.08 * item.redundancy
-                if score > bestScore || (score == bestScore && best.map { identity(track) < identity(pool[$0].pick.track) } == true) {
+                if score > bestScore || (score == bestScore && best.map { item.id < pool[$0].id } == true) {
                     best = index; bestScore = score
                 }
             }
             guard let best else { break }
             let item = pool.remove(at: best)
             selected.append(item.pick)
-            artists[artist(item.pick.track), default: 0] += 1
-            if let key = album(item.pick.track) { albums[key, default: 0] += 1 }
+            artists[item.artist, default: 0] += 1
+            if let key = item.album { albums[key, default: 0] += 1 }
             for index in pool.indices {
                 let overlap = Double(pool[index].tags.intersection(item.tags).count) / Double(max(1, pool[index].tags.union(item.tags).count))
                 pool[index].redundancy = max(pool[index].redundancy, overlap)

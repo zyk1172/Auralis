@@ -84,7 +84,7 @@ object TagRecommendationRanker {
         val byId = eligible.associateBy { it.track.globalId.serialized }
         val unique = eligible.map { it.track }.sortedWith(compareByDescending<Track> { TrackQuality.score(it) }.thenBy { it.globalId.serialized })
             .distinctBy(TrackQuality::recordingKey)
-        data class Scored(val pick: TagRecommendationPick, val tags: Set<String>, var redundancy: Double = 0.0)
+        data class Scored(val pick: TagRecommendationPick, val tags: Set<String>, val artist: String, val album: String?, val id: String, var redundancy: Double = 0.0)
         val pool = unique.map { track ->
             val candidate = byId.getValue(track.globalId.serialized)
             val matched = candidate.tags.filterValues { it.isFinite() && it >= query.minimumConfidence }.keys
@@ -93,7 +93,8 @@ object TagRecommendationRanker {
                 tags.maxOf { if (it in matched) candidate.tags.getValue(it).coerceAtMost(1.0) * weights.getValue(it) / denominator else 0.0 }
             } / preferences.size
             val confidence = matched.maxOfOrNull { candidate.tags.getValue(it).coerceAtMost(1.0) } ?: 0.0
-            Scored(TagRecommendationPick(track, 0.9 * relevance + 0.1 * confidence, matched.intersect(prefer + query.includeTags).sorted()), matched)
+            Scored(TagRecommendationPick(track, 0.9 * relevance + 0.1 * confidence, matched.intersect(prefer + query.includeTags).sorted()),
+                matched, artist(track), album(track), track.globalId.serialized)
         }.toMutableList()
         val artists = existingTracks.groupingBy(::artist).eachCount().toMutableMap()
         val albums = existingTracks.mapNotNull(::album).groupingBy { it }.eachCount().toMutableMap()
@@ -102,11 +103,11 @@ object TagRecommendationRanker {
             var best = -1
             var bestScore = Double.NEGATIVE_INFINITY
             pool.forEachIndexed { index, item ->
-                val artistCount = artists[artist(item.pick.track)] ?: 0
-                val albumCount = album(item.pick.track)?.let { albums[it] } ?: 0
+                val artistCount = artists[item.artist] ?: 0
+                val albumCount = item.album?.let { albums[it] } ?: 0
                 if (artistCount < query.maxPerArtist && albumCount < query.maxPerAlbum) {
                     val score = item.pick.score - 0.18 * artistCount - 0.10 * albumCount - 0.08 * item.redundancy
-                    if (score > bestScore || (score == bestScore && best >= 0 && item.pick.track.globalId.serialized < pool[best].pick.track.globalId.serialized)) {
+                    if (score > bestScore || (score == bestScore && best >= 0 && item.id < pool[best].id)) {
                         best = index; bestScore = score
                     }
                 }
@@ -114,9 +115,9 @@ object TagRecommendationRanker {
             if (best < 0) break
             val item = pool.removeAt(best)
             selected += item.pick
-            val artist = artist(item.pick.track)
+            val artist = item.artist
             artists[artist] = (artists[artist] ?: 0) + 1
-            album(item.pick.track)?.let { albums[it] = (albums[it] ?: 0) + 1 }
+            item.album?.let { albums[it] = (albums[it] ?: 0) + 1 }
             pool.forEach { other ->
                 val overlap = other.tags.intersect(item.tags).size.toDouble() / other.tags.union(item.tags).size.coerceAtLeast(1)
                 other.redundancy = maxOf(other.redundancy, overlap)
@@ -125,8 +126,10 @@ object TagRecommendationRanker {
         return selected
     }
 
+    private val marks = Regex("\\p{M}+")
+    private val whitespace = Regex("\\s+")
     private fun normalize(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFKD)
-        .replace(Regex("\\p{M}+"), "").trim().replace(Regex("\\s+"), " ").lowercase(Locale.ROOT)
+        .replace(marks, "").trim().replace(whitespace, " ").lowercase(Locale.ROOT)
     private fun artist(track: Track): String = normalize(track.artistName).ifEmpty { "${track.serverId.value}:${track.artistId.value}" }
     private fun album(track: Track): String? = normalize(track.albumTitle).takeIf { it.isNotEmpty() }?.let { "${artist(track)}|$it" }
 }
