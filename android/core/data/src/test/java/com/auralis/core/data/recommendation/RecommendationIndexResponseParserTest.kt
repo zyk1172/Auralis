@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-package com.auralis.feature.assistant
+package com.auralis.core.data.recommendation
 
 import com.google.common.truth.Truth.assertThat
 import com.auralis.core.domain.AlbumId

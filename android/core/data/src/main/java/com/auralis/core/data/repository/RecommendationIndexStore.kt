@@ -173,6 +173,7 @@ class RecommendationIndexStore(
         classifications: List<RecommendationIndexClassificationInput>,
         classifier: String = "configured-agent",
         classifiedAtMillis: Long = System.currentTimeMillis(),
+        expectedContentHashes: Map<String, String>? = null,
     ) {
         require(classifications.isNotEmpty()) { "Recommendation Index classification batch 不能为空" }
         require(classifications.size <= 100) { "Recommendation Index classification batch 不能超过 100 首" }
@@ -183,24 +184,29 @@ class RecommendationIndexStore(
             item.globalId.serialized
         }
         require(ids.size == ids.toSet().size) { "Recommendation Index classification batch 含重复 global-id" }
-        val entitiesById = database.trackDao().getMany(ids).associateBy { it.globalId }
-        require(entitiesById.size == ids.size) { "Recommendation Index classification batch 含不存在的曲目" }
-
-        val prepared = classifications.map { item ->
-            val entity = entitiesById[item.globalId.serialized]
-                ?: error("Recommendation Index 曲目不存在: ${item.globalId.serialized}")
-            require(entity.serverId == serverId.value) { "Recommendation Index 曲目服务器不一致" }
-            val currentTrack = decodeTrack(entity.payload, expectedServer = serverId)
-                ?: throw IllegalArgumentException("Recommendation Index 曲目 payload 无法验证: ${item.globalId.serialized}")
-            require(currentTrack.globalId == item.globalId) { "Recommendation Index payload/global-id 不一致" }
-            PreparedClassification(
-                globalId = item.globalId,
-                sourceHash = RecommendationIndex.contentHash(currentTrack),
-                tags = canonicalizeTags(item.tags),
-            )
-        }
-
         database.withTransaction {
+            val entitiesById = database.trackDao().getMany(ids).associateBy { it.globalId }
+            require(entitiesById.size == ids.size) { "Recommendation Index classification batch 含不存在的曲目" }
+
+            val prepared = classifications.map { item ->
+                val entity = entitiesById[item.globalId.serialized]
+                    ?: error("Recommendation Index 曲目不存在: ${item.globalId.serialized}")
+                require(entity.serverId == serverId.value) { "Recommendation Index 曲目服务器不一致" }
+                val currentTrack = decodeTrack(entity.payload, expectedServer = serverId)
+                    ?: throw IllegalArgumentException("Recommendation Index 曲目 payload 无法验证: ${item.globalId.serialized}")
+                require(currentTrack.globalId == item.globalId) { "Recommendation Index payload/global-id 不一致" }
+                PreparedClassification(
+                    globalId = item.globalId,
+                    sourceHash = RecommendationIndex.contentHash(currentTrack),
+                    tags = canonicalizeTags(item.tags),
+                )
+            }
+
+            if (expectedContentHashes != null) {
+                require(expectedContentHashes.keys == ids.toSet() && prepared.all { expectedContentHashes[it.globalId.serialized] == it.sourceHash }) {
+                    "曲目元数据在分类期间发生变化，结果未写入，请继续重试"
+                }
+            }
             prepared.forEach { item ->
                 dao.upsertState(
                     RecommendationIndexStateEntity(

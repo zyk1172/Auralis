@@ -1,0 +1,166 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+import AIKit
+import AgentKit
+import Domain
+import Foundation
+import LocalCatalog
+import SwiftUI
+#if os(iOS)
+import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
+
+public struct TagClassificationState {
+    public var status: RecommendationIndexStatus?
+    public var isRunning = false
+    public var message: String?
+    public var batchNumber = 0
+}
+
+extension AuralisAppModel {
+    static let classificationConsentKey = "auralis.classification.metadataConsent"
+
+    public func refreshTagClassificationStatus() async {
+        guard !tagClassification.isRunning, let server = catalog.activeServerID else { return }
+        do { tagClassification.status = try await catalogCoordinator.store.recommendationIndexStatus(serverID: server) }
+        catch { tagClassification.message = error.localizedDescription }
+    }
+
+    public func startTagClassification() {
+        guard tagClassificationTask == nil else { return }
+        guard let server = catalog.activeServerID else {
+            tagClassification.message = "请先选择并同步音乐库。"; return
+        }
+        let settings = AIConnectionSettings()
+        guard let provider = settings.makeProvider() else {
+#if os(iOS)
+            clearTagClassificationBackgroundRequest()
+#endif
+            tagClassification.message = settings.completenessError ?? "请先在设置中配置大模型。"; return
+        }
+        tagClassification.isRunning = true
+        tagClassification.message = nil
+        tagClassification.batchNumber = 0
+#if os(iOS)
+        UserDefaults.standard.set(server.rawValue, forKey: Self.classificationRequestedServerKey)
+        scheduleTagClassificationBackgroundProcessing()
+        tagClassificationBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Tag classification") { [weak self] in
+            Task { @MainActor in
+                self?.tagClassification.message = "系统暂停了后台运行，已完成批次已保存，等待继续。"
+                self?.tagClassificationTask?.cancel()
+                self?.endTagClassificationBackgroundActivity()
+            }
+        }
+#elseif os(macOS)
+        tagClassificationActivity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep, reason: "Music tag classification")
+#endif
+        let runner = TagClassificationRunner(catalog: catalogCoordinator.store, provider: provider,
+            model: settings.model, maxOutputTokens: settings.maxOutputTokens)
+        tagClassificationTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.tagClassification.isRunning = false
+                self.tagClassificationTask = nil
+                self.endTagClassificationBackgroundActivity()
+            }
+            do {
+                try await runner.run(serverID: server, authorize: { [weak self] in
+                    guard let self else { throw CancellationError() }
+                    try await self.authorizeTagClassification(server: server)
+                }, onProgress: { [weak self] progress in
+                    await self?.updateTagClassificationProgress(progress)
+                })
+                self.tagClassification.message = "标签分类已完成。"
+#if os(iOS)
+                self.clearTagClassificationBackgroundRequest()
+#endif
+            } catch is CancellationError {
+                if self.tagClassification.message == nil { self.tagClassification.message = "已暂停，已完成批次已保存。" }
+            } catch {
+                self.tagClassification.message = error.localizedDescription
+#if os(iOS)
+                self.clearTagClassificationBackgroundRequest()
+#endif
+            }
+            self.tagClassification.status = try? await self.catalogCoordinator.store.recommendationIndexStatus(serverID: server)
+        }
+    }
+
+    public func pauseTagClassification(message: String? = nil) {
+#if os(iOS)
+        clearTagClassificationBackgroundRequest()
+#endif
+        guard tagClassificationTask != nil else { return }
+        tagClassification.message = message ?? "已暂停，已完成批次已保存。"
+        tagClassificationTask?.cancel()
+    }
+
+    private func updateTagClassificationProgress(_ progress: TagClassificationProgress) {
+        tagClassification.status = progress.status
+        tagClassification.batchNumber = progress.batchNumber
+    }
+
+    private func authorizeTagClassification(server: ServerID) throws {
+        guard catalog.activeServerID == server else { throw TagClassificationFailure("音乐库已切换，分类已停止。") }
+        guard UserDefaults.standard.object(forKey: "auralis.ai.enabled") as? Bool != false,
+              AIPrivacyPermissions.current().allowsMetadata,
+              UserDefaults.standard.bool(forKey: Self.classificationConsentKey) else {
+            throw TagClassificationFailure("请启用 AI、允许歌曲元数据，并在标签分类设置中确认外发授权。")
+        }
+    }
+
+    private func endTagClassificationBackgroundActivity() {
+#if os(iOS)
+        if tagClassificationBackgroundTask != .invalid {
+            UIApplication.shared.endBackgroundTask(tagClassificationBackgroundTask)
+            tagClassificationBackgroundTask = .invalid
+        }
+#elseif os(macOS)
+        if let activity = tagClassificationActivity {
+            ProcessInfo.processInfo.endActivity(activity)
+            tagClassificationActivity = nil
+        }
+#endif
+    }
+}
+
+struct TagClassificationControls: View {
+    @ObservedObject var model: AuralisAppModel
+    @AppStorage(AuralisAppModel.classificationConsentKey) private var allowsClassification = false
+    var body: some View {
+        Section(String(localized: "标签分类", bundle: .module)) {
+            Toggle(String(localized: "允许发送歌曲元数据进行分类", bundle: .module), isOn: $allowsClassification)
+            Text(String(localized: "只向已配置模型发送歌名、艺术家、专辑等歌曲元数据，不发送播放历史、收藏、评分、文件路径或凭据。", bundle: .module))
+                .font(.caption).foregroundStyle(.secondary)
+            if let status = model.tagClassification.status {
+                LabeledContent(String(localized: "已分类", bundle: .module), value: "\(status.indexedTracks) / \(status.totalTracks)")
+                LabeledContent(String(localized: "待处理", bundle: .module), value: "\(status.pendingTracks)")
+                ProgressView(value: Double(status.indexedTracks), total: Double(max(1, status.totalTracks)))
+            }
+            if model.tagClassification.isRunning {
+                Label(String(localized: "正在后台分类", bundle: .module), systemImage: "arrow.triangle.2.circlepath")
+                Button(String(localized: "暂停分类", bundle: .module)) { model.pauseTagClassification() }
+            } else {
+                Button(String(localized: "开始/继续分类", bundle: .module)) { model.startTagClassification() }
+                    .disabled(!allowsClassification || model.catalog.activeServerID == nil)
+                Button(String(localized: "刷新状态", bundle: .module)) { Task { await model.refreshTagClassificationStatus() } }
+            }
+            if let message = model.tagClassification.message { Text(message).font(.caption).foregroundStyle(.secondary) }
+            Text(String(localized: "离开此页面后继续分类。暂停、失败或系统中断后可从已保存进度继续；系统可能限制后台运行时间。", bundle: .module))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .task { await model.refreshTagClassificationStatus() }
+        .onChange(of: allowsClassification) { _, allowed in
+            if !allowed { model.pauseTagClassification() }
+        }
+    }
+}
+
+struct TagClassificationSettingsPage: View {
+    @ObservedObject var model: AuralisAppModel
+    var body: some View {
+        Form { TagClassificationControls(model: model) }
+            .navigationTitle(String(localized: "标签分类", bundle: .module))
+    }
+}

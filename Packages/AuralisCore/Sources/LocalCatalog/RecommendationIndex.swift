@@ -216,10 +216,17 @@ extension LocalCatalogStore {
         _ classifications: [RecommendationIndexClassification],
         serverID: ServerID?,
         classifier: String = "configured-agent",
-        requireExact: Bool = false
+        requireExact: Bool = false,
+        expectedTracks: [CatalogTrackLine]? = nil
     ) throws -> Int {
         let snapshot = try recommendationIndexSnapshot(serverID: serverID)
         let byID = Dictionary(uniqueKeysWithValues: snapshot.lines.map { ($0.id, $0) })
+        if let expectedTracks {
+            guard Set(expectedTracks.map(\.id)) == Set(classifications.map(\.id)),
+                  expectedTracks.allSatisfy({ expected in
+                      byID[expected.id].map { recommendationIndexContentHash($0) == recommendationIndexContentHash(expected) } == true
+                  }) else { throw RecommendationIndexWriteError.invalidBatch }
+        }
         if requireExact,
            classifications.prefix(100).contains(where: { !Self.hasOnlyResolvableTaxonomy($0) }) {
             throw RecommendationIndexWriteError.invalidBatch

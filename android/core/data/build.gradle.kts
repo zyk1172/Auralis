@@ -10,7 +10,7 @@ plugins {
 
 android {
     namespace = "com.auralis.core.data"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig { minSdk = 26 }
     buildFeatures { compose = true }
@@ -26,6 +26,7 @@ room { schemaDirectory("$projectDir/schemas") }
 
 dependencies {
     implementation(project(":core:domain"))
+    implementation(project(":core:ai"))
     implementation(project(":core:opensubsonic"))
     implementation(project(":core:security"))
     implementation(project(":core:common"))

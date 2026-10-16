@@ -565,6 +565,11 @@ public final class AgentCoordinator: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, runIDsBySession[sessionID] == nil else { return }
 
+        if provider == nil, RecommendationIndexTaskRules.requiresCompleteBuild(text: trimmed) {
+            messages.append(AgentChatMessage(role: .assistant, messages: [.text("标签分类已移至设置，请在设置中的标签分类管理后台任务。")]))
+            return
+        }
+
         isRunning = true
         // The router is long-lived, but its configured backend is not. Read
         // the setting for every new run so enabling/disabling Tavily in
