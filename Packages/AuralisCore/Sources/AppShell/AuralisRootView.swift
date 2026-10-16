@@ -1676,8 +1676,11 @@ struct BrowseDetailSheet: View {
                 // 本地按流派筛选为空时，从服务器按流派拉取真实歌曲
                 // （Navidrome 等服务器 getGenres 常为空，但按流派列专辑可用）。
                 model.loadGenreTracks(genre)
-            } else if case let .recommendationCategory(category) = destination {
-                loadRecommendationCategoryTracks(category)
+            }
+        }
+        .task(id: "\(destination.id)|\(model.tagClassificationRefreshID)") {
+            if case let .recommendationCategory(category) = destination {
+                await loadRecommendationCategoryTracks(category)
             }
         }
         .confirmationDialog(
@@ -1988,20 +1991,20 @@ struct BrowseDetailSheet: View {
         }
     }
 
-    private func loadRecommendationCategoryTracks(_ category: RecommendationIndexCategory) {
-        guard categoryTracks == nil, categoryLoadError == nil else { return }
-        categoryTracks = []
-        Task {
-            do {
-                let tracks = try await model.catalogCoordinator.store.recommendationIndexTracks(
-                    serverID: model.catalog.activeAccount?.id,
-                    dimension: category.dimension,
-                    value: category.value
-                )
-                categoryTracks = tracks
-            } catch {
+    private func loadRecommendationCategoryTracks(_ category: RecommendationIndexCategory) async {
+        guard let serverID = model.catalog.activeAccount?.id else {
+            categoryTracks = []; categoryLoadError = nil; return
+        }
+        categoryLoadError = nil
+        do {
+            let loaded = try await model.catalogCoordinator.store.recommendationIndexTracks(
+                serverID: serverID, dimension: category.dimension, value: category.value
+            )
+            guard model.catalog.activeAccount?.id == serverID, !Task.isCancelled else { return }
+            categoryTracks = loaded
+        } catch {
+            guard model.catalog.activeAccount?.id == serverID, !Task.isCancelled else { return }
             categoryLoadError = String(localized: "读取分类歌曲失败：\(error.localizedDescription)", bundle: .module)
-            }
         }
     }
 

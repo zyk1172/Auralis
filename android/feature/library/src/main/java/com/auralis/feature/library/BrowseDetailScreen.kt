@@ -74,6 +74,9 @@ import com.auralis.core.domain.parseRecommendationCategoryId
 import com.auralis.core.image.AuralisArtwork
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 /**
  * 浏览详情（对齐 Swift `BrowseDetailSheet` + `PlaylistTracksView`）。
@@ -283,6 +286,7 @@ private suspend fun loadDetail(context: Context, graph: AuralisGraph, destinatio
             -> DetailLoad.Ready(emptyList())
         }
     } catch (t: Throwable) {
+        if (t is CancellationException) throw t
         DetailLoad.Error(context.getString(R.string.library_load_failed_format, t.message))
     }
 }
@@ -307,15 +311,19 @@ private fun DetailTrackContent(
     var load by remember(destination) { mutableStateOf<DetailLoad>(DetailLoad.Loading) }
     var localReload by remember { mutableStateOf(0) }
     val effectiveReload = reloadKey + localReload
-    LaunchedEffect(destination, effectiveReload) {
-        load = DetailLoad.Loading
+    val serverId = rememberActiveServerId(graph)
+    val classification by graph.tagClassification.state.collectAsState()
+    val classificationVersion = if (destination is BrowseDestination.RecommendationCategory)
+        listOf(serverId, classification.progress?.indexedTracks, classification.isRunning, classification.lastCompletedAtMillis) else null
+    LaunchedEffect(destination, effectiveReload, classificationVersion) {
+        if (destination !is BrowseDestination.RecommendationCategory || load !is DetailLoad.Ready) load = DetailLoad.Loading
         val result = loadDetail(context, graph, destination)
+        currentCoroutineContext().ensureActive()
         load = result
         if (result is DetailLoad.Ready && result.headerTitle != null) {
             onTitleReady(result.headerTitle)
         }
     }
-    val serverId = rememberActiveServerId(graph)
 
     when (val state = load) {
         DetailLoad.Loading -> LibraryLoadingBox()

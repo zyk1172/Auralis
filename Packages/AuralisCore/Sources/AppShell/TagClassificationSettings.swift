@@ -22,6 +22,9 @@ public struct TagClassificationState {
 
 extension AuralisAppModel {
     static let classificationConsentKey = "auralis.classification.metadataConsent"
+    var tagClassificationRefreshID: String {
+        "\(catalog.activeServerID?.rawValue ?? "")|\(tagClassification.runID?.uuidString ?? "")|\(tagClassification.batchNumber)|\(tagClassification.isRunning)"
+    }
 
     public func refreshTagClassificationStatus() async {
         guard !tagClassification.isRunning else { return }

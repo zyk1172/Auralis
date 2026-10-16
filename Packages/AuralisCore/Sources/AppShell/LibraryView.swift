@@ -512,7 +512,7 @@ struct LibraryView: View {
                 .reportsBottomDockScroll(source: .library)
             }
         }
-        .task { await loadRecommendationCategories() }
+        .task(id: model.tagClassificationRefreshID) { await loadRecommendationCategories() }
     }
 
     private func loadRecommendationCategories() async {
@@ -523,11 +523,14 @@ struct LibraryView: View {
         isLoadingRecommendationCategories = true
         recommendationCategoryError = nil
         do {
-            recommendationCategories = try await model.catalogCoordinator.store.recommendationIndexCategories(
+            let loaded = try await model.catalogCoordinator.store.recommendationIndexCategories(
                 serverID: serverID,
                 dimensions: RecommendationIndex.fixedDimensions
             )
+            guard model.catalog.activeAccount?.id == serverID, !Task.isCancelled else { return }
+            recommendationCategories = loaded
         } catch {
+            guard model.catalog.activeAccount?.id == serverID, !Task.isCancelled else { return }
             recommendationCategories = []
             recommendationCategoryError = String(localized: "读取分类失败：\(error.localizedDescription)", bundle: .module)
         }

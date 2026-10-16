@@ -42,8 +42,8 @@ struct MacRecommendationCategoriesView: View {
             }
         }
         .navigationTitle(String(localized: "分类", bundle: .module))
-        // 顶部不留按钮：刷新按钮移除（可切换分类重进刷新）。
-        .task(id: model.catalog.activeServerID) { await load() }
+        // Committed background batches refresh the visible browser automatically.
+        .task(id: model.tagClassificationRefreshID) { await load() }
     }
 
     @ViewBuilder
@@ -112,7 +112,7 @@ struct MacRecommendationCategoryTracksView: View {
 
     var body: some View {
         Group {
-            if isLoading {
+            if isLoading && tracks.isEmpty {
                 ProgressView { Text(String(localized: "正在载入歌曲…", bundle: .module)) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let loadError {
@@ -143,7 +143,7 @@ struct MacRecommendationCategoryTracksView: View {
         }
         .navigationTitle(category.macCategoryTitle)
         // 顶部不留按钮：刷新歌曲按钮移除。
-        .task(id: "\(category.id)|\(model.catalog.activeServerID?.rawValue ?? "")") { await loadTracks() }
+        .task(id: "\(category.id)|\(model.tagClassificationRefreshID)") { await loadTracks() }
     }
 
     private func loadTracks() async {
