@@ -229,6 +229,12 @@ private fun RecommendationIndexSettingsCard(
         }
         Text(stringResource(R.string.settings_classification_note), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
         TextButton(onClick = onRefresh) { Text(stringResource(R.string.settings_recommendation_index_refresh)) }
+        if (state.unlabeledTracks > 0) {
+            Text(stringResource(R.string.settings_classification_unlabeled, state.unlabeledTracks), color = colors.secondaryText)
+            TextButton(onClick = graph.tagClassification::retryUnlabeled, enabled = consent && !state.isRunning) {
+                Text(stringResource(R.string.settings_classification_retry_unlabeled))
+            }
+        }
         if (state.isRunning && state.totalTracks > 0) {
             androidx.compose.material3.LinearProgressIndicator(
                 progress = { (state.indexedTracks.toFloat() / state.totalTracks).coerceIn(0f, 1f) },

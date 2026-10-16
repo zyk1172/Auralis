@@ -12,22 +12,30 @@ import AppKit
 #endif
 
 public struct TagClassificationState {
+    var runID: UUID?
     public var status: RecommendationIndexStatus?
     public var isRunning = false
     public var message: String?
     public var batchNumber = 0
+    public var unlabeledTracks = 0
 }
 
 extension AuralisAppModel {
     static let classificationConsentKey = "auralis.classification.metadataConsent"
 
     public func refreshTagClassificationStatus() async {
-        guard !tagClassification.isRunning, let server = catalog.activeServerID else { return }
-        do { tagClassification.status = try await catalogCoordinator.store.recommendationIndexStatus(serverID: server) }
+        guard !tagClassification.isRunning else { return }
+        guard let server = catalog.activeServerID else {
+            tagClassification.status = nil; tagClassification.unlabeledTracks = 0; return
+        }
+        do {
+            tagClassification.status = try await catalogCoordinator.store.recommendationIndexStatus(serverID: server)
+            tagClassification.unlabeledTracks = try await catalogCoordinator.store.emptyRecommendationClassificationCount(serverID: server)
+        }
         catch { tagClassification.message = error.localizedDescription }
     }
 
-    public func startTagClassification() {
+    public func startTagClassification(retryUnlabeled: Bool = false) {
         guard tagClassificationTask == nil else { return }
         guard let server = catalog.activeServerID else {
             tagClassification.message = "请先选择并同步音乐库。"; return
@@ -40,6 +48,8 @@ extension AuralisAppModel {
             tagClassification.message = settings.completenessError ?? "请先在设置中配置大模型。"; return
         }
         tagClassification.isRunning = true
+        let runID = UUID()
+        tagClassification.runID = runID
         tagClassification.message = nil
         tagClassification.batchNumber = 0
 #if os(iOS)
@@ -47,6 +57,7 @@ extension AuralisAppModel {
         scheduleTagClassificationBackgroundProcessing()
         tagClassificationBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Tag classification") { [weak self] in
             Task { @MainActor in
+                guard self?.tagClassification.runID == runID, self?.tagClassification.isRunning == true else { return }
                 self?.tagClassification.message = "系统暂停了后台运行，已完成批次已保存，等待继续。"
                 self?.tagClassificationTask?.cancel()
                 self?.endTagClassificationBackgroundActivity()
@@ -65,6 +76,10 @@ extension AuralisAppModel {
                 self.endTagClassificationBackgroundActivity()
             }
             do {
+                try self.authorizeTagClassification(server: server)
+                if retryUnlabeled {
+                    try await self.catalogCoordinator.store.requeueEmptyRecommendationClassifications(serverID: server)
+                }
                 try await runner.run(serverID: server, authorize: { [weak self] in
                     guard let self else { throw CancellationError() }
                     try await self.authorizeTagClassification(server: server)
@@ -84,6 +99,10 @@ extension AuralisAppModel {
 #endif
             }
             self.tagClassification.status = try? await self.catalogCoordinator.store.recommendationIndexStatus(serverID: server)
+            self.tagClassification.unlabeledTracks = (try? await self.catalogCoordinator.store.emptyRecommendationClassificationCount(serverID: server)) ?? 0
+            if self.tagClassification.unlabeledTracks > 0, self.tagClassification.message == "标签分类已完成。" {
+                self.tagClassification.message = "本轮处理完成，部分曲目未获得标签，可单独重试。"
+            }
         }
     }
 
@@ -134,7 +153,7 @@ struct TagClassificationControls: View {
             Text(String(localized: "只向已配置模型发送歌名、艺术家、专辑等歌曲元数据，不发送播放历史、收藏、评分、文件路径或凭据。", bundle: .module))
                 .font(.caption).foregroundStyle(.secondary)
             if let status = model.tagClassification.status {
-                LabeledContent(String(localized: "已分类", bundle: .module), value: "\(status.indexedTracks) / \(status.totalTracks)")
+                LabeledContent(String(localized: "已处理", bundle: .module), value: "\(status.indexedTracks) / \(status.totalTracks)")
                 LabeledContent(String(localized: "待处理", bundle: .module), value: "\(status.pendingTracks)")
                 ProgressView(value: Double(status.indexedTracks), total: Double(max(1, status.totalTracks)))
             }
@@ -147,6 +166,11 @@ struct TagClassificationControls: View {
                 Button(String(localized: "刷新状态", bundle: .module)) { Task { await model.refreshTagClassificationStatus() } }
             }
             if let message = model.tagClassification.message { Text(message).font(.caption).foregroundStyle(.secondary) }
+            if model.tagClassification.unlabeledTracks > 0 {
+                LabeledContent(String(localized: "未获得标签", bundle: .module), value: "\(model.tagClassification.unlabeledTracks)")
+                Button(String(localized: "重试无标签曲目", bundle: .module)) { model.startTagClassification(retryUnlabeled: true) }
+                    .disabled(!allowsClassification || model.tagClassification.isRunning)
+            }
             Text(String(localized: "离开此页面后继续分类。暂停、失败或系统中断后可从已保存进度继续；系统可能限制后台运行时间。", bundle: .module))
                 .font(.caption).foregroundStyle(.secondary)
         }

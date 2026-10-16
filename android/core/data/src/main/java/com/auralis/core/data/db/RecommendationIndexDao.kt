@@ -36,6 +36,14 @@ data class RecommendationTrackPayloadRow(
  */
 @Dao
 interface RecommendationIndexDao {
+    @Query("""SELECT COUNT(*) FROM recommendation_index_v2_state s WHERE s.server_id = :serverId
+        AND NOT EXISTS (SELECT 1 FROM recommendation_index_v2_tags t WHERE t.global_id = s.global_id)""")
+    suspend fun emptyClassificationCount(serverId: String): Int
+
+    @Query("""DELETE FROM recommendation_index_v2_state WHERE server_id = :serverId
+        AND NOT EXISTS (SELECT 1 FROM recommendation_index_v2_tags t WHERE t.global_id = recommendation_index_v2_state.global_id)""")
+    suspend fun requeueEmptyClassifications(serverId: String): Int
+
     @Query("SELECT * FROM recommendation_index_v2_tags WHERE global_id IN (:validGlobalIds)")
     suspend fun tagsForValidTracks(validGlobalIds: List<String>): List<RecommendationIndexTagEntity>
 

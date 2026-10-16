@@ -26,7 +26,7 @@ struct MacRecommendationCategoriesView: View {
                 ContentUnavailableView(
                     String(localized: "还没有分类", bundle: .module),
                     systemImage: "square.grid.2x2",
-                    description: Text(String(localized: "在设置 → AI 与公开数据中完成推荐索引后，这里会按歌曲数量展示分类。", bundle: .module))
+                    description: Text(String(localized: "在设置 → 资料库与播放 → 标签分类中启动后台任务，完成后在这里浏览分类。", bundle: .module))
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {

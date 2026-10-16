@@ -46,7 +46,7 @@ struct AuralisApp: App {
 /// 转发后台下载会话完成事件：系统在 App 挂起后恢复下载并在结束时调用这里。
 final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
-        AuralisAppModel.shared.registerTagClassificationBackgroundProcessing()
+        AuralisAppModel.registerTagClassificationBackgroundProcessing()
         return true
     }
     func application(

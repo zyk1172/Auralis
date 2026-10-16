@@ -13,7 +13,6 @@ import com.auralis.core.ai.ToolSideEffect
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.data.prefs.AiConnectionSettings
 import com.auralis.core.designsystem.R as AuralisR
-import com.auralis.core.domain.ServerId
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -291,39 +290,39 @@ class AssistantCoordinator(
         _run.value = AssistantRunPresentation(running = true, phase = AssistantRunPhase.Connecting)
         try {
             val provider = buildProvider(settings)
-                // AI-05：把当前会话（仅当前会话）的落盘消息投影为模型历史，
-                // 剔除刚追加的当前用户消息（它作为 userText 单独传递）；
-                // AI-12：投影与工具结果回灌都遵守披露类别权限。
-                val permissions = with(AssistantHistoryProjection) {
-                    prefs.aiPrivacyPermissionsValue().toAiPermissions()
-                }
-                val historySource = _sessions.value.firstOrNull { it.id == sessionId }?.messages.orEmpty()
-                val history = AssistantHistoryProjection.modelMessages(
-                    historySource.dropLast(1),
-                    permissions,
-                )
-                val loop = AgentToolLoop(
-                    provider,
-                    host.registry(),
-                    maxRounds = 8,
-                    privacyPermissions = permissions,
-                )
-                val result = loop.run(
-                    systemPrompt = SYSTEM_PROMPT,
-                    userText = text,
-                    model = settings.model,
-                    history = history,
-                    authorizeOperations = writeToolNames,
-                    reasoning = if (settings.reasoningEnabled) com.auralis.core.ai.AiReasoningConfiguration() else null,
+            // AI-05：把当前会话（仅当前会话）的落盘消息投影为模型历史，
+            // 剔除刚追加的当前用户消息（它作为 userText 单独传递）；
+            // AI-12：投影与工具结果回灌都遵守披露类别权限。
+            val permissions = with(AssistantHistoryProjection) {
+                prefs.aiPrivacyPermissionsValue().toAiPermissions()
+            }
+            val historySource = _sessions.value.firstOrNull { it.id == sessionId }?.messages.orEmpty()
+            val history = AssistantHistoryProjection.modelMessages(
+                historySource.dropLast(1),
+                permissions,
+            )
+            val loop = AgentToolLoop(
+                provider,
+                host.registry(),
+                maxRounds = 8,
+                privacyPermissions = permissions,
+            )
+            val result = loop.run(
+                systemPrompt = SYSTEM_PROMPT,
+                userText = text,
+                model = settings.model,
+                history = history,
+                authorizeOperations = writeToolNames,
+                reasoning = if (settings.reasoningEnabled) com.auralis.core.ai.AiReasoningConfiguration() else null,
 
-                    confirm = { confirmation ->
-                        requestConfirm(runId, confirmation.title, confirmation.detail, destructive = true)
-                    },
-                    onEvent = { event -> handleRunEvent(runId, event) },
-                )
-                if (currentRunId != runId) return // 迟到结果丢弃
-                appendAssistantMessage(sessionId, result.finalAnswer.trim(), result.disclosureCategories)
-                logActions(result.writeOperations)
+                confirm = { confirmation ->
+                    requestConfirm(runId, confirmation.title, confirmation.detail, destructive = true)
+                },
+                onEvent = { event -> handleRunEvent(runId, event) },
+            )
+            if (currentRunId != runId) return // 迟到结果丢弃
+            appendAssistantMessage(sessionId, result.finalAnswer.trim(), result.disclosureCategories)
+            logActions(result.writeOperations)
         } catch (c: CancellationException) {
             // Chat cancellation is independent of the classification service.
         } catch (e: AiProviderException) {
@@ -377,7 +376,7 @@ class AssistantCoordinator(
 
     private fun isRecommendationIndexRequest(text: String): Boolean {
         val normalized = text.lowercase()
-        val mentionsIndex = normalized.contains("推荐索引") ||
+        val mentionsIndex = normalized.contains("标签分类") || normalized.contains("推荐索引") ||
             normalized.contains("推荐分类") ||
             normalized.contains("recommendation index") ||
             normalized.contains("recommendation categories")
@@ -385,9 +384,11 @@ class AssistantCoordinator(
             normalized.contains("生成") ||
             normalized.contains("构建") ||
             normalized.contains("重建") ||
-            normalized.contains("分类") ||
+            normalized.contains("开始分类") || normalized.contains("开始标签分类") ||
+            normalized.contains("继续分类") || normalized.contains("继续标签分类") ||
+            normalized.contains("暂停分类") || normalized.contains("更新分类") ||
             normalized.contains("build") ||
-            normalized.contains("index")
+            normalized.contains("classify")
         return mentionsIndex && asksToBuild
     }
 
@@ -590,7 +591,6 @@ class AssistantCoordinator(
     }
 
     companion object {
-        private const val RECOMMENDATION_INDEX_COMMAND = "建立推荐索引"
 
         private val SYSTEM_PROMPT = """
             你是 Auralis（本地音乐库）的 AI 助手，通过工具操作真实的音乐库数据。
@@ -601,7 +601,7 @@ class AssistantCoordinator(
             4. 破坏性操作（删除歌单等）会弹窗让用户批准；若工具返回"用户取消"或"未获授权"，如实告知用户结果，不要重试绕过；
             5. 涉及歌曲请标注歌手与专辑；列表过长时只展示前几条并说明总数；
             6. 使用简体中文，简洁直接。
-            7. 用户要建立或重建推荐索引时，说明需要在 Assistant 中使用“建立推荐索引”闭环；分类结果只来自本地已同步曲目。
+            7. 标签分类由设置中的独立后台任务管理。用户要求建立、继续、暂停或重建分类时，指引到设置的标签分类，不在聊天中操作或声称已经完成分类；助手可读取已有标签用于推荐。
             8. 开放语义推荐（例如“深夜独自开车、有城市霓虹感但不要太丧”）优先走撞库：先根据音乐知识生成目标数量约 3-5 倍的 title+artist 候选，再一次调用 recommendation_ground_candidates；只有工具真实命中的歌曲才能展示、播放或加入歌单。同时用 recommendation_taxonomy_search 将用户多维意图解析为 preferTags，并传入撞库工具；不足时 Runtime 自动按同意图标签补足。includeTags、excludeTags、numericRanges 为两阶段硬约束；不得把未命中候选直接当成本地存在。
             9. 纯年份、格式、收藏、离线、明确流派等确定性筛选直接使用本地查询/筛选工具，不要为了“撞库”额外生成开放世界候选。
             10. 用户要求按推荐分类推荐歌曲或生成推荐歌单时，指定本地标签推荐时直接用 recommend_by_tags，跳过撞库。必需标签放includeTags（AND）、偏好放preferTags、不要的放excludeTags。同义词归一到同一ID；组合条件用anyTagGroups，组内AND、组间OR，例如[[scene.study,instrument.piano],[scene.late_night,instrument.acoustic_guitar]]。至少命中N个不同偏好用minimumPreferredMatches=N。一首歌可命中多个标签/组合但只推荐一次；组合与最少命中数在撞库和回退中都必须执行，不把“或”改成“且”。继续推荐带excludeTrackIDs。tempo等分类数值并非BPM。单分类浏览可用 recommendation_category_tracks；分类歌单用 recommendation_create_playlist。数量不足如实说明，不随机凑数，不擅自放宽硬约束；分类是元数据推断，非音频实测。

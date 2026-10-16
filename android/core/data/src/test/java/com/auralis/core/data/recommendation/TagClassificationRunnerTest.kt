@@ -24,6 +24,24 @@ private class ClassifierProvider(val handler: suspend (AiCompletionRequest) -> A
 }
 
 class TagClassificationRunnerTest : RoomDbTest() {
+    @Test fun retriesEmptyClassificationsWithoutReplacingExistingLabels() = runBlocking<Unit> {
+        val db = openDatabase()
+        try {
+            val tracks = listOf(track("0"), track("1"))
+            db.trackDao().upsertAll(tracks.map { it.entity() })
+            val store = RecommendationIndexStore(db)
+            store.replaceClassifications(server, listOf(
+                RecommendationIndexClassificationInput(tracks[0].globalId, listOf(RecommendationIndexTag("scene", "scene.late_night", 0.9))),
+                RecommendationIndexClassificationInput(tracks[1].globalId, emptyList()),
+            ))
+            assertThat(store.emptyClassificationCount(server)).isEqualTo(1)
+            assertThat(store.requeueEmptyClassifications(server)).isEqualTo(1)
+            assertThat(store.status(server).indexedTracks).isEqualTo(1)
+            TagClassificationRunner(store, ClassifierProvider(::response), "text-only").run(server)
+            assertThat(store.emptyClassificationCount(server)).isEqualTo(0)
+            assertThat(store.recommendByTags(server, TagRecommendationQuery(includeTags = listOf("scene.late_night"))).map { it.track.id.value }).containsExactly("0")
+        } finally { db.close() }
+    }
     private val server = ServerId("server")
     private fun track(id: String) = Track(TrackId(id), server, AlbumId(id), ArtistId(id), "Song $id", "Artist $id", "Album $id", 180.0)
     private fun Track.entity() = TrackEntity(globalId.serialized, serverId.value, id.value, title, artistName, albumTitle,
@@ -132,6 +150,7 @@ class TagClassificationRunnerTest : RoomDbTest() {
             val store = RecommendationIndexStore(db)
             TagClassificationRunner(store, provider, "text-only").run(server)
             assertThat(store.status(server).indexedTracks).isEqualTo(1)
+            assertThat(store.recommendByTags(server, TagRecommendationQuery(includeTags = listOf("scene.study", "instrument.piano")))).hasSize(1)
             val request = upstream.takeRequest()
             assertThat(request.path).isEqualTo("/v1/chat/completions")
             assertThat(Json.parseToJsonElement(request.body.readUtf8()).jsonObject.keys).doesNotContain("tools")

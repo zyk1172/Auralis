@@ -17,7 +17,8 @@ public struct TagClassificationRunner: Sendable {
     public let maxOutputTokens: Int
 
     public init(catalog: LocalCatalogStore, provider: any AIProvider, model: String, maxOutputTokens: Int = 8_000) {
-        self.catalog = catalog; self.provider = provider; self.model = model
+        self.catalog = catalog; self.provider = provider
+        self.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
         self.maxOutputTokens = max(512, min(maxOutputTokens, 8_000))
     }
 

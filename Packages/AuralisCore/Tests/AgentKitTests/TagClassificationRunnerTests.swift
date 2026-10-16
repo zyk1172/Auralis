@@ -20,6 +20,7 @@ private actor ClassificationRequests {
 
 private actor ClassificationPauseGate {
     var entered = false
+    var finished = false
     var waiting: CheckedContinuation<Void, Never>?
     var releaseWaiter: CheckedContinuation<Void, Never>?
     func enterAndWait() async {
@@ -27,10 +28,11 @@ private actor ClassificationPauseGate {
         await withCheckedContinuation { releaseWaiter = $0 }
     }
     func waitUntilEntered() async {
-        if entered { return }
+        if entered || finished { return }
         await withCheckedContinuation { waiting = $0 }
     }
     func release() { releaseWaiter?.resume(); releaseWaiter = nil }
+    func finish() { finished = true; waiting?.resume(); waiting = nil }
 }
 
 private func classifiedResponse(_ request: AICompletionRequest) throws -> AICompletionResponse {
@@ -64,18 +66,40 @@ struct TagClassificationRunnerTests {
             _ = await recorder.record(request)
             return try classifiedResponse(request)
         }
-        try await TagClassificationRunner(catalog: store, provider: provider, model: "text-only").run(serverID: "server")
+        try await TagClassificationRunner(catalog: store, provider: provider, model: " text-only ").run(serverID: "server")
         #expect(try await store.recommendationIndexStatus(serverID: "server").pendingTracks == 0)
         #expect(try await store.recommendByTags(serverIDs: ["server"], query: .init(includeTags: ["scene.study", "instrument.piano"], maxPerArtist: 10, maxPerAlbum: 10)).count == 10)
         let requests = await recorder.requests
         #expect(requests.count == 2)
         for request in requests {
+            #expect(request.model == "text-only")
             #expect(request.tools == nil)
             #expect(request.hostedTools == nil)
             #expect(request.messages.count == 2)
             #expect(!request.messages.last!.content.contains("playCount"))
             #expect(!request.messages.last!.content.contains("isFavorite"))
         }
+    }
+
+    @Test("Empty classifications can be retried without replacing existing usable labels")
+    func retriesUnlabeledOnly() async throws {
+        let (store, _) = try await fixture(count: 2)
+        _ = try await store.writeRecommendationIndex([
+            .init(id: "server:0", scenes: ["scene.late_night"]), .init(id: "server:1"),
+        ], serverID: "server")
+        #expect(try await store.emptyRecommendationClassificationCount(serverID: "server") == 1)
+        #expect(try await store.requeueEmptyRecommendationClassifications(serverID: "server") == 1)
+        #expect(try await store.recommendationIndexStatus(serverID: "server").indexedTracks == 1)
+        let recorder = ClassificationRequests()
+        let provider = BackgroundClassifierProvider { request in
+            _ = await recorder.record(request)
+            return try classifiedResponse(request)
+        }
+        try await TagClassificationRunner(catalog: store, provider: provider, model: "text-only").run(serverID: "server")
+        #expect(try await store.emptyRecommendationClassificationCount(serverID: "server") == 0)
+        let existing = try await store.recommendByTags(serverIDs: ["server"], query: .init(includeTags: ["scene.late_night"]))
+        #expect(existing.map(\.track.id.rawValue) == ["0"])
+        #expect(await recorder.requests.count == 1)
     }
 
     @Test("Malformed responses shrink a bounded batch and resume until every track is committed")
@@ -132,8 +156,15 @@ struct TagClassificationRunnerTests {
             if await calls.record(request) == 2 { await gate.enterAndWait() }
             return try classifiedResponse(request)
         }
-        let task = Task { try await TagClassificationRunner(catalog: store, provider: provider, model: "text-only", maxOutputTokens: 512).run(serverID: "server") }
+        let task = Task {
+            do {
+                try await TagClassificationRunner(catalog: store, provider: provider, model: "text-only", maxOutputTokens: 512).run(serverID: "server")
+                await gate.finish()
+            } catch { await gate.finish(); throw error }
+        }
         await gate.waitUntilEntered()
+        let entered = await gate.entered
+        #expect(entered)
         task.cancel()
         await gate.release()
         _ = try? await task.value

@@ -9,27 +9,32 @@ extension AuralisAppModel {
     static let classificationRequestedServerKey = "auralis.classification.requestedServer"
 
     /// Registered during application launch. iOS controls when processing time is granted.
-    public func registerTagClassificationBackgroundProcessing() {
+    public static func registerTagClassificationBackgroundProcessing() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.classificationBackgroundIdentifier, using: .main) { task in
             guard let processing = task as? BGProcessingTask else { task.setTaskCompleted(success: false); return }
             Task { @MainActor in
-                processing.expirationHandler = {
-                    Task { @MainActor in
-                        self.tagClassificationTask?.cancel()
-                        self.tagClassification.message = "系统暂停了后台分类，进度已保存，等待继续。"
-                    }
-                }
-                await self.restorePersistedLibrary()
+                let model = AuralisAppModel.shared
+                await model.restorePersistedLibrary()
                 guard let requested = UserDefaults.standard.string(forKey: Self.classificationRequestedServerKey),
-                      self.catalog.activeServerID?.rawValue == requested else {
+                      model.catalog.activeServerID?.rawValue == requested else {
                     processing.setTaskCompleted(success: false); return
                 }
-                self.startTagClassification()
-                await self.tagClassificationTask?.value
+                model.startTagClassification()
+                let ownedTask = model.tagClassificationTask
+                let runID = model.tagClassification.runID
+                processing.expirationHandler = {
+                    ownedTask?.cancel()
+                    Task { @MainActor in
+                        if model.tagClassification.runID == runID {
+                            model.tagClassification.message = "系统暂停了后台分类，进度已保存，等待继续。"
+                        }
+                    }
+                }
+                await ownedTask?.value
                 processing.expirationHandler = nil
-                let finished = self.tagClassification.status?.pendingTracks == 0
+                let finished = model.tagClassification.status?.pendingTracks == 0
                 processing.setTaskCompleted(success: finished)
-                if !finished { self.scheduleTagClassificationBackgroundProcessing() }
+                if !finished { model.scheduleTagClassificationBackgroundProcessing() }
             }
         }
     }

@@ -41,6 +41,8 @@ class RecommendationIndexStore(
     private val dao: RecommendationIndexDao = database.recommendationIndexDao(),
     private val json: Json = DataJson.json,
 ) {
+    suspend fun emptyClassificationCount(serverId: ServerId): Int = dao.emptyClassificationCount(serverId.value)
+    suspend fun requeueEmptyClassifications(serverId: ServerId): Int = database.withTransaction { dao.requeueEmptyClassifications(serverId.value) }
     suspend fun recommendationCandidates(serverId: ServerId, minimumConfidence: Double = 0.35): List<TagRecommendationCandidate> = database.withTransaction {
         val disliked = database.annotationDao().dislikedIds(serverId.value).toSet()
         val valid = validTrackIds(serverId).filterNot { it in disliked }

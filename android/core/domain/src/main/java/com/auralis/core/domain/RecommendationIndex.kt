@@ -130,6 +130,7 @@ data class RecommendationIndexUiState(
     val isPaused: Boolean = false,
     val error: String? = null,
     val lastCompletedAtMillis: Long? = null,
+    val unlabeledTracks: Int = 0,
 ) {
     val totalTracks: Int get() = status?.totalTracks ?: progress?.totalTracks ?: 0
     val indexedTracks: Int get() = status?.indexedTracks ?: progress?.indexedTracks ?: 0

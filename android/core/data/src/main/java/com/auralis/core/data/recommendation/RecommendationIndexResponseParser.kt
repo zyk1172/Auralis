@@ -63,7 +63,7 @@ internal class RecommendationIndexResponseParser(
             runCatching { element.jsonArray }.getOrNull()?.forEach { tagElement ->
                 val id = runCatching { tagElement.jsonPrimitive.contentOrNull }.getOrNull()?.trim()
                     ?: return@forEach
-                val definition = RecommendationIndexTaxonomy.definition(id) ?: return@forEach
+                val definition = RecommendationIndexTaxonomy.resolve(id) ?: return@forEach
                 if (seen.size >= 64 || !seen.add(definition.id)) return@forEach
                 tags += RecommendationIndexTag(definition.dimension, definition.id, confidence)
             }

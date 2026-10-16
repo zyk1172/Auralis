@@ -465,7 +465,7 @@ struct LibraryView: View {
                 AuralisEmptyState(
                     icon: "square.grid.2x2",
                     title: String(localized: "还没有分类", bundle: .module),
-                    message: String(localized: "AI 推荐索引完成分类后，情绪、场景、人声、质感、风格和听感维度会显示在这里。", bundle: .module),
+                    message: String(localized: "在设置的标签分类中启动后台任务，完成后可在这里浏览情绪、场景、风格等标签。", bundle: .module),
                     colors: theme.colorTokens
                 )
             } else {

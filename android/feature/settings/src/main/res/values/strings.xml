@@ -24,6 +24,8 @@
     <string name="settings_about">关于</string>
     <string name="settings_recommendation_index_title">标签分类</string>
     <string name="settings_classification_pause">暂停</string>
+    <string name="settings_classification_unlabeled">%1$d 首已处理曲目未获得标签，可单独重试</string>
+    <string name="settings_classification_retry_unlabeled">重试无标签曲目</string>
     <string name="settings_classification_paused">已暂停，完成的批次已保存，可继续分类</string>
     <string name="settings_classification_consent">允许发送歌曲元数据进行分类</string>
     <string name="settings_classification_note">只向配置的模型发送歌名、艺术家、专辑等元数据，不发送播放历史、收藏、评分、路径或凭据。离开设置后继续后台运行，暂停或失败后可从保存的进度继续。</string>

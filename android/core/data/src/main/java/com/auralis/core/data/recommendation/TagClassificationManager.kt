@@ -25,9 +25,14 @@ class TagClassificationManager(private val graph: AuralisGraph) {
     private val mutableState = MutableStateFlow(RecommendationIndexUiState())
     val state = mutableState.asStateFlow()
     private var job: Job? = null
+    private var retryEmpty = false
 
-    @Synchronized fun start() {
+    fun start() = requestStart(false)
+    fun retryUnlabeled() = requestStart(true)
+
+    @Synchronized private fun requestStart(retryUnlabeled: Boolean) {
         if (mutableState.value.isRunning) return
+        retryEmpty = retryUnlabeled
         mutableState.update { it.copy(isRunning = true, isPaused = false, error = null) }
         try {
             ContextCompat.startForegroundService(graph.appContext, Intent(graph.appContext, TagClassificationService::class.java))
@@ -47,6 +52,7 @@ class TagClassificationManager(private val graph: AuralisGraph) {
                 authorize(target)
                 val settings = graph.preferences.aiConnectionValue()
                 require(settings.isComplete) { "请先在设置中配置大模型" }
+                if (retryEmpty) graph.recommendationIndex.requeueEmptyClassifications(target)
                 val key = graph.vault.retrieve(AiConnectionSettings.API_KEY_REFERENCE)
                 val provider = AiProviderFactory.create(AiProviderConfiguration(
                     id = "tag-classification", name = "标签分类", baseUrl = settings.baseUrl,
@@ -68,8 +74,9 @@ class TagClassificationManager(private val graph: AuralisGraph) {
             } finally {
                 withContext(NonCancellable) {
                     val status = server?.let { runCatching { graph.recommendationIndex.status(it) }.getOrNull() }
+                    val unlabeled = server?.let { runCatching { graph.recommendationIndex.emptyClassificationCount(it) }.getOrDefault(0) } ?: 0
                     synchronized(this@TagClassificationManager) {
-                        mutableState.update { it.copy(isRunning = false, status = status ?: it.status) }
+                        mutableState.update { it.copy(isRunning = false, status = status ?: it.status, unlabeledTracks = unlabeled) }
                         job = null
                     }
                 }
@@ -86,6 +93,7 @@ class TagClassificationManager(private val graph: AuralisGraph) {
     }
 
     @Synchronized fun pause() {
+        if (!mutableState.value.isRunning) return
         mutableState.update { it.copy(isPaused = true) }
         if (job == null) mutableState.update { it.copy(isRunning = false) }
         job?.cancel()
@@ -100,7 +108,14 @@ class TagClassificationManager(private val graph: AuralisGraph) {
             if (mutableState.value.isRunning) return@launch
             val server = graph.preferences.activeServerIdValue()?.takeIf { it.isNotBlank() }?.let(::ServerId)
             val status = server?.let { runCatching { graph.recommendationIndex.status(it) }.getOrNull() }
-            mutableState.update { if (it.isRunning) it else it.copy(status = status) }
+            val unlabeled = server?.let { runCatching { graph.recommendationIndex.emptyClassificationCount(it) }.getOrDefault(0) } ?: 0
+            mutableState.update {
+                when {
+                    it.isRunning -> it
+                    server == null -> RecommendationIndexUiState()
+                    else -> it.copy(status = status, progress = null, unlabeledTracks = unlabeled)
+                }
+            }
         }
     }
 }
