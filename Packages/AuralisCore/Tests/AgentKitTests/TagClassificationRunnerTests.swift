@@ -7,6 +7,7 @@ import LocalCatalog
 import Testing
 
 private struct BackgroundClassifierProvider: AIProvider {
+    var capabilities = ModelCapabilities()
     let handler: @Sendable (AICompletionRequest) async throws -> AICompletionResponse
     func complete(_ request: AICompletionRequest) async throws -> AICompletionResponse { try await handler(request) }
     func testConnection() async throws -> AIConnectionResult { throw TagClassificationFailure("No probes expected") }
@@ -70,10 +71,13 @@ struct TagClassificationRunnerTests {
         #expect(try await store.recommendationIndexStatus(serverID: "server").pendingTracks == 0)
         #expect(try await store.recommendByTags(serverIDs: ["server"], query: .init(includeTags: ["scene.study", "instrument.piano"], maxPerArtist: 10, maxPerAlbum: 10)).count == 10)
         let requests = await recorder.requests
-        #expect(requests.count == 2)
+        #expect(requests.count == 4)
+        let firstTracks = try JSONSerialization.jsonObject(with: Data(requests[0].messages.last!.content.utf8)) as! [[String: Any]]
+        #expect(firstTracks.count == 1)
         for request in requests {
             #expect(request.model == "text-only")
             #expect(request.tools == nil)
+            #expect(request.reasoning?.mode == .disabled)
             #expect(request.hostedTools == nil)
             #expect(request.messages.count == 2)
             #expect(!request.messages.last!.content.contains("playCount"))
@@ -113,7 +117,7 @@ struct TagClassificationRunnerTests {
         }
         try await TagClassificationRunner(catalog: store, provider: provider, model: "text-only").run(serverID: "server")
         #expect(try await store.recommendationIndexStatus(serverID: "server").pendingTracks == 0)
-        #expect(await recorder.requests.count == 2)
+        #expect(await recorder.requests.count == 3)
     }
 
     @Test("Metadata changed during classification cannot be marked as freshly classified")
@@ -141,7 +145,7 @@ struct TagClassificationRunnerTests {
         await #expect(throws: TagClassificationFailure.self) {
             try await TagClassificationRunner(catalog: store, provider: provider, model: "text-only").run(serverID: "server", authorize: {
                 let count = await calls.record(.init(model: "permission", messages: []))
-                if count > 1 { throw TagClassificationFailure("permission revoked") }
+                if count > 2 { throw TagClassificationFailure("permission revoked") }
             })
         }
         #expect(try await store.recommendationIndexStatus(serverID: "server").indexedTracks == 0)
@@ -170,6 +174,28 @@ struct TagClassificationRunnerTests {
         _ = try? await task.value
         #expect(try await store.recommendationIndexStatus(serverID: "server").indexedTracks == 1)
         try await TagClassificationRunner(catalog: store, provider: BackgroundClassifierProvider { try classifiedResponse($0) }, model: "text-only").run(serverID: "server")
+        #expect(try await store.recommendationIndexStatus(serverID: "server").pendingTracks == 0)
+    }
+
+    @Test("A 4K context considers the whole taxonomy in bounded parts and merges labels for combined recommendations")
+    func smallContext() async throws {
+        let (store, _) = try await fixture(count: 1)
+        let recorder = ClassificationRequests()
+        let provider = BackgroundClassifierProvider(capabilities: .init(maxContextTokens: 4_096)) { request in
+            _ = await recorder.record(request)
+            let cost = request.messages.reduce(0) { $0 + ContextManager.estimatedTokens($1.content) }
+            #expect(cost + request.maxTokens + 256 < 4_096)
+            let input = try JSONSerialization.jsonObject(with: Data(request.messages.last!.content.utf8)) as! [[String: Any]]
+            let tags = ["scene.study", "instrument.piano"].filter { request.messages[0].content.contains("\($0)=") }
+            let data = try JSONSerialization.data(withJSONObject: ["items": [["id": input[0]["id"]!, "tags": tags, "confidence": 0.9]]])
+            return .init(model: request.model, content: String(decoding: data, as: UTF8.self))
+        }
+        try await TagClassificationRunner(catalog: store, provider: provider, model: "small-context").run(serverID: "server")
+        let requests = await recorder.requests
+        #expect(requests.count > 1)
+        let sentCatalog = requests.map { $0.messages[0].content }.joined(separator: "\n")
+        for tag in RecommendationIndexTaxonomy.all { #expect(sentCatalog.contains("\(tag.id.rawValue)=")) }
+        #expect(try await store.recommendByTags(serverIDs: ["server"], query: .init(includeTags: ["scene.study", "instrument.piano"])).count == 1)
         #expect(try await store.recommendationIndexStatus(serverID: "server").pendingTracks == 0)
     }
 }

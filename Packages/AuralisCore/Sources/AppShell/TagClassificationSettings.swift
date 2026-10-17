@@ -18,6 +18,7 @@ public struct TagClassificationState {
     public var message: String?
     public var batchNumber = 0
     public var unlabeledTracks = 0
+    public var progress: TagClassificationProgress?
 }
 
 extension AuralisAppModel {
@@ -55,6 +56,7 @@ extension AuralisAppModel {
         tagClassification.runID = runID
         tagClassification.message = nil
         tagClassification.batchNumber = 0
+        tagClassification.progress = nil
 #if os(iOS)
         UserDefaults.standard.set(server.rawValue, forKey: Self.classificationRequestedServerKey)
         scheduleTagClassificationBackgroundProcessing()
@@ -120,7 +122,9 @@ extension AuralisAppModel {
 
     private func updateTagClassificationProgress(_ progress: TagClassificationProgress) {
         tagClassification.status = progress.status
-        tagClassification.batchNumber = progress.batchNumber
+        // The browser refresh key advances only after a committed batch, never when a request starts.
+        if case .preparing = progress.phase { tagClassification.batchNumber = progress.batchNumber }
+        tagClassification.progress = progress
     }
 
     private func authorizeTagClassification(server: ServerID) throws {
@@ -162,6 +166,14 @@ struct TagClassificationControls: View {
             }
             if model.tagClassification.isRunning {
                 Label(String(localized: "正在后台分类", bundle: .module), systemImage: "arrow.triangle.2.circlepath")
+                if let progress = model.tagClassification.progress {
+                    TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                        Text(classificationDetail(progress, now: timeline.date))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text(String(localized: "正在读取待分类歌曲…", bundle: .module)).font(.caption).foregroundStyle(.secondary)
+                }
                 Button(String(localized: "暂停分类", bundle: .module)) { model.pauseTagClassification() }
             } else {
                 Button(String(localized: "开始/继续分类", bundle: .module)) { model.startTagClassification() }
@@ -180,6 +192,20 @@ struct TagClassificationControls: View {
         .task { await model.refreshTagClassificationStatus() }
         .onChange(of: allowsClassification) { _, allowed in
             if !allowed { model.pauseTagClassification() }
+        }
+    }
+
+    private func classificationDetail(_ progress: TagClassificationProgress, now: Date) -> String {
+        switch progress.phase {
+        case .preparing:
+            return String(localized: "正在读取待分类歌曲…", bundle: .module)
+        case .requesting:
+            let seconds = max(0, Int(now.timeIntervalSince(progress.requestStartedAt ?? now)))
+            return String(localized: "正在请求模型：第 \(progress.batchNumber) 批，\(progress.batchSize) 首；标签组 \(progress.partNumber)/\(progress.partCount)，已等待 \(seconds) 秒（最多 60 秒）。", bundle: .module)
+        case .validating:
+            return String(localized: "已收到模型结果，正在校验标签…", bundle: .module)
+        case .committing:
+            return String(localized: "标签已校验，正在保存分类结果…", bundle: .module)
         }
     }
 }
