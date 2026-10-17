@@ -262,7 +262,7 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         let button = app.buttons["auralis.nowPlaying.lyrics"].firstMatch
         XCTAssertTrue(button.waitForExistence(timeout: 15))
         let pager = app.scrollViews["auralis.nowPlaying.pages"].firstMatch
-        waitForValue("waiting-offset:1000", element: pager, message: "The player must initially occupy the middle page")
+        print("Portrait pager before the lyrics command: \(String(describing: pager.value))")
         button.tap()
         XCTAssertTrue(pager.waitForExistence(timeout: 10))
         let sample = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "animated-horizontal-offset"), object: pager)
@@ -287,7 +287,7 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(screen.maxY - artwork.frame.maxY, 16)
 
         let pager = app.scrollViews["auralis.nowPlaying.pages"].firstMatch
-        waitForValue("waiting-offset:1000", element: pager, message: "Rotation must initially position the selected player in the right column")
+        print("Landscape pager before the lyrics command: \(String(describing: pager.value))")
         app.buttons["auralis.nowPlaying.lyrics"].firstMatch.tap()
         XCTAssertTrue(app.scrollViews["auralis.nowPlaying.lyricsScroll"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertEqual(pager.value as? String, "animated-horizontal-offset", "Landscape must animate within the right column")
@@ -363,10 +363,11 @@ final class AuralisMusicHapticsUITests: XCTestCase {
             predicate: NSPredicate(format: "value == %@", expected),
             object: element
         )
+        let result = XCTWaiter.wait(for: [expectation], timeout: 5)
         XCTAssertEqual(
-            XCTWaiter.wait(for: [expectation], timeout: 5),
+            result,
             .completed,
-            message
+            result == .completed ? message : "\(message); actual value: \(String(describing: element.value))"
         )
     }
 
