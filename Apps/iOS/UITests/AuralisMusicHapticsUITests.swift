@@ -182,6 +182,12 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         waitForValue("已打开", element: queue, message: "Queue must enter queue mode on first tap")
         queue.tap()
         waitForValue("未打开", element: queue, message: "Queue must return to artwork mode on second tap")
+
+        let pager = app.scrollViews["auralis.nowPlaying.pages"].firstMatch
+        pager.swipeLeft(velocity: .slow)
+        waitForValue("已打开", element: queue, message: "A native left swipe must select the queue")
+        pager.swipeRight(velocity: .slow)
+        waitForValue("未打开", element: queue, message: "A native right swipe must return to the player")
     }
 
     func testAssistantSessionSheetSurvivesColdBootstrap() throws {
@@ -245,6 +251,7 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         let slow = try coast(velocity: .slow)
         let fast = try coast(velocity: .fast)
         XCTAssertGreaterThan(fast, slow + 30, "Native coasting must depend on flick velocity: slow=\(slow), fast=\(fast)")
+        print("Native lyrics coasting: slow=\(slow)pt, fast=\(fast)pt")
         let evidence = XCTAttachment(string: "Native lyrics coasting: slow=\(slow)pt, fast=\(fast)pt")
         evidence.lifetime = .keepAlways
         add(evidence)
@@ -258,11 +265,11 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         let pager = app.scrollViews["auralis.nowPlaying.pages"].firstMatch
         XCTAssertTrue(pager.waitForExistence(timeout: 10))
         let sample = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "animated-horizontal-offset"), object: pager)
-        XCTAssertEqual(XCTWaiter.wait(for: [sample], timeout: 15), .completed, "The button must animate real horizontal geometry, not only update its selected state")
+        XCTAssertEqual(XCTWaiter.wait(for: [sample], timeout: 15), .completed, "The button must animate real horizontal geometry, not only update its selected state; actual: \(String(describing: pager.value))")
     }
 
     func testLandscapeArtworkIsLargerAndRetainsEdgeClearance() throws {
-        launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics")
+        launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics", "-auralis-ui-smoke-page-motion")
         let playPause = app.buttons["auralis.nowPlaying.playPause"].firstMatch
         XCTAssertTrue(playPause.waitForExistence(timeout: 15))
         waitForLabelContaining("播放", element: playPause, message: "The smoke player must be ready before its first Play tap")
@@ -280,6 +287,8 @@ final class AuralisMusicHapticsUITests: XCTestCase {
 
         app.buttons["auralis.nowPlaying.lyrics"].firstMatch.tap()
         XCTAssertTrue(app.scrollViews["auralis.nowPlaying.lyricsScroll"].firstMatch.waitForExistence(timeout: 5))
+        let pager = app.scrollViews["auralis.nowPlaying.pages"].firstMatch
+        XCTAssertEqual(pager.value as? String, "animated-horizontal-offset", "Landscape must animate within the right column")
         XCTAssertTrue(artwork.exists, "The enlarged cover must remain beside landscape lyrics")
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Landscape artwork and lyrics"

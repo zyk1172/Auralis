@@ -6,53 +6,90 @@ import SwiftUI
 /// child scroll views retain their own native pan velocity and deceleration.
 struct NowPlayingPager<Content: View>: View {
     @Binding var selection: NowPlayingPage
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var userIsScrolling = false
+    @State private var nearestPage = NowPlayingPage.player
     let content: (NowPlayingPage) -> Content
 #if DEBUG
-    @State private var isAnimating = false
+    @State private var hasPageCommand = false
     @State private var observedAnimatedOffset = false
+    @State private var sampledOffset = 0
 #endif
 
     init(selection: Binding<NowPlayingPage>, @ViewBuilder content: @escaping (NowPlayingPage) -> Content) {
         self._selection = selection; self.content = content
     }
 
-    private var position: Binding<NowPlayingPage?> {
-        .init(get: { selection }, set: { if let page = $0 { selection = page } })
-    }
-
     var body: some View {
-        let pager = ScrollView(.horizontal) {
-            HStack(spacing: 0) {
-                ForEach(NowPlayingPage.allCases, id: \.self) { page in
-                    content(page)
-                        .containerRelativeFrame(.horizontal)
-                        .frame(maxHeight: .infinity)
-                        .id(page)
-                        .accessibilityHidden(page != selection)
+        GeometryReader { geometry in
+            ScrollViewReader { proxy in
+                let pager = ScrollView(.horizontal) {
+                    HStack(spacing: 0) {
+                        ForEach(NowPlayingPage.allCases, id: \.self) { page in
+                            content(page)
+                                .frame(width: geometry.size.width, height: geometry.size.height)
+                                .id(page)
+                                .accessibilityHidden(page != selection)
+                        }
+                    }
+                    .scrollTargetLayout()
                 }
-            }
-            .scrollTargetLayout()
-        }
-        .scrollIndicators(.hidden)
-        .scrollTargetBehavior(.paging)
-        .scrollPosition(id: position)
-        .accessibilityIdentifier("auralis.nowPlaying.pages")
+                .scrollIndicators(.hidden)
+                .scrollTargetBehavior(.paging)
+                // Commands flow one way. Binding the selected page directly to the visible
+                // target lets intermediate scroll/layout updates write an old page back and
+                // interrupt the button's animation, especially in the landscape column.
+                .onChange(of: selection) { _, target in
 #if DEBUG
-        if CommandLine.arguments.contains("-auralis-ui-smoke-page-motion") {
-            pager
-                .onScrollPhaseChange { _, phase in isAnimating = phase == .animating }
-                .onScrollGeometryChange(for: Int.self) { geometry in
-                    guard geometry.containerSize.width > 0 else { return 0 }
-                    return Int((geometry.contentOffset.x / geometry.containerSize.width * 1_000).rounded())
-                } action: { _, offset in
-                    let fraction = abs(offset % 1_000)
-                    if isAnimating, fraction > 40, fraction < 960 { observedAnimatedOffset = true }
-                }
-                .accessibilityValue(observedAnimatedOffset ? "animated-horizontal-offset" : "waiting")
-        } else { pager }
-#else
-        pager
+                    hasPageCommand = true
 #endif
+                    withAnimation(reduceMotion ? nil : .smooth(duration: 0.34, extraBounce: 0)) {
+                        proxy.scrollTo(target, anchor: .leading)
+                    }
+                }
+                .task(id: geometry.size.width) {
+                    guard geometry.size.width > 0 else { return }
+                    await Task.yield()
+                    guard !Task.isCancelled else { return }
+                    proxy.scrollTo(selection, anchor: .leading)
+                }
+                .onScrollGeometryChange(for: Int.self) { scroll in
+                    guard scroll.containerSize.width > 0 else { return 0 }
+                    return Int((scroll.contentOffset.x / scroll.containerSize.width * 1_000).rounded())
+                } action: { _, offset in
+                    let pages = NowPlayingPage.allCases
+                    let index = min(pages.count - 1, max(0, Int((Double(offset) / 1_000).rounded())))
+                    nearestPage = pages[index]
+#if DEBUG
+                    if CommandLine.arguments.contains("-auralis-ui-smoke-page-motion") {
+                        sampledOffset = offset
+                        let fraction = abs(offset % 1_000)
+                        if hasPageCommand, fraction > 40, fraction < 960 { observedAnimatedOffset = true }
+                    }
+#endif
+                }
+                .onScrollPhaseChange { _, phase in
+                    if phase == .tracking || phase == .interacting {
+                        userIsScrolling = true
+#if DEBUG
+                        hasPageCommand = false
+#endif
+                    }
+                    if phase == .idle, userIsScrolling {
+                        selection = nearestPage
+                        userIsScrolling = false
+                    }
+                }
+                .accessibilityIdentifier("auralis.nowPlaying.pages")
+#if DEBUG
+                if CommandLine.arguments.contains("-auralis-ui-smoke-page-motion") {
+                    pager.accessibilityValue(observedAnimatedOffset ? "animated-horizontal-offset" : "waiting-offset:\(sampledOffset)")
+                } else { pager }
+#else
+                pager
+#endif
+            }
+        }
     }
 }
 #endif
