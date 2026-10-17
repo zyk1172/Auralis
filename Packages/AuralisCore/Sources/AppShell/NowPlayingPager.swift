@@ -63,7 +63,7 @@ struct NowPlayingPager<Content: View>: View {
                 }
                 .onScrollGeometryChange(for: Int.self) { scroll in
                     guard scroll.containerSize.width > 0 else { return 0 }
-                    return Int((scroll.contentOffset.x / scroll.containerSize.width * 1_000).rounded())
+                    return Int(((scroll.contentOffset.x + scroll.contentInsets.leading) / scroll.containerSize.width * 1_000).rounded())
                 } action: { _, offset in
                     let pages = NowPlayingPage.allCases
                     let index = min(pages.count - 1, max(0, Int((Double(offset) / 1_000).rounded())))
