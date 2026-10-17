@@ -77,7 +77,8 @@ struct TagClassificationRunnerTests {
         for request in requests {
             #expect(request.model == "text-only")
             #expect(request.tools == nil)
-            #expect(request.reasoning?.mode == .disabled)
+            // Some reasoning models reject effort=none; classification must not add that parameter.
+            #expect(request.reasoning == nil)
             #expect(request.hostedTools == nil)
             #expect(request.messages.count == 2)
             #expect(!request.messages.last!.content.contains("playCount"))
@@ -187,6 +188,8 @@ struct TagClassificationRunnerTests {
             #expect(cost + request.maxTokens + 256 < 4_096)
             let input = try JSONSerialization.jsonObject(with: Data(request.messages.last!.content.utf8)) as! [[String: Any]]
             let tags = ["scene.study", "instrument.piano"].filter { request.messages[0].content.contains("\($0)=") }
+                + RecommendationIndexTaxonomy.definitions(for: .mood).map(\.id.rawValue)
+                    .filter { request.messages[0].content.contains("\($0)=") }.prefix(64)
             let data = try JSONSerialization.data(withJSONObject: ["items": [["id": input[0]["id"]!, "tags": tags, "confidence": 0.9]]])
             return .init(model: request.model, content: String(decoding: data, as: UTF8.self))
         }

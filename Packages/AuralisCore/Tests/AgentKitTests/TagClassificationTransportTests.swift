@@ -70,38 +70,44 @@ struct TagClassificationTransportTests {
         return (store, directory)
     }
 
-    private func response() throws -> Data {
+    private func response(responses: Bool = false) throws -> Data {
         let classification = """
         {"items":[{"id":"server:0","tags":["scene.study","instrument.piano"],"confidence":0.9}]}
         """
+        if responses {
+            return try JSONSerialization.data(withJSONObject: ["id": "resp-classification", "model": "http-model", "status": "completed", "output": [[
+                "type": "message", "role": "assistant", "content": [["type": "output_text", "text": classification]],
+            ]]])
+        }
         return try JSONSerialization.data(withJSONObject: ["model": "http-model", "choices": [[
             "message": ["role": "assistant", "content": classification], "finish_reason": "stop",
         ]]])
     }
 
-    private func provider(host: String) -> (OpenAICompatibleProvider, URLSession) {
+    private func makeProvider(host: String, responses: Bool = false) -> (OpenAICompatibleProvider, URLSession) {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [ClassificationURLProtocol.self]
         let session = URLSession(configuration: config)
         let provider = OpenAICompatibleProvider(configuration: .init(name: "classification-http-test",
-            baseURL: URL(string: "https://\(host)")!, model: "http-model"),
+            baseURL: URL(string: "https://\(host)")!, apiPath: responses ? "/v1/responses" : "/v1/chat/completions", model: "http-model",
+            supportsReasoningControl: responses),
             credentialVault: InMemoryCredentialVault(), session: session)
         return (provider, session)
     }
 
-    @Test("Production HTTP response persists labels and supports an AND query")
-    func realHTTPPipeline() async throws {
+    @Test("Production Chat/Responses HTTP responses persist labels and support an AND query", arguments: [false, true])
+    func realHTTPPipeline(responses: Bool) async throws {
         let (store, directory) = try await fixture()
         let host = "\(UUID().uuidString.lowercased()).example"
-        ClassificationURLProtocol.register(host: host, replies: [try response()])
-        let (provider, session) = provider(host: host)
+        ClassificationURLProtocol.register(host: host, replies: [try response(responses: responses)])
+        let (provider, session) = makeProvider(host: host, responses: responses)
         defer { session.invalidateAndCancel(); ClassificationURLProtocol.remove(host: host); try? FileManager.default.removeItem(at: directory) }
         try await TagClassificationRunner(catalog: store, provider: provider, model: "http-model").run(serverID: "server")
         #expect(try await store.recommendationIndexStatus(serverID: "server").indexedTracks == 1)
         #expect(try await store.recommendByTags(serverIDs: ["server"], query: .init(includeTags: ["scene.study", "instrument.piano"])).count == 1)
         let requests = ClassificationURLProtocol.captured(host: host).requests
         #expect(requests.count == 1)
-        #expect(requests.first?.url?.path == "/v1/chat/completions")
+        #expect(requests.first?.url?.path == (responses ? "/v1/responses" : "/v1/chat/completions"))
     }
 
     @Test("A gateway that never returns is cancelled without silently retrying forever")
@@ -109,7 +115,7 @@ struct TagClassificationTransportTests {
         let (store, directory) = try await fixture()
         let host = "\(UUID().uuidString.lowercased()).example"
         ClassificationURLProtocol.register(host: host, replies: [nil])
-        let (provider, session) = provider(host: host)
+        let (provider, session) = makeProvider(host: host)
         defer { session.invalidateAndCancel(); ClassificationURLProtocol.remove(host: host); try? FileManager.default.removeItem(at: directory) }
         await #expect(throws: TagClassificationTimeout.self) {
             try await TagClassificationRunner(catalog: store, provider: provider, model: "http-model", requestTimeout: .seconds(1)).run(serverID: "server")
@@ -125,7 +131,7 @@ struct TagClassificationTransportTests {
         let (store, directory) = try await fixture(count: 3)
         let host = "\(UUID().uuidString.lowercased()).example"
         ClassificationURLProtocol.register(host: host, replies: [try response(), nil])
-        let (provider, session) = provider(host: host)
+        let (provider, session) = makeProvider(host: host)
         defer { session.invalidateAndCancel(); ClassificationURLProtocol.remove(host: host); try? FileManager.default.removeItem(at: directory) }
         await #expect(throws: TagClassificationTimeout.self) {
             try await TagClassificationRunner(catalog: store, provider: provider, model: "http-model", requestTimeout: .seconds(1)).run(serverID: "server")

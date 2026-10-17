@@ -31,7 +31,7 @@ enum TagClassificationRequestPlan {
             AICompletionRequest(model: model, messages: [
                 .init(role: .system, content: prompt + "\n" + (index == 0 ? "" : "本组只选择标签，features 返回空对象。\n") + catalog),
                 .init(role: .user, content: payload),
-            ], temperature: 0.2, maxTokens: outputTokens, reasoning: .init(mode: .disabled))
+            ], temperature: 0.2, maxTokens: outputTokens)
         }
     }
 
@@ -78,8 +78,26 @@ struct TagClassificationAccumulator {
     var json: String {
         AIJSONValue.object(["items": .array(items.keys.sorted().map { id in
             let item = items[id]!
-            return .object(["id": .string(id), "tags": .array(item.tags.map { .string($0) }),
+            return .object(["id": .string(id), "tags": .array(Self.balancedTags(item.tags).map { .string($0) }),
                 "features": .object(item.features), "confidence": .number(item.confidence ?? 0.5)])
         })]).jsonString
+    }
+
+    private static func balancedTags(_ tags: [String]) -> [String] {
+        let definitions = Set(tags).compactMap { RecommendationIndexTaxonomy.resolve($0) }
+        let buckets = Dictionary(grouping: definitions, by: \.dimension)
+            .mapValues { $0.map(\.id.rawValue).sorted() }
+        var result: [String] = []
+        // An early catalogue part must not exhaust all 64 slots before instruments/styles arrive.
+        for index in 0..<64 {
+            var added = false
+            for dimension in TagDimension.allCases {
+                guard let bucket = buckets[dimension], index < bucket.count else { continue }
+                result.append(bucket[index]); added = true
+                if result.count == 64 { return result }
+            }
+            if !added { break }
+        }
+        return result
     }
 }
