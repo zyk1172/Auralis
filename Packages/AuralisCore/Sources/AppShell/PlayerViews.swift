@@ -1515,8 +1515,8 @@ struct NowPlayingView: View {
         if recordsLyricsMomentumSmoke {
             if phase == .tracking { lyricsMomentumReleaseOffset = nil; lyricsMomentumResult = "waiting" }
             if phase == .decelerating { lyricsMomentumReleaseOffset = offset }
-            if phase == .idle, let released = lyricsMomentumReleaseOffset {
-                lyricsMomentumResult = String(format: "coast:%.2f", abs(offset - released))
+            if phase == .idle, lyricDragStartOffset != nil {
+                lyricsMomentumResult = String(format: "coast:%.2f", abs(offset - (lyricsMomentumReleaseOffset ?? offset)))
                 lyricsMomentumReleaseOffset = nil
             }
         }
