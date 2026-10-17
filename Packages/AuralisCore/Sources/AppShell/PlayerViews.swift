@@ -885,6 +885,7 @@ struct NowPlayingView: View {
         let glowCanvasSize = max(0, heroHeight - AuralisSpacing.medium * 2)
 
         return VStack(spacing: sectionSpacing) {
+            Group {
 #if os(iOS)
             NowPlayingPager(selection: $page) { item in
                 switch item {
@@ -909,6 +910,7 @@ struct NowPlayingView: View {
             }
             .tabViewStyle(.automatic)
 #endif
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Group {
