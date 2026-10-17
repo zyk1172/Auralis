@@ -67,8 +67,6 @@ fun MobileShell(
     onOpenAiSettings: () -> Unit,
     onOpenEditHomeLayout: () -> Unit,
     recommendationIndexState: RecommendationIndexUiState = RecommendationIndexUiState(),
-    startRecommendationIndexToken: Int = 0,
-    onRecommendationIndexStartConsumed: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
@@ -101,15 +99,7 @@ fun MobileShell(
         dockCompactTarget = false
     }
 
-    LaunchedEffect(startRecommendationIndexToken) {
-        if (startRecommendationIndexToken > 0) {
-            section = AppSection.Assistant
-            browseDestination = null
-            nowPlayingOpen = false
-            assistantCoordinator.startRecommendationIndexBuild()
-            onRecommendationIndexStartConsumed()
-        }
-    }
+
     LaunchedEffect(canCompactDock) {
         if (!canCompactDock) dockCompactTarget = false
     }
@@ -250,12 +240,9 @@ fun MobileShell(
                     onAppendToQueue = ::appendQueueShelf,
                     onBrowse = ::openBrowse,
                     recommendationIndexState = recommendationIndexState,
-                    onStartRecommendationIndex = {
-                        section = AppSection.Assistant
-                        assistantCoordinator.startRecommendationIndexBuild()
-                    },
-                    onCancelRecommendationIndex = assistantCoordinator::cancelRecommendationIndexBuild,
-                    onRefreshRecommendationIndex = assistantCoordinator::refreshRecommendationIndexStatus,
+                    onStartRecommendationIndex = onOpenSettings,
+                    onCancelRecommendationIndex = graph.tagClassification::pause,
+                    onRefreshRecommendationIndex = graph.tagClassification::refresh,
                     bottomChromeClearance = scrollBottomClearance,
                     modifier = dockScrollModifier(),
                 )

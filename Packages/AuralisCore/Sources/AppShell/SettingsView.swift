@@ -32,6 +32,12 @@ struct SettingsView: View {
         Form {
             Section(String(localized: "设置", bundle: .module)) {
                 NavigationLink {
+                    TagClassificationSettingsPage(model: model)
+                } label: {
+                    SettingsCategoryRow(title: String(localized: "标签分类", bundle: .module),
+                        subtitle: String(localized: "后台分类、进度与暂停继续", bundle: .module), icon: "tag")
+                }
+                NavigationLink {
                     ServerSettingsPage(model: model, theme: theme)
                 } label: {
                     SettingsCategoryRow(

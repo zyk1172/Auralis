@@ -91,6 +91,30 @@ private struct RecommendationIndexPendingState {
 }
 
 extension LocalCatalogStore {
+    public func emptyRecommendationClassificationCount(serverID: ServerID) throws -> Int {
+        Int(try db.query("""
+            SELECT COUNT(*) AS count FROM recommendation_index_v2_state s
+            WHERE s.server_id = ? AND NOT EXISTS (
+                SELECT 1 FROM recommendation_index_v2_tags t WHERE t.global_id = s.global_id
+            )
+            """, [.text(serverID.rawValue)]).first?["count"]?.int ?? 0)
+    }
+
+    /// Explicit retry only: retain every classification that has usable tag rows.
+    @discardableResult
+    public func requeueEmptyRecommendationClassifications(serverID: ServerID) throws -> Int {
+        var count = 0
+        try db.transaction {
+            count = try emptyRecommendationClassificationCount(serverID: serverID)
+            try db.run("""
+                DELETE FROM recommendation_index_v2_state WHERE server_id = ? AND NOT EXISTS (
+                    SELECT 1 FROM recommendation_index_v2_tags t
+                    WHERE t.global_id = recommendation_index_v2_state.global_id
+                )
+                """, [.text(serverID.rawValue)])
+        }
+        return count
+    }
     /// 清空一个服务器的 Recommendation Index 结果。
     /// 只删除该服务器的 state / tag 行，不触碰歌曲、封面、下载、播放历史或其他服务器的索引。
     /// Legacy open-tag rows are removed by the v3 migration; fixed taxonomy
@@ -216,10 +240,18 @@ extension LocalCatalogStore {
         _ classifications: [RecommendationIndexClassification],
         serverID: ServerID?,
         classifier: String = "configured-agent",
-        requireExact: Bool = false
+        requireExact: Bool = false,
+        expectedTracks: [CatalogTrackLine]? = nil
     ) throws -> Int {
         let snapshot = try recommendationIndexSnapshot(serverID: serverID)
         let byID = Dictionary(uniqueKeysWithValues: snapshot.lines.map { ($0.id, $0) })
+        if let expectedTracks {
+            try Task.checkCancellation()
+            guard Set(expectedTracks.map(\.id)) == Set(classifications.map(\.id)),
+                  expectedTracks.allSatisfy({ expected in
+                      byID[expected.id].map { recommendationIndexContentHash($0) == recommendationIndexContentHash(expected) } == true
+                  }) else { throw RecommendationIndexWriteError.invalidBatch }
+        }
         if requireExact,
            classifications.prefix(100).contains(where: { !Self.hasOnlyResolvableTaxonomy($0) }) {
             throw RecommendationIndexWriteError.invalidBatch

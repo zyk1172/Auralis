@@ -426,12 +426,16 @@ struct NowPlayingView: View {
     @State private var page = NowPlayingPage.player
     @State private var isPlaylistSheetPresented = false
     @State private var showsTrackInformation = false
-    @State private var lyricScrollTarget: Int?
+    @State private var lyricScrollProxy: ScrollViewProxy?
+    @State private var lyricDragStartOffset: CGFloat?
     @State private var lyricScrollFollow = LyricsScrollFollowState()
     @State private var lyricFollowResumeTask: Task<Void, Never>?
     @State private var pendingLyricsChromeHidden: Bool?
 #if DEBUG
     private let recordsLyricsScrollSmoke = CommandLine.arguments.contains("-auralis-ui-smoke-lyrics-scroll")
+    private let recordsLyricsMomentumSmoke = CommandLine.arguments.contains("-auralis-ui-smoke-lyrics-momentum")
+    @State private var lyricsMomentumReleaseOffset: CGFloat?
+    @State private var lyricsMomentumResult = "waiting"
     @State private var lyricsScrollSmokeOffset: CGFloat?
     @State private var lyricsScrollSmokeResult = "waiting"
     @State private var lyricsScrollSmokeTask: Task<Void, Never>?
@@ -535,6 +539,7 @@ struct NowPlayingView: View {
             }
         }
         .foregroundStyle(theme.colorTokens.primaryText.color)
+        .overlay(alignment: .top) { TagClassificationNotice(model: model) }
         .sheet(isPresented: $isPlaylistSheetPresented) {
             AddToPlaylistSheet(model: model, theme: theme, track: model.currentTrack)
         }
@@ -699,44 +704,44 @@ struct NowPlayingView: View {
         }
     }
 
-    @ViewBuilder
     private func landscapePageContent(
         sectionSpacing: CGFloat,
         playButtonSize: CGFloat
     ) -> some View {
-        switch page {
-        case .player:
-            playbackControls(
-                sectionSpacing: sectionSpacing,
-                playButtonSize: playButtonSize
-            )
-            .frame(maxWidth: 560)
-            .frame(maxHeight: .infinity, alignment: .center)
-            .fixedSize(horizontal: false, vertical: true)
+        NowPlayingPager(selection: $page) { item in
+            switch item {
+            case .player:
+                playbackControls(
+                    sectionSpacing: sectionSpacing,
+                    playButtonSize: playButtonSize
+                )
+                .frame(maxWidth: 560)
+                .frame(maxHeight: .infinity, alignment: .center)
+                .fixedSize(horizontal: false, vertical: true)
 
-        case .lyrics:
-            VStack(spacing: AuralisSpacing.small) {
-                lyrics
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                    .simultaneousGesture(lyricsChromeSwipeGesture)
-                    .simultaneousGesture(lyricsActivityTapGesture)
+            case .lyrics:
+                VStack(spacing: AuralisSpacing.small) {
+                    lyrics
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                        .simultaneousGesture(lyricsActivityTapGesture)
 
-                if lyricsImmersiveMode {
-                    lyricsTrackIdentityHeader(showActions: false)
-                        .frame(maxWidth: 560)
-                } else {
+                    if lyricsImmersiveMode {
+                        lyricsTrackIdentityHeader(showActions: false)
+                            .frame(maxWidth: 560)
+                    } else {
+                        nowPlayingBottomNavigation
+                            .frame(maxWidth: 420)
+                    }
+                }
+
+            case .queue:
+                VStack(spacing: AuralisSpacing.small) {
+                    queue
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     nowPlayingBottomNavigation
                         .frame(maxWidth: 420)
                 }
-            }
-
-        case .queue:
-            VStack(spacing: AuralisSpacing.small) {
-                queue
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                nowPlayingBottomNavigation
-                    .frame(maxWidth: 420)
             }
         }
     }
@@ -880,10 +885,22 @@ struct NowPlayingView: View {
         let glowCanvasSize = max(0, heroHeight - AuralisSpacing.medium * 2)
 
         return VStack(spacing: sectionSpacing) {
+            Group {
+#if os(iOS)
+            NowPlayingPager(selection: $page) { item in
+                switch item {
+                case .lyrics:
+                    lyrics.contentShape(Rectangle()).simultaneousGesture(lyricsActivityTapGesture)
+                case .player:
+                    artworkHero(side: artworkSide, compactHeight: compactHeight, glowCanvasSize: glowCanvasSize)
+                case .queue:
+                    queue
+                }
+            }
+#else
             TabView(selection: $page) {
                 lyrics
                     .contentShape(Rectangle())
-                    .simultaneousGesture(lyricsChromeSwipeGesture)
                     .simultaneousGesture(lyricsActivityTapGesture)
                     .tag(NowPlayingPage.lyrics)
                 artworkHero(side: artworkSide, compactHeight: compactHeight, glowCanvasSize: glowCanvasSize)
@@ -891,11 +908,9 @@ struct NowPlayingView: View {
                 queue
                     .tag(NowPlayingPage.queue)
             }
-#if os(iOS)
-            .tabViewStyle(.page(indexDisplayMode: .never))
-#else
             .tabViewStyle(.automatic)
 #endif
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Group {
@@ -1051,25 +1066,6 @@ struct NowPlayingView: View {
         }
         .animation(LyricsChromeMotion.animation(reduceMotion: reduceMotion), value: lyricsChromeHidden)
         .simultaneousGesture(lyricsActivityTapGesture)
-    }
-
-    private var lyricsChromeSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 12)
-            .onChanged { _ in
-                cancelLyricsChromeAutoHide()
-            }
-            .onEnded { value in
-                guard page == .lyrics else { return }
-                guard let shouldHide = LyricsChromePolicy.terminalHidden(for: value.translation) else {
-                    scheduleLyricsChromeAutoHide()
-                    return
-                }
-                // 等原生惯性滚动结束再改变可用高度，避免松手瞬间重排歌词。
-                pendingLyricsChromeHidden = shouldHide
-                if !lyricScrollFollow.isUserScrolling {
-                    applyPendingLyricsChromeChange()
-                }
-            }
     }
 
     private func applyPendingLyricsChromeChange() {
@@ -1504,6 +1500,7 @@ struct NowPlayingView: View {
     }
 
     private func resetLyricsScrollInteraction() {
+        lyricDragStartOffset = nil
 #if DEBUG
         lyricsScrollSmokeTask?.cancel()
         lyricsScrollSmokeTask = nil
@@ -1515,7 +1512,24 @@ struct NowPlayingView: View {
         pendingLyricsChromeHidden = nil
     }
 
-    private func handleLyricsScrollPhase(_ phase: ScrollPhase) {
+    private func handleLyricsScrollPhase(_ phase: ScrollPhase, offset: CGFloat) {
+#if DEBUG
+        if recordsLyricsMomentumSmoke {
+            if phase == .tracking { lyricsMomentumReleaseOffset = nil; lyricsMomentumResult = "waiting" }
+            if phase == .decelerating { lyricsMomentumReleaseOffset = offset }
+            if phase == .idle, lyricDragStartOffset != nil {
+                lyricsMomentumResult = String(format: "coast:%.2f", abs(offset - (lyricsMomentumReleaseOffset ?? offset)))
+                lyricsMomentumReleaseOffset = nil
+            }
+        }
+#endif
+        if phase == .tracking || (phase == .interacting && lyricDragStartOffset == nil) {
+            lyricDragStartOffset = offset
+        }
+        if phase == .idle, let start = lyricDragStartOffset {
+            pendingLyricsChromeHidden = LyricsChromePolicy.terminalHidden(for: .init(width: 0, height: start - offset))
+            lyricDragStartOffset = nil
+        }
         let wasUserScrolling = lyricScrollFollow.isUserScrolling
         lyricScrollFollow.update(phase: phase)
         if lyricScrollFollow.isUserScrolling {
@@ -1585,14 +1599,14 @@ struct NowPlayingView: View {
     @ViewBuilder
     private func observeLyricsScrollSmoke<Content: View>(_ content: Content) -> some View {
 #if DEBUG
-        if recordsLyricsScrollSmoke {
+        if recordsLyricsScrollSmoke || recordsLyricsMomentumSmoke {
             content
                 .onScrollGeometryChange(for: CGFloat.self) { geometry in
                     geometry.contentOffset.y
                 } action: { _, offset in
                     lyricsScrollSmokeOffset = offset
                 }
-                .accessibilityValue(lyricsScrollSmokeResult)
+                .accessibilityValue(recordsLyricsMomentumSmoke ? lyricsMomentumResult : lyricsScrollSmokeResult)
         } else {
             content
         }
@@ -1620,16 +1634,12 @@ struct NowPlayingView: View {
     private func scrollToCurrentLyric(animated: Bool) {
         guard lyricScrollFollow.isFollowingPlayback,
               !lyricScrollFollow.isUserScrolling,
-              let index = currentLyricIndex, lyricScrollTarget != index else { return }
+              let index = currentLyricIndex, let proxy = lyricScrollProxy else { return }
         if reduceMotion || !animated {
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                lyricScrollTarget = index
-            }
+            proxy.scrollTo(index, anchor: .center)
         } else {
             withAnimation(.smooth(duration: 0.44, extraBounce: 0)) {
-                lyricScrollTarget = index
+                proxy.scrollTo(index, anchor: .center)
             }
         }
     }
@@ -1688,50 +1698,51 @@ struct NowPlayingView: View {
 
     private var lyrics: some View {
         let activeIndex = currentLyricIndex
-        let content = ScrollView {
-            LazyVStack(alignment: .center, spacing: AuralisSpacing.large) {
-                if let document = model.currentLyrics {
-                    ForEach(document.lines.indices, id: \.self) { index in
-                        lyricLineView(
-                            document: document,
-                            index: index,
-                            activeIndex: activeIndex
+        return ScrollViewReader { proxy in
+            let content = ScrollView {
+                LazyVStack(alignment: .center, spacing: AuralisSpacing.large) {
+                    if let document = model.currentLyrics {
+                        ForEach(document.lines.indices, id: \.self) { index in
+                            lyricLineView(
+                                document: document,
+                                index: index,
+                                activeIndex: activeIndex
+                            )
+                            .id(index)
+                        }
+                    } else {
+                        AuralisEmptyState(
+                            icon: "quote.bubble",
+                            title: String(localized: "暂无歌词", bundle: .module),
+                            message: String(localized: "服务器没有返回歌词，稍后可从本地文件或 MusicBrainz 候选补全。", bundle: .module),
+                            colors: theme.colorTokens
                         )
-                        .id(index)
                     }
-                } else {
-                    AuralisEmptyState(
-                        icon: "quote.bubble",
-                        title: String(localized: "暂无歌词", bundle: .module),
-                        message: String(localized: "服务器没有返回歌词，稍后可从本地文件或 MusicBrainz 候选补全。", bundle: .module),
-                        colors: theme.colorTokens
-                    )
                 }
+                .frame(maxWidth: 600, alignment: .center)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, AuralisSpacing.huge)
             }
-            .scrollTargetLayout()
-            .frame(maxWidth: 600, alignment: .center)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, AuralisSpacing.huge)
-        }
-        .scrollPosition(id: $lyricScrollTarget, anchor: .center)
-        .accessibilityIdentifier("auralis.nowPlaying.lyricsScroll")
-        .onScrollPhaseChange { _, phase in
-            handleLyricsScrollPhase(phase)
-        }
-        .onChange(of: activeIndex) { _, _ in
-            scrollToCurrentLyric(animated: true)
-        }
-        .task(id: model.currentLyrics?.id) {
-            resetLyricsScrollInteraction()
-            guard let document = model.currentLyrics else {
-                lyricTimeline = []
-                lyricScrollTarget = nil
-                return
+            .accessibilityIdentifier("auralis.nowPlaying.lyricsScroll")
+            .onScrollPhaseChange { _, phase, context in
+                handleLyricsScrollPhase(phase, offset: context.geometry.contentOffset.y)
             }
-            lyricTimeline = LyricsIndexResolver.timeline(for: document.lines)
-            lyricScrollTarget = LyricsIndexResolver.index(at: playbackStore.position, in: lyricTimeline)
+            .onChange(of: activeIndex) { _, _ in
+                scrollToCurrentLyric(animated: true)
+            }
+            .task(id: model.currentLyrics?.id) {
+                lyricScrollProxy = proxy
+                resetLyricsScrollInteraction()
+                guard let document = model.currentLyrics else {
+                    lyricTimeline = []
+                    return
+                }
+                lyricTimeline = LyricsIndexResolver.timeline(for: document.lines)
+                await Task.yield()
+                scrollToCurrentLyric(animated: false)
+            }
+            return observeLyricsScrollSmoke(content)
         }
-        return observeLyricsScrollSmoke(content)
     }
 
     private var queue: some View {

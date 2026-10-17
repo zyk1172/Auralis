@@ -813,6 +813,7 @@ public struct OpenAICompatibleProvider: AIProvider {
                     var toolCallFragments: [Int: ChatToolCallFragment] = [:]
                     var pendingLine = Data()
                     var reasoningContent = ""
+                    var answerBuffer = StreamingAnswerBuffer()
                     var ended = false
 
                     /// DeepSeek 等思考模式要求带 tools 的续接请求保留完整
@@ -851,7 +852,17 @@ public struct OpenAICompatibleProvider: AIProvider {
                             toolCallArgumentsInFlight: !toolCallFragments.isEmpty
                         ) {
                             if case let .reasoningDelta(text) = event { reasoningContent += text }
-                            continuation.yield(event)
+                            if case let .answerDelta(text) = event {
+                                let piece = answerBuffer.append(text)
+                                if !piece.isEmpty { continuation.yield(.answerDelta(piece)) }
+                            } else { continuation.yield(event) }
+                        }
+                        if let data = message.data.data(using: .utf8),
+                           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let choices = object["choices"] as? [[String: Any]],
+                           let finalMessage = choices.first?["message"] as? [String: Any] {
+                            let piece = answerBuffer.snapshot(Self.answerText(from: finalMessage) ?? "")
+                            if !piece.isEmpty { continuation.yield(.answerDelta(piece)) }
                         }
                         if let usage = Self.streamUsage(from: message.data) {
                             continuation.yield(.usage(
@@ -969,6 +980,7 @@ public struct OpenAICompatibleProvider: AIProvider {
                     var emittedResponseToolCallKeys = Set<String>()
                     var nativeOutput: [Int: [String: Any]] = [:]
                     var sawRefusal = false
+                    var answerBuffer = StreamingAnswerBuffer()
                     var ended = false
 
                     func finish(termination: AIStreamTermination) {
@@ -1001,7 +1013,8 @@ public struct OpenAICompatibleProvider: AIProvider {
                                 : .completed)
                             return
                         }
-                        if let data = message.data.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                        let eventObject = message.data.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                        if let object = eventObject {
                             let eventType = object["type"] as? String
                             if eventType == "response.refusal.delta" || eventType == "response.refusal.done" { sawRefusal = true }
                             if eventType == "response.output_item.done", let item = object["item"] as? [String: Any] {
@@ -1012,6 +1025,10 @@ public struct OpenAICompatibleProvider: AIProvider {
                                 if let output = response["output"] as? [[String: Any]], !output.isEmpty {
                                     nativeOutput = Dictionary(uniqueKeysWithValues: output.enumerated().map { ($0.offset, $0.element) })
                                 }
+                            }
+                            if !sawRefusal {
+                                let piece = Self.responsesAnswerSnapshots(from: object, buffer: &answerBuffer)
+                                if !piece.isEmpty { continuation.yield(.answerDelta(piece)) }
                             }
                         }
                         if let toolCall = Self.consumeResponsesToolCallEvent(
@@ -1030,7 +1047,10 @@ public struct OpenAICompatibleProvider: AIProvider {
                         case let .reasoning(text):
                             continuation.yield(.reasoningDelta(text))
                         case let .answer(text):
-                            continuation.yield(.answerDelta(text))
+                            let part = StreamingAnswerBuffer.Part(output: eventObject?["output_index"] as? Int ?? 0,
+                                                                 content: eventObject?["content_index"] as? Int ?? 0)
+                            let piece = answerBuffer.append(text, part: part)
+                            if !piece.isEmpty { continuation.yield(.answerDelta(piece)) }
                         case let .unknownDelta(text):
                             continuation.yield(.unknownDelta(text))
                         case let .toolCall(call):
@@ -1883,13 +1903,14 @@ public struct OpenAICompatibleProvider: AIProvider {
             }
         }
 
-        // 非流式请求却收到 SSE：把各 chunk 的 delta 拼成完整文本，直接当成功返回。
+        // 非流式请求却收到 SSE：合并增量与最终快照，并保留完成/中断语义。
         if let aggregated = aggregateStreamedBody(data) {
             return AICompletionResponse(
                 model: aggregated.model ?? fallbackModel,
                 content: aggregated.content,
                 inputTokens: aggregated.inputTokens,
-                outputTokens: aggregated.outputTokens
+                outputTokens: aggregated.outputTokens,
+                finishReason: aggregated.finishReason
             )
         }
 
@@ -1914,10 +1935,10 @@ public struct OpenAICompatibleProvider: AIProvider {
         if let message = first["message"] as? [String: Any] {
             // `content` is the final answer. Thinking is extracted through a
             // separate channel and never silently substituted here.
-            return plainText(from: message["content"]) ?? ""
+            return answerText(from: message) ?? ""
         }
         if let delta = first["delta"] as? [String: Any] {
-            return plainText(from: delta["content"]) ?? ""
+            return answerText(from: delta) ?? ""
         }
         // Some Chat-compatible gateways simplify choices[0].delta to a plain
         // string instead of an object. Treat that shape as answer text too.
@@ -1928,6 +1949,17 @@ public struct OpenAICompatibleProvider: AIProvider {
             return legacy // 旧版 /v1/completions 风格
         }
         return nil
+    }
+
+    /// Explicit answer aliases only. Reasoning is never a substitute for missing content.
+    private nonisolated static func answerText(from fields: [String: Any]) -> String? {
+        ["content", "output_text", "text"].compactMap { key -> String? in
+            if let parts = fields[key] as? [[String: Any]] {
+                return plainText(from: parts.filter { ["text", "output_text"].contains($0["type"] as? String ?? "text") })
+            }
+            return plainText(from: fields[key])
+        }
+            .first { !$0.isEmpty }
     }
 
     /// Extract provider reasoning without ever treating it as final content.
@@ -2003,19 +2035,21 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// 只要至少解析出一个 `data:` 事件就认定成功，避免把普通文本误判成 SSE。
     static func aggregateStreamedBody(
         _ data: Data
-    ) -> (content: String, model: String?, inputTokens: Int?, outputTokens: Int?)? {
+    ) -> (content: String, model: String?, inputTokens: Int?, outputTokens: Int?, finishReason: String)? {
         guard let raw = String(data: data, encoding: .utf8), raw.contains("data:") else { return nil }
         var merged = ""
         var model: String?
         var inputTokens: Int?
         var outputTokens: Int?
         var sawEvent = false
+        var answerBuffer = StreamingAnswerBuffer()
+        var termination = "incomplete"
 
         for line in raw.split(whereSeparator: \.isNewline) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard trimmed.hasPrefix("data:") else { continue }
             let payload = trimmed.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
-            if payload == "[DONE]" { sawEvent = true; continue }
+            if payload == "[DONE]" { sawEvent = true; if termination == "incomplete" { termination = "stop" }; continue }
             guard let chunk = payload.data(using: .utf8),
                   let object = try? JSONSerialization.jsonObject(with: chunk) as? [String: Any]
             else { continue }
@@ -2025,9 +2059,13 @@ public struct OpenAICompatibleProvider: AIProvider {
                 inputTokens = usage["prompt_tokens"] as? Int ?? inputTokens
                 outputTokens = usage["completion_tokens"] as? Int ?? outputTokens
             }
-            if let piece = extractContent(from: object) { merged += piece }
+            if let choices = object["choices"] as? [[String: Any]],
+               let message = choices.first?["message"] as? [String: Any] {
+                merged += answerBuffer.snapshot(answerText(from: message) ?? "")
+            } else if let piece = extractContent(from: object) { merged += answerBuffer.append(piece) }
+            if let reason = finishReason(from: object) { termination = reason }
         }
-        return sawEvent ? (merged, model, inputTokens, outputTokens) : nil
+        return sawEvent ? (merged, model, inputTokens, outputTokens, termination) : nil
     }
 
     /// 截取响应体前若干字节用于错误提示。响应体不含凭据，可安全展示。
@@ -2174,13 +2212,14 @@ public struct OpenAICompatibleProvider: AIProvider {
             }
         }
 
-        // 非流式请求却收到 SSE：把各 chunk 的 delta 拼成完整文本，直接当成功返回。
+        // 非流式请求却收到 SSE：合并增量与最终快照，并保留完成/中断语义。
         if let aggregated = aggregateResponsesStreamedBody(data) {
             return AICompletionResponse(
                 model: aggregated.model ?? fallbackModel,
                 content: aggregated.content,
                 inputTokens: aggregated.inputTokens,
-                outputTokens: aggregated.outputTokens
+                outputTokens: aggregated.outputTokens,
+                finishReason: aggregated.finishReason
             )
         }
 
@@ -2196,20 +2235,55 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// 只拼接 type == "message" 的 content[].text（不含 reasoning 条目，避免泄露思考链）。
     /// 结构不认识时返回 nil（用于判定格式兼容），output 为空或只有 function_call 时返回 ""。
     static func responsesText(from object: [String: Any]) -> String? {
-        guard let output = object["output"] as? [[String: Any]] else { return nil }
+        guard let output = object["output"] as? [[String: Any]] else { return plainText(from: object["output_text"]) }
         var parts: [String] = []
         for item in output where (item["type"] as? String) == "message" {
             if let content = item["content"] as? String {
                 if !content.isEmpty { parts.append(content) }
             } else if let content = item["content"] as? [[String: Any]] {
                 parts.append(contentsOf: content.compactMap { part in
-                    if let text = part["text"] as? String { return text }
                     if (part["type"] as? String) == "refusal" { return part["refusal"] as? String }
-                    return nil
+                    guard ["output_text", "text"].contains(part["type"] as? String ?? "text") else { return nil }
+                    return plainText(from: part["text"])
                 })
             }
         }
-        return parts.joined()
+        let joined = parts.joined()
+        return joined.isEmpty ? (plainText(from: object["output_text"]) ?? "") : joined
+    }
+
+    /// Some gateways omit deltas and deliver only final text parts/items or a completed response.
+    /// Reconcile each part and the final whole response without appending snapshots twice.
+    private static func responsesAnswerSnapshots(from object: [String: Any], buffer: inout StreamingAnswerBuffer) -> String {
+        let outputIndex = object["output_index"] as? Int ?? 0
+        let contentIndex = object["content_index"] as? Int ?? 0
+        func textPart(_ part: [String: Any]) -> String? {
+            guard ["output_text", "text"].contains(part["type"] as? String ?? "") else { return nil }
+            return plainText(from: part["text"])
+        }
+        switch object["type"] as? String {
+        case "response.output_text.done":
+            return buffer.snapshot(plainText(from: object["text"]) ?? "", part: .init(output: outputIndex, content: contentIndex))
+        case "response.content_part.done":
+            guard let part = (object["part"] ?? object["content_part"]) as? [String: Any], let text = textPart(part) else { return "" }
+            return buffer.snapshot(text, part: .init(output: outputIndex, content: contentIndex))
+        case "response.output_item.done":
+            guard let item = (object["item"] ?? object["output"]) as? [String: Any], item["type"] as? String == "message" else { return "" }
+            if let text = item["content"] as? String {
+                return buffer.snapshot(text, part: .init(output: outputIndex))
+            }
+            var result = ""
+            for (index, part) in (item["content"] as? [[String: Any]] ?? []).enumerated() {
+                if let text = textPart(part) { result += buffer.snapshot(text, part: .init(output: outputIndex, content: index)) }
+            }
+            return result
+        case "response.completed":
+            guard let response = object["response"] as? [String: Any],
+                  response["status"] as? String == nil || response["status"] as? String == "completed",
+                  responsesRefusal(from: response) == nil else { return "" }
+            return buffer.completeSnapshot(responsesText(from: response) ?? "")
+        default: return ""
+        }
     }
 
     /// A Responses refusal is a message content part even when status is "completed".
@@ -2424,8 +2498,8 @@ public struct OpenAICompatibleProvider: AIProvider {
             // - response.function_call_arguments.delta 字段也叫 delta，是工具参数的
             //   增量分片，若当正文输出会把参数 JSON 打在聊天里（工具调用仍会因
             //   output_item.done 解析失败而丢失）；
-            // - response.output_item.added / content_part.* / output_text.done 等
-            //   同样不是用户正文（正文已由 output_text.delta 增量覆盖）。
+            // - content_part.done / output_text.done 的最终快照由流驱动层
+            //   按分片补齐并去重，此处不把快照重复投射为增量。
             return .ignore
         default:
             // A type-less gateway delta is the common OpenAI-compatible
@@ -2463,19 +2537,21 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// 只要至少解析出一个 `data:` 事件就认定成功，避免把普通文本误判成 SSE。
     static func aggregateResponsesStreamedBody(
         _ data: Data
-    ) -> (content: String, model: String?, inputTokens: Int?, outputTokens: Int?)? {
+    ) -> (content: String, model: String?, inputTokens: Int?, outputTokens: Int?, finishReason: String)? {
         guard let raw = String(data: data, encoding: .utf8), raw.contains("data:") else { return nil }
         var merged = ""
         var model: String?
         var inputTokens: Int?
         var outputTokens: Int?
         var sawEvent = false
+        var answerBuffer = StreamingAnswerBuffer()
+        var termination = "incomplete"
 
         for line in raw.split(whereSeparator: \.isNewline) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard trimmed.hasPrefix("data:") else { continue }
             let payload = trimmed.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
-            if payload == "[DONE]" { sawEvent = true; continue }
+            if payload == "[DONE]" { sawEvent = true; if termination == "incomplete" { termination = "stop" }; continue }
             guard let chunk = payload.data(using: .utf8),
                   let object = try? JSONSerialization.jsonObject(with: chunk) as? [String: Any]
             else { continue }
@@ -2489,14 +2565,19 @@ public struct OpenAICompatibleProvider: AIProvider {
                 inputTokens = (usage["input_tokens"] as? Int) ?? (usage["prompt_tokens"] as? Int) ?? inputTokens
                 outputTokens = (usage["output_tokens"] as? Int) ?? (usage["completion_tokens"] as? Int) ?? outputTokens
             }
+            merged += responsesAnswerSnapshots(from: object, buffer: &answerBuffer)
             switch parseResponsesStreamEvent(payload) {
             case let .answer(piece):
-                merged += piece
+                merged += answerBuffer.append(piece, part: .init(output: object["output_index"] as? Int ?? 0,
+                                                                content: object["content_index"] as? Int ?? 0))
+            case .done: termination = "stop"
+            case let .terminated(value): termination = value.kind == .truncated ? "length" : "interrupted"
+            case .failed: termination = "failed"
             default:
                 break
             }
         }
-        return sawEvent ? (merged, model, inputTokens, outputTokens) : nil
+        return sawEvent ? (merged, model, inputTokens, outputTokens, termination) : nil
     }
 
     /// Chat Completions 流式 tool_calls 的分片片段。
@@ -2627,10 +2708,8 @@ public struct OpenAICompatibleProvider: AIProvider {
             // legacy `text` key instead of OpenAI's `content`. They are still
             // explicit answer channels and must not fall through to a silent
             // drop just because the provider omitted its usual field name.
-            for key in ["content", "output_text", "text"] {
-                if let answer = plainText(from: delta[key]), !answer.isEmpty {
-                    events.append(.answerDelta(answer))
-                }
+            if let answer = answerText(from: delta) {
+                events.append(.answerDelta(answer))
             }
         }
         if events.isEmpty, !toolCallArgumentsInFlight,

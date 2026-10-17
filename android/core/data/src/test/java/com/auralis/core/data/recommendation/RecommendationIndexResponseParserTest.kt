@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-package com.auralis.feature.assistant
+package com.auralis.core.data.recommendation
 
 import com.google.common.truth.Truth.assertThat
 import com.auralis.core.domain.AlbumId
@@ -11,6 +11,11 @@ import com.auralis.core.domain.TrackId
 import org.junit.Test
 
 class RecommendationIndexResponseParserTest {
+    @Test fun knownNamesAndAliasesCanonicalizeButAmbiguousNamesNeverGuess() {
+        val result = RecommendationIndexResponseParser().parse(
+            """{"items":[{"id":"server-a:track-1","tags":["自习","学习","钢琴","纯音乐","温暖"]},{"id":"server-a:track-2"}]}""", batch)
+        assertThat(result.first().tags.map { it.value }).containsExactly("scene.study", "instrument.piano", "vocal.instrumental")
+    }
     @Test fun preservesMultipleLabelsPerDimensionWithoutDuplicateBudgetLoss() {
         val repeated = List(64) { "\"scene.study\"" }.joinToString(",")
         val result = RecommendationIndexResponseParser().parse(

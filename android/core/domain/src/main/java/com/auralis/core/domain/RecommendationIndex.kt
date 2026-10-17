@@ -122,13 +122,15 @@ data class RecommendationIndexRunResult(
     val pendingTracks: Int,
 )
 
-/** Cross-screen presentation state. The classifier itself remains owned by Assistant. */
+/** Process-owned classification state shared by Settings and Library. */
 data class RecommendationIndexUiState(
     val status: RecommendationIndexStatus? = null,
     val progress: RecommendationIndexProgress? = null,
     val isRunning: Boolean = false,
+    val isPaused: Boolean = false,
     val error: String? = null,
     val lastCompletedAtMillis: Long? = null,
+    val unlabeledTracks: Int = 0,
 ) {
     val totalTracks: Int get() = status?.totalTracks ?: progress?.totalTracks ?: 0
     val indexedTracks: Int get() = status?.indexedTracks ?: progress?.indexedTracks ?: 0

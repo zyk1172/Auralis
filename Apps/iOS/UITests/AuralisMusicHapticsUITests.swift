@@ -182,6 +182,12 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         waitForValue("已打开", element: queue, message: "Queue must enter queue mode on first tap")
         queue.tap()
         waitForValue("未打开", element: queue, message: "Queue must return to artwork mode on second tap")
+
+        let pager = app.scrollViews["auralis.nowPlaying.pages"].firstMatch
+        pager.swipeLeft(velocity: .slow)
+        waitForValue("已打开", element: queue, message: "A native left swipe must select the queue")
+        pager.swipeRight(velocity: .slow)
+        waitForValue("未打开", element: queue, message: "A native right swipe must return to the player")
     }
 
     func testAssistantSessionSheetSurvivesColdBootstrap() throws {
@@ -205,7 +211,7 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics", "-auralis-ui-smoke-lyrics-scroll")
         let playPause = app.buttons["auralis.nowPlaying.playPause"].firstMatch
         XCTAssertTrue(playPause.waitForExistence(timeout: 15))
-        waitForLabelContaining("播放", element: playPause, message: "The smoke player must be ready before its first Play tap")
+        waitForLabelContaining("播放", element: playPause, timeout: 15, message: "The smoke player must be ready before its first Play tap")
         playPause.tap()
         waitForLabelContaining("暂停", element: playPause, timeout: 15, message: "The local smoke audio must be playing")
         app.buttons["auralis.nowPlaying.lyrics"].firstMatch.tap()
@@ -227,11 +233,47 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         add(evidence)
     }
 
+    func testLyricsFasterFlickHasMoreNativeCoastingDistance() throws {
+        func coast(velocity: XCUIGestureVelocity) throws -> Double {
+            app.terminate()
+            launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics", "-auralis-ui-smoke-lyrics-momentum")
+            let button = app.buttons["auralis.nowPlaying.lyrics"].firstMatch
+            XCTAssertTrue(button.waitForExistence(timeout: 15))
+            button.tap()
+            let scroll = app.scrollViews["auralis.nowPlaying.lyricsScroll"].firstMatch
+            XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+            scroll.swipeUp(velocity: velocity)
+            let sample = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value BEGINSWITH %@", "coast:"), object: scroll)
+            XCTAssertEqual(XCTWaiter.wait(for: [sample], timeout: 20), .completed)
+            let value = try XCTUnwrap(scroll.value as? String)
+            return try XCTUnwrap(Double(value.replacingOccurrences(of: "coast:", with: "")))
+        }
+        let slow = try coast(velocity: .slow)
+        let fast = try coast(velocity: .fast)
+        XCTAssertGreaterThan(fast, slow + 30, "Native coasting must depend on flick velocity: slow=\(slow), fast=\(fast)")
+        print("Native lyrics coasting: slow=\(slow)pt, fast=\(fast)pt")
+        let evidence = XCTAttachment(string: "Native lyrics coasting: slow=\(slow)pt, fast=\(fast)pt")
+        evidence.lifetime = .keepAlways
+        add(evidence)
+    }
+
+    func testLyricsButtonProducesIntermediateHorizontalPageOffsets() throws {
+        launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics", "-auralis-ui-smoke-page-motion")
+        let button = app.buttons["auralis.nowPlaying.lyrics"].firstMatch
+        XCTAssertTrue(button.waitForExistence(timeout: 15))
+        let pager = app.scrollViews["auralis.nowPlaying.pages"].firstMatch
+        print("Portrait pager before the lyrics command: \(String(describing: pager.value))")
+        button.tap()
+        XCTAssertTrue(pager.waitForExistence(timeout: 10))
+        let sample = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "animated-horizontal-offset"), object: pager)
+        XCTAssertEqual(XCTWaiter.wait(for: [sample], timeout: 15), .completed, "The button must animate real horizontal geometry, not only update its selected state; actual: \(String(describing: pager.value))")
+    }
+
     func testLandscapeArtworkIsLargerAndRetainsEdgeClearance() throws {
-        launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics")
+        launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics", "-auralis-ui-smoke-page-motion")
         let playPause = app.buttons["auralis.nowPlaying.playPause"].firstMatch
         XCTAssertTrue(playPause.waitForExistence(timeout: 15))
-        waitForLabelContaining("播放", element: playPause, message: "The smoke player must be ready before its first Play tap")
+        waitForLabelContaining("播放", element: playPause, timeout: 15, message: "The smoke player must be ready before its first Play tap")
         playPause.tap()
         waitForLabelContaining("暂停", element: playPause, timeout: 15, message: "Artwork must use the active playback size")
         XCUIDevice.shared.orientation = .landscapeLeft
@@ -244,8 +286,11 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(artwork.frame.minY - screen.minY, 16)
         XCTAssertGreaterThanOrEqual(screen.maxY - artwork.frame.maxY, 16)
 
+        let pager = app.scrollViews["auralis.nowPlaying.pages"].firstMatch
+        print("Landscape pager before the lyrics command: \(String(describing: pager.value))")
         app.buttons["auralis.nowPlaying.lyrics"].firstMatch.tap()
         XCTAssertTrue(app.scrollViews["auralis.nowPlaying.lyricsScroll"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(pager.value as? String, "animated-horizontal-offset", "Landscape must animate within the right column")
         XCTAssertTrue(artwork.exists, "The enlarged cover must remain beside landscape lyrics")
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Landscape artwork and lyrics"
@@ -318,10 +363,11 @@ final class AuralisMusicHapticsUITests: XCTestCase {
             predicate: NSPredicate(format: "value == %@", expected),
             object: element
         )
+        let result = XCTWaiter.wait(for: [expectation], timeout: 5)
         XCTAssertEqual(
-            XCTWaiter.wait(for: [expectation], timeout: 5),
+            result,
             .completed,
-            message
+            result == .completed ? message : "\(message); actual value: \(String(describing: element.value))"
         )
     }
 
