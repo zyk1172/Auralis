@@ -38,7 +38,7 @@ public struct TagClassificationRunner: Sendable {
 
     public func run(
         serverID: ServerID,
-        authorize: @Sendable () async throws -> Void = {},
+        authorize: @escaping @Sendable () async throws -> Void = {},
         onProgress: @Sendable (TagClassificationProgress) async -> Void = { _ in }
     ) async throws {
         // Save a first song promptly, especially within iOS's short foreground-to-background grace period.
@@ -70,7 +70,7 @@ public struct TagClassificationRunner: Sendable {
                     try await authorize()
                     await onProgress(.init(status: status, batchNumber: batchNumber + 1, phase: .requesting,
                         batchSize: tracks.count, partNumber: index + 1, partCount: requests.count, requestStartedAt: .now))
-                    let response = try await completeWithDeadline(request)
+                    let response = try await completeWithDeadline(request, authorize: authorize)
                     try Task.checkCancellation()
                     await onProgress(.init(status: status, batchNumber: batchNumber + 1, phase: .validating,
                         batchSize: tracks.count, partNumber: index + 1, partCount: requests.count))
@@ -86,7 +86,7 @@ public struct TagClassificationRunner: Sendable {
                 if error is CancellationError { throw error }
                 try Task.checkCancellation()
                 // A bounded retry with a smaller batch fixes truncated/partial JSON without a loop.
-                if !(error is TagClassificationTimeout),
+                if !(error is TagClassificationTimeout), !(error is TagClassificationEmptyResponse),
                    !(error is AIProviderError) || (error as? AIProviderError) == .outputTruncated {
                     if size > 1 { size = max(1, size / 2); continue }
                     if !retriedSingleTrack { retriedSingleTrack = true; continue }
@@ -105,11 +105,24 @@ public struct TagClassificationRunner: Sendable {
         }
     }
 
-    private func completeWithDeadline(_ request: AICompletionRequest) async throws -> AICompletionResponse {
+    private func completeWithDeadline(_ request: AICompletionRequest,
+                                      authorize: @escaping @Sendable () async throws -> Void) async throws -> AICompletionResponse {
         // This deadline includes the provider's internal retries. A stalled gateway must not leave
         // the settings page claiming to work for 3 × the chat request timeout (18 minutes).
         try await withThrowingTaskGroup(of: AICompletionResponse.self) { group in
-            group.addTask { try await classificationResponse(request) }
+            group.addTask {
+                let first = try await classificationResponse(request)
+                if first.hasAnswer || first.response.toolCalls?.isEmpty == false { return first.response }
+                try Task.checkCancellation()
+                try await authorize()
+                // Some gateways acknowledge streaming but omit every answer event. One ordinary
+                // request can recover their buffered final answer; keep the same model and settings.
+                let recovered = ClassificationProviderOutput(response: try await provider.complete(request))
+                guard recovered.hasAnswer || recovered.response.toolCalls?.isEmpty == false else {
+                    throw TagClassificationEmptyResponse(initial: first.summary, recovery: recovered.summary)
+                }
+                return recovered.response
+            }
             group.addTask {
                 try await Task.sleep(for: requestTimeout)
                 throw TagClassificationTimeout(seconds: max(1, requestTimeout.components.seconds))
@@ -119,24 +132,33 @@ public struct TagClassificationRunner: Sendable {
         }
     }
 
-    private func classificationResponse(_ request: AICompletionRequest) async throws -> AICompletionResponse {
-        guard provider.capabilities.supportsStreaming else { return try await provider.complete(request) }
+    private func classificationResponse(_ request: AICompletionRequest) async throws -> ClassificationProviderOutput {
+        guard provider.capabilities.supportsStreaming else { return .init(response: try await provider.complete(request)) }
         // Use the configured provider transport, just like ordinary AI requests. Gateways that
         // support streaming must not be forced onto a separately buffered/non-streaming route.
         var content = ""
         var responseModel = request.model
+        var reasoningBytes = 0
+        var outputTokens: Int?
+        var reasoningTokens: Int?
+        func result() -> ClassificationProviderOutput {
+            .init(response: .init(model: responseModel, content: content, outputTokens: outputTokens,
+                reasoningTokens: reasoningTokens, finishReason: "stop"), reasoningBytes: reasoningBytes)
+        }
         for try await event in provider.stream(request) {
             try Task.checkCancellation()
             switch event {
             case let .started(model, _): responseModel = model
             case let .answerDelta(delta), let .unknownDelta(delta): content += delta
+            case let .reasoningDelta(delta): reasoningBytes += delta.utf8.count
+            case let .usage(_, output, _, _, reasoning): outputTokens = output; reasoningTokens = reasoning
             case .toolCall:
                 throw TagClassificationFailure("分类模型返回了工具调用，需要 JSON 分类结果。")
             case .completed:
-                return .init(model: responseModel, content: content, finishReason: "stop")
+                return result()
             case let .terminated(termination):
                 switch termination.kind {
-                case .completed: return .init(model: responseModel, content: content, finishReason: "stop")
+                case .completed: return result()
                 case .truncated: throw AIProviderError.outputTruncated
                 default: throw TagClassificationFailure("分类响应未完整结束，未写入本批结果；请继续重试。")
                 }
@@ -144,6 +166,27 @@ public struct TagClassificationRunner: Sendable {
             }
         }
         throw TagClassificationFailure("模型连接结束但未收到完成信号，未写入本批结果；请继续重试。")
+    }
+}
+
+private struct ClassificationProviderOutput: Sendable {
+    let response: AICompletionResponse
+    let reasoningBytes: Int
+    init(response: AICompletionResponse, reasoningBytes: Int? = nil) {
+        self.response = response
+        self.reasoningBytes = reasoningBytes ?? response.reasoning?.utf8.count ?? 0
+    }
+    var hasAnswer: Bool { !response.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var summary: String {
+        "正文 \(response.content.utf8.count) 字节，推理 \(reasoningBytes) 字节，输出 tokens \(response.outputTokens.map(String.init) ?? "未知")，结束 \(response.finishReason ?? "未知")"
+    }
+}
+
+public struct TagClassificationEmptyResponse: Error, LocalizedError, Sendable {
+    public let initial: String
+    public let recovery: String
+    public var errorDescription: String? {
+        "分类响应没有可用正文，自动恢复后仍为空。本批未入库。首轮：\(initial)；恢复：\(recovery)。"
     }
 }
 
