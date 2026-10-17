@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   unit-and-build:
-    name: Unit tests + builds
+    name: Apple unit tests + builds
     # Match the Xcode 27 toolchain used for local validation. The older
     # macos-15/Xcode 16.4 Swift frontend crashes while lowering AppShell.
     runs-on: xcode-27
@@ -131,6 +131,17 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
+  ios-ui-smoke:
+    name: iOS interaction tests
+    # Detect real scrolling/navigation regressions without waiting for unrelated macOS builds.
+    runs-on: xcode-27
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Build iOS app (Simulator)
         shell: bash
         run: |
@@ -176,6 +187,7 @@ jobs:
               -configuration Debug \
               -destination "platform=iOS Simulator,id=$simulator_id" \
               -parallel-testing-enabled NO \
+              -resultBundlePath "${output_log%.log}.xcresult" \
               CODE_SIGNING_ALLOWED=NO \
               -only-testing:AuralisUITests \
               test | tee "$output_log"
@@ -195,6 +207,17 @@ jobs:
             echo "::error::AuralisUITests did not report an executed passing test run."
             exit 1
           fi
+
+      - name: Preserve failed simulator diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ui-smoke-failure
+          path: |
+            ${{ runner.temp }}/auralis-ui-smoke*.log
+            ${{ runner.temp }}/auralis-ui-smoke*.xcresult
+          retention-days: 3
+          if-no-files-found: ignore
 
   macOS-av-integration:
     name: macOS AV playback boundary tests
@@ -216,3 +239,21 @@ jobs:
           import sys
           subprocess.run([sys.argv[1]], check=True, timeout=90)
           PYTHON
+
+  apple-ci-gate:
+    # Preserve the existing required check while running independent iOS UI work in parallel.
+    name: Unit tests + builds
+    if: always()
+    needs: [unit-and-build, ios-ui-smoke, macOS-av-integration]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all Apple checks
+        env:
+          BUILD_RESULT: ${{ needs.unit-and-build.result }}
+          UI_RESULT: ${{ needs.ios-ui-smoke.result }}
+          AV_RESULT: ${{ needs.macOS-av-integration.result }}
+        run: |
+          if [ "$BUILD_RESULT" != success ] || [ "$UI_RESULT" != success ] || [ "$AV_RESULT" != success ]; then
+            echo "::error::Apple builds, iOS interaction tests, and AV playback tests must all pass."
+            exit 1
+          fi
