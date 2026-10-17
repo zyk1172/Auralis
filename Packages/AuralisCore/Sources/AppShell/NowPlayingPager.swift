@@ -23,11 +23,12 @@ struct NowPlayingPager<Content: View>: View {
     var body: some View {
         let pager = ScrollView(.horizontal) {
             HStack(spacing: 0) {
-                ForEach(NowPlayingPage.allCases) { page in
+                ForEach(NowPlayingPage.allCases, id: \.self) { page in
                     content(page)
                         .containerRelativeFrame(.horizontal)
                         .frame(maxHeight: .infinity)
                         .id(page)
+                        .accessibilityHidden(page != selection)
                 }
             }
             .scrollTargetLayout()
