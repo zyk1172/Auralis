@@ -227,6 +227,40 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         add(evidence)
     }
 
+    func testLyricsFasterFlickHasMoreNativeCoastingDistance() throws {
+        func coast(velocity: XCUIGestureVelocity) throws -> Double {
+            app.terminate()
+            launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics", "-auralis-ui-smoke-lyrics-momentum")
+            let button = app.buttons["auralis.nowPlaying.lyrics"].firstMatch
+            XCTAssertTrue(button.waitForExistence(timeout: 15))
+            button.tap()
+            let scroll = app.scrollViews["auralis.nowPlaying.lyricsScroll"].firstMatch
+            XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+            scroll.swipeUp(velocity: velocity)
+            let sample = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value BEGINSWITH %@", "coast:"), object: scroll)
+            XCTAssertEqual(XCTWaiter.wait(for: [sample], timeout: 20), .completed)
+            let value = try XCTUnwrap(scroll.value as? String)
+            return try XCTUnwrap(Double(value.replacingOccurrences(of: "coast:", with: "")))
+        }
+        let slow = try coast(velocity: .slow)
+        let fast = try coast(velocity: .fast)
+        XCTAssertGreaterThan(fast, slow + 30, "Native coasting must depend on flick velocity: slow=\(slow), fast=\(fast)")
+        let evidence = XCTAttachment(string: "Native lyrics coasting: slow=\(slow)pt, fast=\(fast)pt")
+        evidence.lifetime = .keepAlways
+        add(evidence)
+    }
+
+    func testLyricsButtonProducesIntermediateHorizontalPageOffsets() throws {
+        launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics", "-auralis-ui-smoke-page-motion")
+        let button = app.buttons["auralis.nowPlaying.lyrics"].firstMatch
+        XCTAssertTrue(button.waitForExistence(timeout: 15))
+        button.tap()
+        let pager = app.scrollViews["auralis.nowPlaying.pages"].firstMatch
+        XCTAssertTrue(pager.waitForExistence(timeout: 10))
+        let sample = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "animated-horizontal-offset"), object: pager)
+        XCTAssertEqual(XCTWaiter.wait(for: [sample], timeout: 15), .completed, "The button must animate real horizontal geometry, not only update its selected state")
+    }
+
     func testLandscapeArtworkIsLargerAndRetainsEdgeClearance() throws {
         launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics")
         let playPause = app.buttons["auralis.nowPlaying.playPause"].firstMatch

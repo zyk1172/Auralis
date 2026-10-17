@@ -72,8 +72,11 @@ public final class AuralisAppModel: ObservableObject {
     @Published public var selectedSection: AppSection = .home
     @Published public internal(set) var tagClassification = TagClassificationState()
     var tagClassificationTask: Task<Void, Never>?
+    var tagClassificationDefaults: UserDefaults { defaults }
 #if os(iOS)
     var tagClassificationBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+    var tagClassificationExecution = TagClassificationExecutionState()
+    var tagClassificationProcessingLeaseID: UUID?
 #elseif os(macOS)
     var tagClassificationActivity: NSObjectProtocol?
 #endif
@@ -1091,6 +1094,7 @@ public final class AuralisAppModel: ObservableObject {
             schedulePlaybackSessionPersistence(immediate: true)
         }
         syncProgressTimer()
+        updateTagClassificationExecutionForPlayback()
     }
 
     /// Scene lifecycle boundary. The coordinator preserves analysis state in
@@ -1098,6 +1102,7 @@ public final class AuralisAppModel: ObservableObject {
     /// AVPlayer position is available again.
     public func applicationDidEnterBackground() {
         isInBackground = true
+        tagClassificationDidEnterBackground()
         // UI position publishing is not needed to keep AVPlayer alive. Stop
         // the RunLoop timer before the scene is suspended so it cannot keep
         // waking the MainActor while audio continues in the background.
@@ -1110,6 +1115,7 @@ public final class AuralisAppModel: ObservableObject {
 
     public func applicationDidBecomeActive() async {
         isInBackground = false
+        tagClassificationDidBecomeActive()
         await keepAudioSessionActive()
         let state = await engine.state()
         let position = await engine.currentPosition() ?? playbackPosition
@@ -5932,6 +5938,7 @@ public final class AuralisAppModel: ObservableObject {
             }
             guard !result.tracks.isEmpty else { throw ServerConnectionError.emptyLibrary }
             apply(result)
+            resumeRequestedTagClassification()
             recordConnectionDiagnostics(host: input.baseURL.host, url: input.baseURL, error: nil, message: String(localized: "连接成功", bundle: .module), requestAttempted: true)
         } catch is CancellationError {
             serverConnectionState = .failed(ServerConnectionError.cancelled.localizedDescription)
@@ -6016,6 +6023,7 @@ public final class AuralisAppModel: ObservableObject {
                 metadata: startupMetadata
             )
             schedulePostRestoreMaintenance()
+            resumeRequestedTagClassification()
             // apply() 末尾已触发 registerAndSync，此处不再重复。
             // 自愈：恢复出的资料库为空（旧快照损坏 / 历史某次同步失败遗留）时，
             // 后台用服务器凭据重新全量同步并刷回界面，避免资料库一直显示 0 首。

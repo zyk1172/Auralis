@@ -12,10 +12,13 @@ public struct TagClassificationProgress: Sendable {
     public var partNumber: Int = 0
     public var partCount: Int = 0
     public var requestStartedAt: Date?
+    public var requestTimeoutSeconds: Int64 = 300
+    public var retryAt: Date?
+    public var retryReason: String?
 }
 
-public enum TagClassificationPhase: Sendable {
-    case preparing, requesting, validating, committing
+public enum TagClassificationPhase: Sendable, Equatable {
+    case preparing, requesting, validating, committing, retrying
 }
 
 /// Closed metadata classification. No chat session, tools, capability probes or Agent loop.
@@ -28,7 +31,7 @@ public struct TagClassificationRunner: Sendable {
     public let reasoning: AIReasoningConfiguration?
 
     public init(catalog: LocalCatalogStore, provider: any AIProvider, model: String, maxOutputTokens: Int = 8_000,
-                requestTimeout: Duration = .seconds(60), reasoning: AIReasoningConfiguration? = nil) {
+                requestTimeout: Duration = .seconds(300), reasoning: AIReasoningConfiguration? = nil) {
         self.catalog = catalog; self.provider = provider
         self.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
         self.maxOutputTokens = max(512, min(maxOutputTokens, 8_000))
@@ -38,6 +41,7 @@ public struct TagClassificationRunner: Sendable {
 
     public func run(
         serverID: ServerID,
+        batchSize: Int = 8,
         authorize: @escaping @Sendable () async throws -> Void = {},
         onProgress: @Sendable (TagClassificationProgress) async -> Void = { _ in }
     ) async throws {
@@ -45,7 +49,7 @@ public struct TagClassificationRunner: Sendable {
         // Small output/context budgets still reduce the batch before the first request.
         let outputTokens = min(maxOutputTokens, provider.capabilities.maxOutputTokens,
                                max(512, provider.capabilities.maxContextTokens / 4))
-        var size = min(8, max(1, outputTokens / 512))
+        var size = min(max(1, batchSize), 8, max(1, outputTokens / 512))
         var batchNumber = 0
         var retriedSingleTrack = false
         while true {
@@ -69,7 +73,8 @@ public struct TagClassificationRunner: Sendable {
                     try Task.checkCancellation()
                     try await authorize()
                     await onProgress(.init(status: status, batchNumber: batchNumber + 1, phase: .requesting,
-                        batchSize: tracks.count, partNumber: index + 1, partCount: requests.count, requestStartedAt: .now))
+                        batchSize: tracks.count, partNumber: index + 1, partCount: requests.count, requestStartedAt: .now,
+                        requestTimeoutSeconds: max(1, requestTimeout.components.seconds)))
                     let response = try await completeWithDeadline(request, authorize: authorize)
                     try Task.checkCancellation()
                     await onProgress(.init(status: status, batchNumber: batchNumber + 1, phase: .validating,
@@ -161,12 +166,12 @@ public struct TagClassificationRunner: Sendable {
                 switch termination.kind {
                 case .completed: return result()
                 case .truncated: throw AIProviderError.outputTruncated
-                default: throw TagClassificationFailure("分类响应未完整结束，未写入本批结果；请继续重试。")
+                default: throw TagClassificationFailure("分类响应未完整结束，未写入本批结果；将自动重试。", isRetryable: true)
                 }
             default: break // Reasoning and continuation state are never classification data.
             }
         }
-        throw TagClassificationFailure("模型连接结束但未收到完成信号，未写入本批结果；请继续重试。")
+        throw TagClassificationFailure("模型连接结束但未收到完成信号，未写入本批结果；将自动重试。", isRetryable: true)
     }
 }
 
@@ -193,13 +198,15 @@ public struct TagClassificationEmptyResponse: Error, LocalizedError, Sendable {
 
 public struct TagClassificationTimeout: Error, LocalizedError, Sendable {
     public let seconds: Int64
+    public init(seconds: Int64) { self.seconds = max(1, seconds) }
     public var errorDescription: String? {
-        "分类请求超过 \(seconds) 秒仍未完成，已停止本次任务；已保存进度不会丢失，可继续分类。"
+        "分类请求超过 \(seconds) 秒仍未完成，已取消本次请求；已保存进度不会丢失。"
     }
 }
 
 public struct TagClassificationFailure: Error, LocalizedError, Sendable {
     public let message: String
-    public init(_ message: String) { self.message = message }
+    public let isRetryable: Bool
+    public init(_ message: String, isRetryable: Bool = false) { self.message = message; self.isRetryable = isRetryable }
     public var errorDescription: String? { message }
 }

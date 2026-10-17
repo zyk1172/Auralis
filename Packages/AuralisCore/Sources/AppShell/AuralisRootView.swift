@@ -532,6 +532,7 @@ private struct IOSMusicShell: View {
             dockOverlay
                 .ignoresSafeArea(.keyboard, edges: .bottom)
         }
+        .overlay(alignment: .top) { TagClassificationNotice(model: model) }
         // 正在播放页必须真正覆盖整块屏幕。iOS 26 的 large sheet 会保留
         // 明显的顶部外露区域和圆角，视觉上仍像半屏卡片；改为 fullScreenCover，
         // 背景可延伸到状态栏，关闭手势由 NowPlayingView 自己的顶部拖拽柄承担。

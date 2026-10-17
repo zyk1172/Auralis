@@ -19,6 +19,17 @@ private actor ClassificationRequests {
     func record(_ request: AICompletionRequest) -> Int { requests.append(request); return requests.count }
 }
 
+private actor ClassificationRetryWaits {
+    var values: [Duration] = []
+    func record(_ value: Duration) { values.append(value) }
+}
+
+private actor ClassificationAuthorization {
+    var allowed = true
+    func revoke() { allowed = false }
+    func check() throws { if !allowed { throw TagClassificationFailure("Permission revoked") } }
+}
+
 private actor ClassificationPauseGate {
     var entered = false
     var finished = false
@@ -160,6 +171,115 @@ struct TagClassificationRunnerTests {
         let batchSizes = try requests.map { try JSONSerialization.jsonObject(with: Data($0.messages.last!.content.utf8)) as! [[String: Any]] }.map(\.count)
         #expect(batchSizes == (outputTokens == 1_024 ? [2, 2, 2, 2, 1] : [4, 4, 1]))
         #expect(try await store.recommendationIndexStatus(serverID: "server").pendingTracks == 0)
+    }
+
+    @Test("A slow or unavailable second batch automatically resumes after the first batch was committed", arguments: [false, true])
+    func jobRecoversAfterFirstBatch(timeout: Bool) async throws {
+        let (store, _) = try await fixture(count: 18)
+        let recorder = ClassificationRequests()
+        let waits = ClassificationRetryWaits()
+        let provider = BackgroundClassifierProvider { request in
+            if await recorder.record(request) == 2 {
+                #expect(try await store.recommendationIndexStatus(serverID: "server").indexedTracks == 8)
+                if timeout { throw TagClassificationTimeout(seconds: 300) }
+                throw AIProviderError.httpStatus(503)
+            }
+            return try classifiedResponse(request)
+        }
+        let job = TagClassificationJob(runner: .init(catalog: store, provider: provider, model: "text-only"),
+            sleep: { await waits.record($0) })
+        try await job.run(serverID: "server", onProgress: { progress in
+            if progress.phase == .retrying {
+                #expect(progress.status.indexedTracks == 8)
+                #expect(progress.retryAt != nil)
+                #expect(progress.retryReason?.isEmpty == false)
+            }
+        })
+        let status = try await store.recommendationIndexStatus(serverID: "server")
+        #expect(status.indexedTracks == 18)
+        #expect(status.pendingTracks == 0)
+        #expect(await waits.values == [.seconds(15)])
+        let requests = await recorder.requests
+        let sizes = try requests.map { try JSONSerialization.jsonObject(with: Data($0.messages.last!.content.utf8)) as! [[String: Any]] }.map(\.count)
+        #expect(sizes == (timeout ? [8, 8, 4, 4, 2] : [8, 8, 8, 2]))
+    }
+
+    @Test("Pausing during automatic retry cancels the job without sending another request")
+    func cancelsWaitingJob() async throws {
+        let (store, _) = try await fixture(count: 9)
+        let recorder = ClassificationRequests()
+        let gate = ClassificationPauseGate()
+        let provider = BackgroundClassifierProvider { request in
+            _ = await recorder.record(request)
+            throw AIProviderError.transport("offline")
+        }
+        let task = Task {
+            do {
+                try await TagClassificationJob(runner: .init(catalog: store, provider: provider, model: "text-only"))
+                    .run(serverID: "server", onProgress: { progress in
+                        if progress.phase == .retrying { await gate.enterAndWait() }
+                    })
+                await gate.finish()
+            } catch { await gate.finish(); throw error }
+        }
+        await gate.waitUntilEntered()
+        task.cancel()
+        await gate.release()
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(await recorder.requests.count == 1)
+        #expect(try await store.recommendationIndexStatus(serverID: "server").indexedTracks == 0)
+    }
+
+    @Test("Authentication failures preserve the first batch and stop without an automatic retry loop")
+    func jobStopsForAuthorizationFailure() async throws {
+        let (store, _) = try await fixture(count: 9)
+        let recorder = ClassificationRequests()
+        let waits = ClassificationRetryWaits()
+        let provider = BackgroundClassifierProvider { request in
+            if await recorder.record(request) == 2 { throw AIProviderError.httpStatus(401) }
+            return try classifiedResponse(request)
+        }
+        let job = TagClassificationJob(runner: .init(catalog: store, provider: provider, model: "text-only"), sleep: { await waits.record($0) })
+        await #expect(throws: AIProviderError.self) { try await job.run(serverID: "server") }
+        #expect(await recorder.requests.count == 2)
+        #expect(await waits.values.isEmpty)
+        #expect(try await store.recommendationIndexStatus(serverID: "server").indexedTracks == 8)
+    }
+
+    @Test("Revoking metadata permission during a failed request prevents the next automatic retry")
+    func jobReauthorizesRecovery() async throws {
+        let (store, _) = try await fixture(count: 9)
+        let recorder = ClassificationRequests()
+        let permission = ClassificationAuthorization()
+        let waits = ClassificationRetryWaits()
+        let provider = BackgroundClassifierProvider { request in
+            if await recorder.record(request) == 2 {
+                await permission.revoke()
+                throw AIProviderError.httpStatus(503)
+            }
+            return try classifiedResponse(request)
+        }
+        let job = TagClassificationJob(runner: .init(catalog: store, provider: provider, model: "text-only"), sleep: { await waits.record($0) })
+        await #expect(throws: TagClassificationFailure.self) {
+            try await job.run(serverID: "server", authorize: { try await permission.check() })
+        }
+        #expect(await recorder.requests.count == 2)
+        #expect(await waits.values.isEmpty)
+        #expect(try await store.recommendationIndexStatus(serverID: "server").indexedTracks == 8)
+    }
+
+    @Test("Repeated upstream failures back off to five minutes and remain cancellable")
+    func jobBackoff() async throws {
+        let (store, _) = try await fixture(count: 1)
+        let waits = ClassificationRetryWaits()
+        let provider = BackgroundClassifierProvider { _ in throw AIProviderError.httpStatus(503) }
+        let job = TagClassificationJob(runner: .init(catalog: store, provider: provider, model: "text-only"), sleep: { duration in
+            await waits.record(duration)
+            if await waits.values.count == 7 { throw CancellationError() }
+        })
+        await #expect(throws: CancellationError.self) { try await job.run(serverID: "server") }
+        #expect(await waits.values == [.seconds(15), .seconds(30), .seconds(60), .seconds(120), .seconds(240), .seconds(300), .seconds(300)])
+        #expect(try await store.recommendationIndexStatus(serverID: "server").pendingTracks == 1)
     }
 
     @Test("Metadata changed during classification cannot be marked as freshly classified")
