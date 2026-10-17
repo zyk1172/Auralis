@@ -25,13 +25,15 @@ public struct TagClassificationRunner: Sendable {
     public let model: String
     public let maxOutputTokens: Int
     public let requestTimeout: Duration
+    public let reasoning: AIReasoningConfiguration?
 
     public init(catalog: LocalCatalogStore, provider: any AIProvider, model: String, maxOutputTokens: Int = 8_000,
-                requestTimeout: Duration = .seconds(60)) {
+                requestTimeout: Duration = .seconds(60), reasoning: AIReasoningConfiguration? = nil) {
         self.catalog = catalog; self.provider = provider
         self.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
         self.maxOutputTokens = max(512, min(maxOutputTokens, 8_000))
         self.requestTimeout = requestTimeout
+        self.reasoning = reasoning
     }
 
     public func run(
@@ -61,7 +63,7 @@ public struct TagClassificationRunner: Sendable {
             let items: [RecommendationIndexClassification]
             do {
                 let requests = try TagClassificationRequestPlan.requests(model: model, payload: payload,
-                    contextTokens: provider.capabilities.maxContextTokens, outputTokens: outputTokens)
+                    contextTokens: provider.capabilities.maxContextTokens, outputTokens: outputTokens, reasoning: reasoning)
                 var merged = TagClassificationAccumulator()
                 for (index, request) in requests.enumerated() {
                     try Task.checkCancellation()
@@ -148,7 +150,7 @@ public struct TagClassificationRunner: Sendable {
 public struct TagClassificationTimeout: Error, LocalizedError, Sendable {
     public let seconds: Int64
     public var errorDescription: String? {
-        "分类模型超过 \(seconds) 秒未返回结果，任务已停止；已保存进度不会丢失。请检查模型连接后继续分类。"
+        "分类请求超过 \(seconds) 秒仍未完成，已停止本次任务；已保存进度不会丢失，可继续分类。"
     }
 }
 

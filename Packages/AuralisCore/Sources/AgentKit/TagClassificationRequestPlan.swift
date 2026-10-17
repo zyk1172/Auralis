@@ -5,7 +5,8 @@ import LocalCatalog
 
 /// Every fixed label is considered, even when a small model cannot accept the catalogue in one call.
 enum TagClassificationRequestPlan {
-    static func requests(model: String, payload: String, contextTokens: Int, outputTokens: Int) throws -> [AICompletionRequest] {
+    static func requests(model: String, payload: String, contextTokens: Int, outputTokens: Int,
+                         reasoning: AIReasoningConfiguration?) throws -> [AICompletionRequest] {
         // Leave space for message framing and estimator error as well as the requested output.
         let inputBudget = Int(Double(contextTokens) * 0.85) - outputTokens - 256
         let baseCost = ContextManager.estimatedTokens(prompt) + ContextManager.estimatedTokens(payload) + 64
@@ -31,7 +32,7 @@ enum TagClassificationRequestPlan {
             AICompletionRequest(model: model, messages: [
                 .init(role: .system, content: prompt + "\n" + (index == 0 ? "" : "本组只选择标签，features 返回空对象。\n") + catalog),
                 .init(role: .user, content: payload),
-            ], temperature: 0.2, maxTokens: outputTokens)
+            ], temperature: 0.2, maxTokens: outputTokens, reasoning: reasoning)
         }
     }
 

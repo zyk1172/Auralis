@@ -72,7 +72,7 @@ extension AuralisAppModel {
         tagClassificationActivity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep, reason: "Music tag classification")
 #endif
         let runner = TagClassificationRunner(catalog: catalogCoordinator.store, provider: provider,
-            model: settings.model, maxOutputTokens: settings.maxOutputTokens)
+            model: settings.model, maxOutputTokens: settings.maxOutputTokens, reasoning: settings.reasoning)
         tagClassificationTask = Task { [weak self] in
             guard let self else { return }
             defer {

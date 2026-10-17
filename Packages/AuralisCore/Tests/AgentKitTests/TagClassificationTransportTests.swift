@@ -36,7 +36,20 @@ private final class ClassificationURLProtocol: URLProtocol, @unchecked Sendable 
         let reply: Data? = Self.registry.lock.withLock {
             let host = request.url!.host!
             var entry = Self.registry.entries[host]!
-            entry.requests.append(request)
+            var captured = request
+            if captured.httpBody == nil, let stream = captured.httpBodyStream {
+                stream.open()
+                var bytes = Data()
+                var buffer = [UInt8](repeating: 0, count: 1_024)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    guard count > 0 else { break }
+                    bytes.append(buffer, count: count)
+                }
+                stream.close()
+                captured.httpBodyStream = nil; captured.httpBody = bytes
+            }
+            entry.requests.append(captured)
             let reply = entry.replies.isEmpty ? nil : entry.replies.removeFirst()
             Self.registry.entries[host] = entry
             return reply
@@ -130,7 +143,7 @@ struct TagClassificationTransportTests {
         let session = URLSession(configuration: config)
         let configuration = AIProviderConfiguration(name: "classification-http-test",
             baseURL: URL(string: "https://\(host)")!, apiPath: wire.path, model: "http-model",
-            usesStreaming: streaming, supportsReasoningControl: wire == .responses)
+            usesStreaming: streaming, supportsReasoningControl: true)
         let provider: any AIProvider
         if wire == .messages {
             provider = AnthropicMessagesProvider(configuration: configuration, credentialVault: InMemoryCredentialVault(), session: session)
@@ -147,12 +160,20 @@ struct TagClassificationTransportTests {
         ClassificationURLProtocol.register(host: host, replies: [try response(wire: wire, streaming: streaming)])
         let (provider, session) = makeProvider(host: host, wire: wire, streaming: streaming)
         defer { session.invalidateAndCancel(); ClassificationURLProtocol.remove(host: host); try? FileManager.default.removeItem(at: directory) }
-        try await TagClassificationRunner(catalog: store, provider: provider, model: "http-model").run(serverID: "server")
+        try await TagClassificationRunner(catalog: store, provider: provider, model: "http-model",
+            reasoning: .init(mode: .disabled)).run(serverID: "server")
         #expect(try await store.recommendationIndexStatus(serverID: "server").indexedTracks == 1)
         #expect(try await store.recommendByTags(serverIDs: ["server"], query: .init(includeTags: ["scene.study", "instrument.piano"])).count == 1)
         let requests = ClassificationURLProtocol.captured(host: host).requests
         #expect(requests.count == 1)
         #expect(requests.first?.url?.path == wire.path)
+        let body = try #require(requests.first?.httpBody)
+        let object = try JSONSerialization.jsonObject(with: body) as! [String: Any]
+        switch wire {
+        case .chat: #expect(object["reasoning_effort"] as? String == "none")
+        case .responses: #expect((object["reasoning"] as? [String: Any])?["effort"] as? String == "none")
+        case .messages: #expect((object["thinking"] as? [String: Any])?["type"] as? String == "disabled")
+        }
     }
 
     @Test("A gateway that never returns is cancelled without silently retrying forever", arguments: [false, true])
