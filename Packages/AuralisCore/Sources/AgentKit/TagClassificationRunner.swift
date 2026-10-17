@@ -107,7 +107,7 @@ public struct TagClassificationRunner: Sendable {
         // This deadline includes the provider's internal retries. A stalled gateway must not leave
         // the settings page claiming to work for 3 × the chat request timeout (18 minutes).
         try await withThrowingTaskGroup(of: AICompletionResponse.self) { group in
-            group.addTask { try await provider.complete(request) }
+            group.addTask { try await classificationResponse(request) }
             group.addTask {
                 try await Task.sleep(for: requestTimeout)
                 throw TagClassificationTimeout(seconds: max(1, requestTimeout.components.seconds))
@@ -115,6 +115,33 @@ public struct TagClassificationRunner: Sendable {
             defer { group.cancelAll() }
             return try await group.next()!
         }
+    }
+
+    private func classificationResponse(_ request: AICompletionRequest) async throws -> AICompletionResponse {
+        guard provider.capabilities.supportsStreaming else { return try await provider.complete(request) }
+        // Use the configured provider transport, just like ordinary AI requests. Gateways that
+        // support streaming must not be forced onto a separately buffered/non-streaming route.
+        var content = ""
+        var responseModel = request.model
+        for try await event in provider.stream(request) {
+            try Task.checkCancellation()
+            switch event {
+            case let .started(model, _): responseModel = model
+            case let .answerDelta(delta), let .unknownDelta(delta): content += delta
+            case .toolCall:
+                throw TagClassificationFailure("分类模型返回了工具调用，需要 JSON 分类结果。")
+            case .completed:
+                return .init(model: responseModel, content: content, finishReason: "stop")
+            case let .terminated(termination):
+                switch termination.kind {
+                case .completed: return .init(model: responseModel, content: content, finishReason: "stop")
+                case .truncated: throw AIProviderError.outputTruncated
+                default: throw TagClassificationFailure("分类响应未完整结束，未写入本批结果；请继续重试。")
+                }
+            default: break // Reasoning and continuation state are never classification data.
+            }
+        }
+        throw TagClassificationFailure("模型连接结束但未收到完成信号，未写入本批结果；请继续重试。")
     }
 }
 

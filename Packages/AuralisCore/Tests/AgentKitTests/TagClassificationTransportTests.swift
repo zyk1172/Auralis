@@ -43,14 +43,26 @@ private final class ClassificationURLProtocol: URLProtocol, @unchecked Sendable 
         }
         // A nil reply deliberately leaves the connection open until the runner cancels it.
         guard let reply else { return }
+        let isStream = reply.starts(with: Data("data:".utf8)) || reply.starts(with: Data("event:".utf8))
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
-            headerFields: ["Content-Type": "application/json"])!
+            headerFields: ["Content-Type": isStream ? "text/event-stream" : "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: reply)
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {
         Self.registry.lock.withLock { Self.registry.entries[request.url!.host!]?.cancellations += 1 }
+    }
+}
+
+enum ClassificationHTTPProtocol: String, CaseIterable, Sendable {
+    case chat, responses, messages
+    var path: String {
+        switch self {
+        case .chat: "/v1/chat/completions"
+        case .responses: "/v1/responses"
+        case .messages: "/v1/messages"
+        }
     }
 }
 
@@ -70,52 +82,85 @@ struct TagClassificationTransportTests {
         return (store, directory)
     }
 
-    private func response(responses: Bool = false) throws -> Data {
+    private func response(wire: ClassificationHTTPProtocol = .chat, streaming: Bool = false) throws -> Data {
         let classification = """
         {"items":[{"id":"server:0","tags":["scene.study","instrument.piano"],"confidence":0.9}]}
         """
-        if responses {
+        if streaming {
+            func event(_ object: [String: Any]) throws -> String {
+                let data = try JSONSerialization.data(withJSONObject: object)
+                let prefix = wire == .messages ? "event: \(object["type"] as! String)\n" : ""
+                return prefix + "data: " + String(decoding: data, as: UTF8.self) + "\n\n"
+            }
+            let events: [[String: Any]]
+            switch wire {
+            case .chat:
+                events = [["choices": [["delta": ["content": classification]]]],
+                    ["choices": [["delta": [:], "finish_reason": "stop"]]]]
+            case .responses:
+                events = [["type": "response.output_text.delta", "delta": classification],
+                    ["type": "response.completed", "response": ["model": "http-model", "status": "completed"]]]
+            case .messages:
+                events = [["type": "message_start", "message": ["id": "message-test", "model": "http-model", "usage": ["input_tokens": 1]]],
+                    ["type": "content_block_start", "index": 0, "content_block": ["type": "text", "text": ""]],
+                    ["type": "content_block_delta", "index": 0, "delta": ["type": "text_delta", "text": classification]],
+                    ["type": "content_block_stop", "index": 0],
+                    ["type": "message_delta", "delta": ["stop_reason": "end_turn"], "usage": ["output_tokens": 32]],
+                    ["type": "message_stop"]]
+            }
+            return Data(try events.map(event).joined().utf8)
+        }
+        if wire == .responses {
             return try JSONSerialization.data(withJSONObject: ["id": "resp-classification", "model": "http-model", "status": "completed", "output": [[
                 "type": "message", "role": "assistant", "content": [["type": "output_text", "text": classification]],
             ]]])
+        }
+        if wire == .messages {
+            return try JSONSerialization.data(withJSONObject: ["id": "message-test", "model": "http-model", "stop_reason": "end_turn",
+                "content": [["type": "text", "text": classification]]])
         }
         return try JSONSerialization.data(withJSONObject: ["model": "http-model", "choices": [[
             "message": ["role": "assistant", "content": classification], "finish_reason": "stop",
         ]]])
     }
 
-    private func makeProvider(host: String, responses: Bool = false) -> (OpenAICompatibleProvider, URLSession) {
+    private func makeProvider(host: String, wire: ClassificationHTTPProtocol = .chat, streaming: Bool = false) -> (any AIProvider, URLSession) {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [ClassificationURLProtocol.self]
         let session = URLSession(configuration: config)
-        let provider = OpenAICompatibleProvider(configuration: .init(name: "classification-http-test",
-            baseURL: URL(string: "https://\(host)")!, apiPath: responses ? "/v1/responses" : "/v1/chat/completions", model: "http-model",
-            supportsReasoningControl: responses),
-            credentialVault: InMemoryCredentialVault(), session: session)
+        let configuration = AIProviderConfiguration(name: "classification-http-test",
+            baseURL: URL(string: "https://\(host)")!, apiPath: wire.path, model: "http-model",
+            usesStreaming: streaming, supportsReasoningControl: wire == .responses)
+        let provider: any AIProvider
+        if wire == .messages {
+            provider = AnthropicMessagesProvider(configuration: configuration, credentialVault: InMemoryCredentialVault(), session: session)
+        } else {
+            provider = OpenAICompatibleProvider(configuration: configuration, credentialVault: InMemoryCredentialVault(), session: session)
+        }
         return (provider, session)
     }
 
-    @Test("Production Chat/Responses HTTP responses persist labels and support an AND query", arguments: [false, true])
-    func realHTTPPipeline(responses: Bool) async throws {
+    @Test("All three configured protocols classify via streaming and ordinary HTTP", arguments: ClassificationHTTPProtocol.allCases, [false, true])
+    func realHTTPPipeline(wire: ClassificationHTTPProtocol, streaming: Bool) async throws {
         let (store, directory) = try await fixture()
         let host = "\(UUID().uuidString.lowercased()).example"
-        ClassificationURLProtocol.register(host: host, replies: [try response(responses: responses)])
-        let (provider, session) = makeProvider(host: host, responses: responses)
+        ClassificationURLProtocol.register(host: host, replies: [try response(wire: wire, streaming: streaming)])
+        let (provider, session) = makeProvider(host: host, wire: wire, streaming: streaming)
         defer { session.invalidateAndCancel(); ClassificationURLProtocol.remove(host: host); try? FileManager.default.removeItem(at: directory) }
         try await TagClassificationRunner(catalog: store, provider: provider, model: "http-model").run(serverID: "server")
         #expect(try await store.recommendationIndexStatus(serverID: "server").indexedTracks == 1)
         #expect(try await store.recommendByTags(serverIDs: ["server"], query: .init(includeTags: ["scene.study", "instrument.piano"])).count == 1)
         let requests = ClassificationURLProtocol.captured(host: host).requests
         #expect(requests.count == 1)
-        #expect(requests.first?.url?.path == (responses ? "/v1/responses" : "/v1/chat/completions"))
+        #expect(requests.first?.url?.path == wire.path)
     }
 
-    @Test("A gateway that never returns is cancelled without silently retrying forever")
-    func stalledFirstRequest() async throws {
+    @Test("A gateway that never returns is cancelled without silently retrying forever", arguments: [false, true])
+    func stalledFirstRequest(streaming: Bool) async throws {
         let (store, directory) = try await fixture()
         let host = "\(UUID().uuidString.lowercased()).example"
         ClassificationURLProtocol.register(host: host, replies: [nil])
-        let (provider, session) = makeProvider(host: host)
+        let (provider, session) = makeProvider(host: host, streaming: streaming)
         defer { session.invalidateAndCancel(); ClassificationURLProtocol.remove(host: host); try? FileManager.default.removeItem(at: directory) }
         await #expect(throws: TagClassificationTimeout.self) {
             try await TagClassificationRunner(catalog: store, provider: provider, model: "http-model", requestTimeout: .seconds(1)).run(serverID: "server")
@@ -126,12 +171,12 @@ struct TagClassificationTransportTests {
         #expect(try await store.recommendationIndexStatus(serverID: "server").indexedTracks == 0)
     }
 
-    @Test("The first song stays committed when the next request stalls")
-    func firstSaveSurvivesStall() async throws {
+    @Test("The first song stays committed when the next request stalls", arguments: [false, true])
+    func firstSaveSurvivesStall(streaming: Bool) async throws {
         let (store, directory) = try await fixture(count: 3)
         let host = "\(UUID().uuidString.lowercased()).example"
-        ClassificationURLProtocol.register(host: host, replies: [try response(), nil])
-        let (provider, session) = makeProvider(host: host)
+        ClassificationURLProtocol.register(host: host, replies: [try response(streaming: streaming), nil])
+        let (provider, session) = makeProvider(host: host, streaming: streaming)
         defer { session.invalidateAndCancel(); ClassificationURLProtocol.remove(host: host); try? FileManager.default.removeItem(at: directory) }
         await #expect(throws: TagClassificationTimeout.self) {
             try await TagClassificationRunner(catalog: store, provider: provider, model: "http-model", requestTimeout: .seconds(1)).run(serverID: "server")
@@ -140,5 +185,21 @@ struct TagClassificationTransportTests {
         let status = try await store.recommendationIndexStatus(serverID: "server")
         #expect(status.indexedTracks == 1)
         #expect(status.pendingTracks == 2)
+    }
+
+    @Test("Valid JSON without a stream completion signal cannot mark a song as classified")
+    func interruptedStream() async throws {
+        let (store, directory) = try await fixture()
+        let host = "\(UUID().uuidString.lowercased()).example"
+        let complete = String(decoding: try response(streaming: true), as: UTF8.self)
+        let incomplete = Data((complete.components(separatedBy: "\n\n")[0] + "\n\n").utf8)
+        ClassificationURLProtocol.register(host: host, replies: [incomplete, incomplete])
+        let (provider, session) = makeProvider(host: host, streaming: true)
+        defer { session.invalidateAndCancel(); ClassificationURLProtocol.remove(host: host); try? FileManager.default.removeItem(at: directory) }
+        await #expect(throws: TagClassificationFailure.self) {
+            try await TagClassificationRunner(catalog: store, provider: provider, model: "http-model").run(serverID: "server")
+        }
+        #expect(try await store.recommendationIndexStatus(serverID: "server").indexedTracks == 0)
+        #expect(ClassificationURLProtocol.captured(host: host).requests.count == 2)
     }
 }

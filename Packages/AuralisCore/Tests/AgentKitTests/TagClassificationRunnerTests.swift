@@ -7,7 +7,7 @@ import LocalCatalog
 import Testing
 
 private struct BackgroundClassifierProvider: AIProvider {
-    var capabilities = ModelCapabilities()
+    var capabilities = ModelCapabilities(supportsStreaming: false)
     let handler: @Sendable (AICompletionRequest) async throws -> AICompletionResponse
     func complete(_ request: AICompletionRequest) async throws -> AICompletionResponse { try await handler(request) }
     func testConnection() async throws -> AIConnectionResult { throw TagClassificationFailure("No probes expected") }
@@ -182,7 +182,7 @@ struct TagClassificationRunnerTests {
     func smallContext() async throws {
         let (store, _) = try await fixture(count: 1)
         let recorder = ClassificationRequests()
-        let provider = BackgroundClassifierProvider(capabilities: .init(maxContextTokens: 4_096)) { request in
+        let provider = BackgroundClassifierProvider(capabilities: .init(maxContextTokens: 4_096, supportsStreaming: false)) { request in
             _ = await recorder.record(request)
             let cost = request.messages.reduce(0) { $0 + ContextManager.estimatedTokens($1.content) }
             #expect(cost + request.maxTokens + 256 < 4_096)
