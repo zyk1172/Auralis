@@ -211,7 +211,7 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics", "-auralis-ui-smoke-lyrics-scroll")
         let playPause = app.buttons["auralis.nowPlaying.playPause"].firstMatch
         XCTAssertTrue(playPause.waitForExistence(timeout: 15))
-        waitForLabelContaining("播放", element: playPause, message: "The smoke player must be ready before its first Play tap")
+        waitForLabelContaining("播放", element: playPause, timeout: 15, message: "The smoke player must be ready before its first Play tap")
         playPause.tap()
         waitForLabelContaining("暂停", element: playPause, timeout: 15, message: "The local smoke audio must be playing")
         app.buttons["auralis.nowPlaying.lyrics"].firstMatch.tap()
@@ -272,7 +272,7 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics", "-auralis-ui-smoke-page-motion")
         let playPause = app.buttons["auralis.nowPlaying.playPause"].firstMatch
         XCTAssertTrue(playPause.waitForExistence(timeout: 15))
-        waitForLabelContaining("播放", element: playPause, message: "The smoke player must be ready before its first Play tap")
+        waitForLabelContaining("播放", element: playPause, timeout: 15, message: "The smoke player must be ready before its first Play tap")
         playPause.tap()
         waitForLabelContaining("暂停", element: playPause, timeout: 15, message: "Artwork must use the active playback size")
         XCUIDevice.shared.orientation = .landscapeLeft
