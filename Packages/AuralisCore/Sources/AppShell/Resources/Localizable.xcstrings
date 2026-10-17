@@ -17726,6 +17726,22 @@
         }
       }
     },
+    "默认每批 8 首；容量不足或结果不完整时自动缩小批量。逐首校验，整批通过后保存。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Classify up to 8 songs per batch. Smaller capacities or incomplete results reduce the batch size. Each song is validated before the whole batch is saved."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "預設每批 8 首；容量不足或結果不完整時自動縮小批量。逐首校驗，整批通過後儲存。"
+          }
+        }
+      }
+    },
     "默认关闭 ReplayGain。启用后优先使用服务器返回的真实 Track/Album Gain；缺少标签时不做普通音量归一化。" : {
       "localizations" : {
         "en" : {

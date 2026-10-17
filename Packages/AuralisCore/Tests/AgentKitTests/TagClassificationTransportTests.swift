@@ -183,10 +183,11 @@ struct TagClassificationTransportTests {
         return (store, directory)
     }
 
-    private func response(wire: ClassificationHTTPProtocol = .chat, streaming: Bool = false) throws -> Data {
-        let classification = """
-        {"items":[{"id":"server:0","tags":["scene.study","instrument.piano"],"confidence":0.9}]}
-        """
+    private func response(wire: ClassificationHTTPProtocol = .chat, streaming: Bool = false, trackCount: Int = 1) throws -> Data {
+        let items = (0..<trackCount).map { index -> [String: Any] in
+            ["id": "server:\(index)", "tags": ["scene.study", "instrument.piano"], "confidence": 0.9]
+        }
+        let classification = String(decoding: try JSONSerialization.data(withJSONObject: ["items": items]), as: UTF8.self)
         if streaming {
             func event(_ object: [String: Any]) throws -> String {
                 let data = try JSONSerialization.data(withJSONObject: object)
@@ -280,11 +281,11 @@ struct TagClassificationTransportTests {
         #expect(try await store.recommendationIndexStatus(serverID: "server").indexedTracks == 0)
     }
 
-    @Test("The first song stays committed when the next request stalls", arguments: [false, true])
+    @Test("The first batch stays committed when the next request stalls", arguments: [false, true])
     func firstSaveSurvivesStall(streaming: Bool) async throws {
-        let (store, directory) = try await fixture(count: 3)
+        let (store, directory) = try await fixture(count: 10)
         let host = "\(UUID().uuidString.lowercased()).example"
-        ClassificationURLProtocol.register(host: host, replies: [try response(streaming: streaming), nil])
+        ClassificationURLProtocol.register(host: host, replies: [try response(streaming: streaming, trackCount: 8), nil])
         let (provider, session) = makeProvider(host: host, streaming: streaming)
         defer { session.invalidateAndCancel(); ClassificationURLProtocol.remove(host: host); try? FileManager.default.removeItem(at: directory) }
         await #expect(throws: TagClassificationTimeout.self) {
@@ -292,7 +293,7 @@ struct TagClassificationTransportTests {
         }
         #expect(ClassificationURLProtocol.captured(host: host).requests.count == 2)
         let status = try await store.recommendationIndexStatus(serverID: "server")
-        #expect(status.indexedTracks == 1)
+        #expect(status.indexedTracks == 8)
         #expect(status.pendingTracks == 2)
     }
 

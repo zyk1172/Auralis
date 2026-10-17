@@ -41,11 +41,11 @@ public struct TagClassificationRunner: Sendable {
         authorize: @escaping @Sendable () async throws -> Void = {},
         onProgress: @Sendable (TagClassificationProgress) async -> Void = { _ in }
     ) async throws {
-        // Save a first song promptly, especially within iOS's short foreground-to-background grace period.
+        // Start with a modest batch instead of warming up again after every restart.
+        // Small output/context budgets still reduce the batch before the first request.
         let outputTokens = min(maxOutputTokens, provider.capabilities.maxOutputTokens,
                                max(512, provider.capabilities.maxContextTokens / 4))
-        let maximumSize = min(8, max(1, outputTokens / 512))
-        var size = 1
+        var size = min(8, max(1, outputTokens / 512))
         var batchNumber = 0
         var retriedSingleTrack = false
         while true {
@@ -88,7 +88,9 @@ public struct TagClassificationRunner: Sendable {
                 // A bounded retry with a smaller batch fixes truncated/partial JSON without a loop.
                 if !(error is TagClassificationTimeout), !(error is TagClassificationEmptyResponse),
                    !(error is AIProviderError) || (error as? AIProviderError) == .outputTruncated {
-                    if size > 1 { size = max(1, size / 2); continue }
+                    // Shrink the actual failed payload, including a short final batch. Keep the
+                    // reduced size for this run, avoiding repeated oversized attempts after success.
+                    if batch.tracks.count > 1 { size = max(1, batch.tracks.count / 2); continue }
                     if !retriedSingleTrack { retriedSingleTrack = true; continue }
                 }
                 throw error
@@ -101,7 +103,6 @@ public struct TagClassificationRunner: Sendable {
             guard written == batch.tracks.count else { throw TagClassificationFailure("分类未完整入库，请刷新后继续。") }
             batchNumber += 1
             retriedSingleTrack = false
-            size = min(maximumSize, size * 2)
         }
     }
 

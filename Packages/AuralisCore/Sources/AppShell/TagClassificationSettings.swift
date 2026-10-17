@@ -159,6 +159,8 @@ struct TagClassificationControls: View {
             Toggle(String(localized: "允许发送歌曲元数据进行分类", bundle: .module), isOn: $allowsClassification)
             Text(String(localized: "只向已配置模型发送歌名、艺术家、专辑等歌曲元数据，不发送播放历史、收藏、评分、文件路径或凭据。", bundle: .module))
                 .font(.caption).foregroundStyle(.secondary)
+            Text(String(localized: "默认每批 8 首；容量不足或结果不完整时自动缩小批量。逐首校验，整批通过后保存。", bundle: .module))
+                .font(.caption).foregroundStyle(.secondary)
             if let status = model.tagClassification.status {
                 LabeledContent(String(localized: "已处理", bundle: .module), value: "\(status.indexedTracks) / \(status.totalTracks)")
                 LabeledContent(String(localized: "待处理", bundle: .module), value: "\(status.pendingTracks)")

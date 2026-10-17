@@ -71,9 +71,8 @@ struct TagClassificationRunnerTests {
         #expect(try await store.recommendationIndexStatus(serverID: "server").pendingTracks == 0)
         #expect(try await store.recommendByTags(serverIDs: ["server"], query: .init(includeTags: ["scene.study", "instrument.piano"], maxPerArtist: 10, maxPerAlbum: 10)).count == 10)
         let requests = await recorder.requests
-        #expect(requests.count == 4)
-        let firstTracks = try JSONSerialization.jsonObject(with: Data(requests[0].messages.last!.content.utf8)) as! [[String: Any]]
-        #expect(firstTracks.count == 1)
+        let batchSizes = try requests.map { try JSONSerialization.jsonObject(with: Data($0.messages.last!.content.utf8)) as! [[String: Any]] }.map(\.count)
+        #expect(batchSizes == [8, 2])
         for request in requests {
             #expect(request.model == "text-only")
             #expect(request.tools == nil)
@@ -107,18 +106,60 @@ struct TagClassificationRunnerTests {
         #expect(await recorder.requests.count == 1)
     }
 
-    @Test("Malformed responses shrink a bounded batch and resume until every track is committed")
-    func malformedRetry() async throws {
-        let (store, _) = try await fixture()
+    @Test("Incomplete batches are never committed, and retries keep the smaller batch size", arguments: [3, 18])
+    func malformedRetry(count: Int) async throws {
+        let (store, _) = try await fixture(count: count)
         let recorder = ClassificationRequests()
         let provider = BackgroundClassifierProvider { request in
             let count = await recorder.record(request)
             if count == 1 { return .init(model: request.model, content: "{\"items\":[]}") }
+            if count == 2 {
+                #expect(try await store.recommendationIndexStatus(serverID: "server").indexedTracks == 0)
+            }
             return try classifiedResponse(request)
         }
         try await TagClassificationRunner(catalog: store, provider: provider, model: "text-only").run(serverID: "server")
         #expect(try await store.recommendationIndexStatus(serverID: "server").pendingTracks == 0)
-        #expect(await recorder.requests.count == 3)
+        let requests = await recorder.requests
+        let batchSizes = try requests.map { try JSONSerialization.jsonObject(with: Data($0.messages.last!.content.utf8)) as! [[String: Any]] }.map(\.count)
+        #expect(batchSizes == (count == 3 ? [3, 1, 1, 1] : [8, 4, 4, 4, 4, 2]))
+    }
+
+    @Test("A library with over a thousand tracks stays in bounded batches without missing or repeating IDs")
+    func largeLibrary() async throws {
+        let (store, _) = try await fixture(count: 1_003)
+        let recorder = ClassificationRequests()
+        let provider = BackgroundClassifierProvider { request in
+            _ = await recorder.record(request)
+            return try classifiedResponse(request)
+        }
+        try await TagClassificationRunner(catalog: store, provider: provider, model: "text-only").run(serverID: "server")
+        let requests = await recorder.requests
+        let batches = try requests.map { try JSONSerialization.jsonObject(with: Data($0.messages.last!.content.utf8)) as! [[String: Any]] }
+        let ids = batches.flatMap { $0.compactMap { $0["id"] as? String } }
+        #expect(batches.count == 126)
+        #expect(batches.dropLast().allSatisfy { $0.count == 8 })
+        #expect(batches.last?.count == 3)
+        #expect(ids.count == 1_003)
+        #expect(Set(ids).count == 1_003)
+        let status = try await store.recommendationIndexStatus(serverID: "server")
+        #expect(status.indexedTracks == 1_003)
+        #expect(status.pendingTracks == 0)
+    }
+
+    @Test("Limited output capacity reduces the initial batch without losing pending tracks", arguments: [1_024, 2_048])
+    func outputCapacity(outputTokens: Int) async throws {
+        let (store, _) = try await fixture(count: 9)
+        let recorder = ClassificationRequests()
+        let provider = BackgroundClassifierProvider(capabilities: .init(maxOutputTokens: outputTokens, supportsStreaming: false)) { request in
+            _ = await recorder.record(request)
+            return try classifiedResponse(request)
+        }
+        try await TagClassificationRunner(catalog: store, provider: provider, model: "small-output").run(serverID: "server")
+        let requests = await recorder.requests
+        let batchSizes = try requests.map { try JSONSerialization.jsonObject(with: Data($0.messages.last!.content.utf8)) as! [[String: Any]] }.map(\.count)
+        #expect(batchSizes == (outputTokens == 1_024 ? [2, 2, 2, 2, 1] : [4, 4, 1]))
+        #expect(try await store.recommendationIndexStatus(serverID: "server").pendingTracks == 0)
     }
 
     @Test("Metadata changed during classification cannot be marked as freshly classified")
