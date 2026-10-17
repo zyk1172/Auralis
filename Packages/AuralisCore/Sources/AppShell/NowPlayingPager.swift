@@ -7,6 +7,7 @@ import SwiftUI
 struct NowPlayingPager<Content: View>: View {
     @Binding var selection: NowPlayingPage
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var initialPage: NowPlayingPage
     @State private var userIsScrolling = false
     @State private var nearestPage = NowPlayingPage.player
     let content: (NowPlayingPage) -> Content
@@ -17,7 +18,17 @@ struct NowPlayingPager<Content: View>: View {
 #endif
 
     init(selection: Binding<NowPlayingPage>, @ViewBuilder content: @escaping (NowPlayingPage) -> Content) {
-        self._selection = selection; self.content = content
+        self._selection = selection
+        self._initialPage = State(initialValue: selection.wrappedValue)
+        self.content = content
+    }
+
+    private var initialAnchor: UnitPoint {
+        switch initialPage {
+        case .lyrics: .leading
+        case .player: .center
+        case .queue: .trailing
+        }
     }
 
     var body: some View {
@@ -36,6 +47,9 @@ struct NowPlayingPager<Content: View>: View {
                 }
                 .scrollIndicators(.hidden)
                 .scrollTargetBehavior(.paging)
+                // Initial layout owns its offset: an imperative task can run before the
+                // landscape column has laid out its targets and leave the first page visible.
+                .defaultScrollAnchor(initialAnchor, for: .initialOffset)
                 // Commands flow one way. Binding the selected page directly to the visible
                 // target lets intermediate scroll/layout updates write an old page back and
                 // interrupt the button's animation, especially in the landscape column.
@@ -46,12 +60,6 @@ struct NowPlayingPager<Content: View>: View {
                     withAnimation(reduceMotion ? nil : .smooth(duration: 0.34, extraBounce: 0)) {
                         proxy.scrollTo(target, anchor: .leading)
                     }
-                }
-                .task(id: geometry.size.width) {
-                    guard geometry.size.width > 0 else { return }
-                    await Task.yield()
-                    guard !Task.isCancelled else { return }
-                    proxy.scrollTo(selection, anchor: .leading)
                 }
                 .onScrollGeometryChange(for: Int.self) { scroll in
                     guard scroll.containerSize.width > 0 else { return 0 }

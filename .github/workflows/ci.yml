@@ -187,6 +187,7 @@ jobs:
               -configuration Debug \
               -destination "platform=iOS Simulator,id=$simulator_id" \
               -parallel-testing-enabled NO \
+              -collect-test-diagnostics never \
               -resultBundlePath "${output_log%.log}.xcresult" \
               CODE_SIGNING_ALLOWED=NO \
               -only-testing:AuralisUITests \

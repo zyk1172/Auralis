@@ -261,8 +261,9 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics", "-auralis-ui-smoke-page-motion")
         let button = app.buttons["auralis.nowPlaying.lyrics"].firstMatch
         XCTAssertTrue(button.waitForExistence(timeout: 15))
-        button.tap()
         let pager = app.scrollViews["auralis.nowPlaying.pages"].firstMatch
+        waitForValue("waiting-offset:1000", element: pager, message: "The player must initially occupy the middle page")
+        button.tap()
         XCTAssertTrue(pager.waitForExistence(timeout: 10))
         let sample = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "animated-horizontal-offset"), object: pager)
         XCTAssertEqual(XCTWaiter.wait(for: [sample], timeout: 15), .completed, "The button must animate real horizontal geometry, not only update its selected state; actual: \(String(describing: pager.value))")
@@ -285,9 +286,10 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(artwork.frame.minY - screen.minY, 16)
         XCTAssertGreaterThanOrEqual(screen.maxY - artwork.frame.maxY, 16)
 
+        let pager = app.scrollViews["auralis.nowPlaying.pages"].firstMatch
+        waitForValue("waiting-offset:1000", element: pager, message: "Rotation must initially position the selected player in the right column")
         app.buttons["auralis.nowPlaying.lyrics"].firstMatch.tap()
         XCTAssertTrue(app.scrollViews["auralis.nowPlaying.lyricsScroll"].firstMatch.waitForExistence(timeout: 5))
-        let pager = app.scrollViews["auralis.nowPlaying.pages"].firstMatch
         XCTAssertEqual(pager.value as? String, "animated-horizontal-offset", "Landscape must animate within the right column")
         XCTAssertTrue(artwork.exists, "The enlarged cover must remain beside landscape lyrics")
         let screenshot = XCTAttachment(screenshot: app.screenshot())
