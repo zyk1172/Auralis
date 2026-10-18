@@ -233,6 +233,38 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         add(evidence)
     }
 
+    func testLyricsChromeCollapsesAndExpandsBeforeFingerLifts() throws {
+        launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics", "-auralis-ui-smoke-lyrics-chrome-immediate")
+        let button = app.buttons["auralis.nowPlaying.lyrics"].firstMatch
+        XCTAssertTrue(button.waitForExistence(timeout: 15))
+        button.tap()
+        let scroll = app.scrollViews["auralis.nowPlaying.lyricsScroll"].firstMatch
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        let frame = scroll.frame
+        // 用顶部的一小段区域，确保控件展开后坐标仍然位于歌词内。
+        let gestureHeight = min(frame.height, 200)
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let upper = origin.withOffset(CGVector(dx: frame.midX, dy: frame.minY + gestureHeight * 0.15))
+        let lower = origin.withOffset(CGVector(dx: frame.midX, dy: frame.minY + gestureHeight * 0.9))
+        // 首先下滑恢复可能已经被原有 5 秒无操作计时器收起的控件。
+        // 保持手指按住，要求真实视口在拖动阶段已经扩大和缩小。
+        upper.press(forDuration: 0.05, thenDragTo: lower, withVelocity: .slow, thenHoldForDuration: 0.8)
+        lower.press(forDuration: 0.05, thenDragTo: upper, withVelocity: .slow, thenHoldForDuration: 0.8)
+        upper.press(forDuration: 0.05, thenDragTo: lower, withVelocity: .slow, thenHoldForDuration: 0.8)
+
+        let sample = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "passed:hide-and-show-during-drag"),
+            object: scroll
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [sample], timeout: 15), .completed,
+                       "Chrome must resize the lyrics viewport before finger lift; actual: \(String(describing: scroll.value))")
+        print("Native lyrics Chrome timing: \(String(describing: scroll.value))")
+        let evidence = XCTAttachment(string: String(describing: scroll.value))
+        evidence.name = "Lyrics controls change layout during the native drag"
+        evidence.lifetime = .keepAlways
+        add(evidence)
+    }
+
     func testLyricsFasterFlickHasMoreNativeCoastingDistance() throws {
         func coast(velocity: XCUIGestureVelocity) throws -> Double {
             app.terminate()

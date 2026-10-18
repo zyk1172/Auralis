@@ -184,6 +184,49 @@ struct LyricsChromePolicyTests {
         #expect(LyricsChromePolicy.terminalHidden(for: .init(width: 1, height: -43)) == nil)
         #expect(LyricsChromePolicy.terminalHidden(for: .init(width: 80, height: -20)) == nil)
     }
+
+    @Test("原生拖动达到距离即收缩，不等待松手或减速结束")
+    func chromeRespondsWhileDragIsStillActive() {
+        var interaction = LyricsChromeScrollInteraction()
+        interaction.begin(offset: 100, viewportHeight: 400)
+        #expect(interaction.update(offset: 120, viewportHeight: 400) == nil)
+        #expect(interaction.update(offset: 144, viewportHeight: 400) == true)
+        #expect(interaction.isActive)
+    }
+
+    @Test("同一次拖动反向后也能立即恢复选项")
+    func reversingDragShowsChromeWithoutWaitingForAnotherGesture() {
+        var interaction = LyricsChromeScrollInteraction()
+        interaction.begin(offset: 100, viewportHeight: 400)
+        #expect(interaction.update(offset: 160, viewportHeight: 400) == true)
+        #expect(interaction.update(offset: 180, viewportHeight: 400) == nil)
+        #expect(interaction.update(offset: 160, viewportHeight: 400) == nil)
+        #expect(interaction.update(offset: 136, viewportHeight: 400) == false)
+        #expect(interaction.isActive)
+    }
+
+    @Test("选项显隐引起的视口变化不冒充反向滑动")
+    func resizingViewportDoesNotReverseChrome() {
+        var interaction = LyricsChromeScrollInteraction()
+        interaction.begin(offset: 100, viewportHeight: 400)
+        #expect(interaction.update(offset: 144, viewportHeight: 400) == true)
+        // 控件收起时，原生布局可能调整偏移；动画中每次视口变化都忽略。
+        #expect(interaction.update(offset: 80, viewportHeight: 500) == nil)
+        #expect(interaction.update(offset: 20, viewportHeight: 600) == nil)
+        #expect(interaction.update(offset: 0, viewportHeight: 600) == nil)
+        #expect(interaction.update(offset: -24, viewportHeight: 600) == false)
+    }
+
+    @Test("松手后的惯性与程序定位不再次改变选项")
+    func endedDragIgnoresSubsequentGeometryChanges() {
+        var interaction = LyricsChromeScrollInteraction()
+        #expect(interaction.update(offset: 100, viewportHeight: 400) == nil)
+        interaction.begin(offset: 100, viewportHeight: 400)
+        interaction.end()
+        #expect(!interaction.isActive)
+        #expect(interaction.update(offset: 180, viewportHeight: 400) == nil)
+        #expect(interaction.update(offset: 0, viewportHeight: 600) == nil)
+    }
 }
 
 @Suite("歌词逐字轻量强调")

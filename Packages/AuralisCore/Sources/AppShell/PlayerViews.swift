@@ -301,6 +301,48 @@ struct LyricsChromePolicy: Sendable {
     }
 }
 
+/// Uses native scroll movement while the finger is down. Resizing the viewport is
+/// layout feedback, so it must not count as another swipe in the opposite direction.
+struct LyricsChromeScrollInteraction {
+    private var lastOffset: CGFloat?
+    private var viewportHeight: CGFloat?
+    private var accumulatedDelta: CGFloat = 0
+    var isActive: Bool { lastOffset != nil }
+
+    mutating func begin(offset: CGFloat, viewportHeight: CGFloat) {
+        lastOffset = offset
+        self.viewportHeight = viewportHeight
+        accumulatedDelta = 0
+    }
+
+    mutating func update(offset: CGFloat, viewportHeight: CGFloat) -> Bool? {
+        guard let previous = lastOffset, let previousHeight = self.viewportHeight else { return nil }
+        lastOffset = offset
+        self.viewportHeight = viewportHeight
+        guard previousHeight == viewportHeight else { accumulatedDelta = 0; return nil }
+        let delta = offset - previous
+        if (accumulatedDelta > 0 && delta < 0) || (accumulatedDelta < 0 && delta > 0) {
+            accumulatedDelta = delta
+        } else {
+            accumulatedDelta += delta
+        }
+        guard let hidden = LyricsChromePolicy.terminalHidden(for: .init(width: 0, height: -accumulatedDelta)) else { return nil }
+        accumulatedDelta = 0
+        return hidden
+    }
+
+    mutating func end() {
+        lastOffset = nil
+        viewportHeight = nil
+        accumulatedDelta = 0
+    }
+}
+
+private struct LyricsScrollGeometry: Equatable {
+    let offset: CGFloat
+    let viewportHeight: CGFloat
+}
+
 enum LyricsChromeMotion {
     static let duration: TimeInterval = 0.42
 
@@ -430,10 +472,13 @@ struct NowPlayingView: View {
     @State private var lyricDragStartOffset: CGFloat?
     @State private var lyricScrollFollow = LyricsScrollFollowState()
     @State private var lyricFollowResumeTask: Task<Void, Never>?
-    @State private var pendingLyricsChromeHidden: Bool?
+    @State private var lyricsChromeScrollInteraction = LyricsChromeScrollInteraction()
 #if DEBUG
     private let recordsLyricsScrollSmoke = CommandLine.arguments.contains("-auralis-ui-smoke-lyrics-scroll")
     private let recordsLyricsMomentumSmoke = CommandLine.arguments.contains("-auralis-ui-smoke-lyrics-momentum")
+    private let recordsLyricsChromeSmoke = CommandLine.arguments.contains("-auralis-ui-smoke-lyrics-chrome-immediate")
+    @State private var lyricsChromeHidDuringDrag = false
+    @State private var lyricsChromeShowedDuringDrag = false
     @State private var lyricsMomentumReleaseOffset: CGFloat?
     @State private var lyricsMomentumResult = "waiting"
     @State private var lyricsScrollSmokeOffset: CGFloat?
@@ -1068,17 +1113,6 @@ struct NowPlayingView: View {
         .simultaneousGesture(lyricsActivityTapGesture)
     }
 
-    private func applyPendingLyricsChromeChange() {
-        guard let shouldHide = pendingLyricsChromeHidden,
-              !lyricScrollFollow.isUserScrolling else { return }
-        pendingLyricsChromeHidden = nil
-        if shouldHide {
-            hideLyricsChrome()
-        } else {
-            showLyricsChromeAndScheduleAutoHide()
-        }
-    }
-
     private func cancelLyricsChromeAutoHide() {
         guard let task = lyricsChromeAutoHideTask else { return }
         task.cancel()
@@ -1103,10 +1137,6 @@ struct NowPlayingView: View {
 
     private func hideLyricsChrome() {
         cancelLyricsChromeAutoHide()
-        guard !lyricScrollFollow.isUserScrolling else {
-            pendingLyricsChromeHidden = true
-            return
-        }
         guard !lyricsChromeHidden else { return }
         withAnimation(LyricsChromeMotion.animation(reduceMotion: reduceMotion)) {
             lyricsChromeHidden = true
@@ -1505,14 +1535,16 @@ struct NowPlayingView: View {
         lyricsScrollSmokeTask?.cancel()
         lyricsScrollSmokeTask = nil
         lyricsScrollSmokeResult = "waiting"
+        lyricsChromeHidDuringDrag = false
+        lyricsChromeShowedDuringDrag = false
 #endif
         lyricFollowResumeTask?.cancel()
         lyricFollowResumeTask = nil
         lyricScrollFollow = LyricsScrollFollowState()
-        pendingLyricsChromeHidden = nil
+        lyricsChromeScrollInteraction.end()
     }
 
-    private func handleLyricsScrollPhase(_ phase: ScrollPhase, offset: CGFloat) {
+    private func handleLyricsScrollPhase(_ phase: ScrollPhase, offset: CGFloat, viewportHeight: CGFloat) {
 #if DEBUG
         if recordsLyricsMomentumSmoke {
             if phase == .tracking { lyricsMomentumReleaseOffset = nil; lyricsMomentumResult = "waiting" }
@@ -1526,10 +1558,12 @@ struct NowPlayingView: View {
         if phase == .tracking || (phase == .interacting && lyricDragStartOffset == nil) {
             lyricDragStartOffset = offset
         }
-        if phase == .idle, let start = lyricDragStartOffset {
-            pendingLyricsChromeHidden = LyricsChromePolicy.terminalHidden(for: .init(width: 0, height: start - offset))
-            lyricDragStartOffset = nil
+        if phase == .tracking || (phase == .interacting && !lyricsChromeScrollInteraction.isActive) {
+            lyricsChromeScrollInteraction.begin(offset: offset, viewportHeight: viewportHeight)
+        } else if phase != .interacting {
+            lyricsChromeScrollInteraction.end()
         }
+        if phase == .idle { lyricDragStartOffset = nil }
         let wasUserScrolling = lyricScrollFollow.isUserScrolling
         lyricScrollFollow.update(phase: phase)
         if lyricScrollFollow.isUserScrolling {
@@ -1542,7 +1576,6 @@ struct NowPlayingView: View {
             lyricFollowResumeTask = nil
             cancelLyricsChromeAutoHide()
         } else if phase == .idle, wasUserScrolling || !lyricScrollFollow.isFollowingPlayback {
-            applyPendingLyricsChromeChange()
             scheduleLyricsChromeAutoHide()
             scheduleLyricFollowResume()
 #if DEBUG
@@ -1551,7 +1584,29 @@ struct NowPlayingView: View {
         }
     }
 
+    private func handleLyricsScrollGeometry(_ old: LyricsScrollGeometry, _ new: LyricsScrollGeometry) {
+        guard page == .lyrics, lyricsChromeScrollInteraction.isActive else { return }
 #if DEBUG
+        if recordsLyricsChromeSmoke {
+            // Observe actual viewport resizing before the native drag ends, rather
+            // than treating the eventual button/selection state as proof of timing.
+            if lyricsChromeHidden, new.viewportHeight > old.viewportHeight { lyricsChromeHidDuringDrag = true }
+            if !lyricsChromeHidden, new.viewportHeight < old.viewportHeight { lyricsChromeShowedDuringDrag = true }
+        }
+#endif
+        guard let hidden = lyricsChromeScrollInteraction.update(offset: new.offset, viewportHeight: new.viewportHeight) else { return }
+        if hidden { hideLyricsChrome() }
+        else { showLyricsChromeAndScheduleAutoHide() }
+    }
+
+#if DEBUG
+    private var lyricsChromeSmokeResult: String {
+        if lyricsChromeHidDuringDrag && lyricsChromeShowedDuringDrag { return "passed:hide-and-show-during-drag" }
+        if lyricsChromeHidDuringDrag { return "hidden-during-drag" }
+        if lyricsChromeShowedDuringDrag { return "shown-during-drag" }
+        return "waiting"
+    }
+
     /// 在真实的五秒浏览窗口内采样原生 ScrollView，结果保留给可能很慢的 AX 查询。
     /// 不更改播放、跟随策略或恢复时限；仅由 UI smoke 启动参数启用。
     private func sampleLyricsScrollSmokeIfRequested() {
@@ -1599,14 +1654,14 @@ struct NowPlayingView: View {
     @ViewBuilder
     private func observeLyricsScrollSmoke<Content: View>(_ content: Content) -> some View {
 #if DEBUG
-        if recordsLyricsScrollSmoke || recordsLyricsMomentumSmoke {
+        if recordsLyricsScrollSmoke || recordsLyricsMomentumSmoke || recordsLyricsChromeSmoke {
             content
                 .onScrollGeometryChange(for: CGFloat.self) { geometry in
                     geometry.contentOffset.y
                 } action: { _, offset in
                     lyricsScrollSmokeOffset = offset
                 }
-                .accessibilityValue(recordsLyricsMomentumSmoke ? lyricsMomentumResult : lyricsScrollSmokeResult)
+                .accessibilityValue(recordsLyricsChromeSmoke ? lyricsChromeSmokeResult : recordsLyricsMomentumSmoke ? lyricsMomentumResult : lyricsScrollSmokeResult)
         } else {
             content
         }
@@ -1724,8 +1779,13 @@ struct NowPlayingView: View {
                 .padding(.vertical, AuralisSpacing.huge)
             }
             .accessibilityIdentifier("auralis.nowPlaying.lyricsScroll")
+            .onScrollGeometryChange(for: LyricsScrollGeometry.self) { geometry in
+                LyricsScrollGeometry(offset: geometry.contentOffset.y, viewportHeight: geometry.containerSize.height)
+            } action: { old, new in
+                handleLyricsScrollGeometry(old, new)
+            }
             .onScrollPhaseChange { _, phase, context in
-                handleLyricsScrollPhase(phase, offset: context.geometry.contentOffset.y)
+                handleLyricsScrollPhase(phase, offset: context.geometry.contentOffset.y, viewportHeight: context.geometry.containerSize.height)
             }
             .onChange(of: activeIndex) { _, _ in
                 scrollToCurrentLyric(animated: true)
