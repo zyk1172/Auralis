@@ -252,6 +252,10 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         lower.press(forDuration: 0.05, thenDragTo: upper, withVelocity: .slow, thenHoldForDuration: 0.8)
         upper.press(forDuration: 0.05, thenDragTo: lower, withVelocity: .slow, thenHoldForDuration: 0.8)
 
+        guard scroll.exists else {
+            XCTFail("Pulling lyrics down must keep the player open; hierarchy: \(app.debugDescription)")
+            return
+        }
         let sample = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "value == %@", "passed:hide-and-show-during-drag"),
             object: scroll
@@ -322,7 +326,9 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         print("Landscape pager before the lyrics command: \(String(describing: pager.value))")
         app.buttons["auralis.nowPlaying.lyrics"].firstMatch.tap()
         XCTAssertTrue(app.scrollViews["auralis.nowPlaying.lyricsScroll"].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertEqual(pager.value as? String, "animated-horizontal-offset", "Landscape must animate within the right column")
+        let motion = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "animated-horizontal-offset"), object: pager)
+        XCTAssertEqual(XCTWaiter.wait(for: [motion], timeout: 15), .completed,
+                       "Landscape must animate within the right column; actual: \(String(describing: pager.value))")
         XCTAssertTrue(artwork.exists, "The enlarged cover must remain beside landscape lyrics")
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Landscape artwork and lyrics"

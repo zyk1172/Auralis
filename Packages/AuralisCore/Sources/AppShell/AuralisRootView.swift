@@ -543,6 +543,9 @@ private struct IOSMusicShell: View {
                     in: nowPlayingTransitionNamespace,
                     reduceMotion: reduceMotion
                 )
+                // Lyrics can be pulled down to restore their controls, including at
+                // the top of the scroll view. Reserve dismissal for our own handle.
+                .interactiveDismissDisabled()
         }
         .sheet(isPresented: $model.shouldPresentServerSetup) {
             ServerConnectionSheet(model: model, theme: themeStore.current)
