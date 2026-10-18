@@ -77,7 +77,10 @@ struct NowPlayingPager<Content: View>: View {
 #endif
                 }
                 .onScrollPhaseChange { _, phase in
-                    if phase == .tracking || phase == .interacting {
+                    // Tracking also occurs when tapping an in-page navigation button
+                    // or touching vertical lyrics. Only a real horizontal pan may
+                    // write the visible page back or supersede a button command.
+                    if phase == .interacting {
                         userIsScrolling = true
 #if DEBUG
                         hasPageCommand = false
