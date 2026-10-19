@@ -223,6 +223,10 @@ class AuralisPreferences(private val context: Context) {
 
     private val aiEnabled = booleanPreferencesKey("auralis.ai.enabled")
     private val aiConsentGiven = booleanPreferencesKey("auralis.ai.consentGiven")
+    private val classificationConsent = booleanPreferencesKey("auralis.classification.metadataConsent")
+    val classificationConsentFlow: Flow<Boolean> = store.data.map { it[classificationConsent] ?: false }
+    suspend fun classificationConsentValue(): Boolean = store.data.first()[classificationConsent] ?: false
+    suspend fun setClassificationConsent(value: Boolean) { store.edit { it[classificationConsent] = value } }
     private val aiBaseUrl = stringPreferencesKey("auralis.ai.base-url")
     private val aiApiPath = stringPreferencesKey("auralis.ai.api-path")
     private val aiModel = stringPreferencesKey("auralis.ai.model")

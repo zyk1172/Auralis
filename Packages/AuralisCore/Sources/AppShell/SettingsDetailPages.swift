@@ -387,17 +387,9 @@ struct AgentSettingsPage: View {
                         .tint(theme.colorTokens.accent.color)
                     LabeledContent(String(localized: "规则版本", bundle: .module), value: status.rulesVersion)
                     LabeledContent(String(localized: "索引格式", bundle: .module), value: String(localized: "索引包 v\(LocalCatalogStore.recommendationIndexPackageFormatVersion)", bundle: .module))
-                    Button {
-                        model.startOrContinueRecommendationIndex()
-                    } label: {
-                        Label(
-                            status.pendingTracks == 0
-                                ? String(localized: "检查并更新索引", bundle: .module)
-                                : String(localized: "开始/继续全量索引", bundle: .module),
-                            systemImage: "sparkles.rectangle.stack"
-                        )
+                    NavigationLink(String(localized: "标签分类", bundle: .module)) {
+                        TagClassificationSettingsPage(model: model)
                     }
-                    .disabled(model.catalog.activeServerID == nil || model.agentCoordinator.isRunning)
                     HStack {
                         Button(String(localized: "导出索引…", bundle: .module)) { Task { await exportIndex() } }
                             .disabled(model.catalog.activeServerID == nil || isPerformingIndexTransfer)
@@ -411,7 +403,7 @@ struct AgentSettingsPage: View {
                             Label(String(localized: "清空索引…", bundle: .module), systemImage: "trash")
                         }
                     }
-                        .disabled(model.catalog.activeServerID == nil || model.agentCoordinator.isRunning || isClearingIndex || isPerformingIndexTransfer)
+                        .disabled(model.catalog.activeServerID == nil || model.tagClassification.isRunning || isClearingIndex || isPerformingIndexTransfer)
                     if let indexTransferMessage {
                         Text(indexTransferMessage)
                             .font(.caption)
@@ -422,12 +414,9 @@ struct AgentSettingsPage: View {
                     Text(String(localized: "连接并同步音乐库后，可查看索引进度。", bundle: .module))
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
-                    Button {
-                        model.startOrContinueRecommendationIndex()
-                    } label: {
-                        Label(String(localized: "开始全量索引", bundle: .module), systemImage: "sparkles.rectangle.stack")
+                    NavigationLink(String(localized: "标签分类", bundle: .module)) {
+                        TagClassificationSettingsPage(model: model)
                     }
-                    .disabled(model.catalog.activeServerID == nil || model.agentCoordinator.isRunning)
                 }
             }
             Section(String(localized: "助手偏好", bundle: .module)) {

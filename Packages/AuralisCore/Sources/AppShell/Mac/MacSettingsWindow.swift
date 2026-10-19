@@ -88,6 +88,7 @@ public struct MacSettingsWindow: View {
                 LabeledContent(String(localized: "歌单", bundle: .module), value: "\(model.catalog.playlists.count)")
             }
             CatalogSyncSection(model: model, theme: theme)
+            TagClassificationControls(model: model)
             Section(String(localized: "网络音质", bundle: .module)) {
                 Toggle(String(localized: "Wi-Fi 优先原始音质", bundle: .module), isOn: $highQualityWiFi)
                 Text(String(localized: "开启后 Wi-Fi / 有线网络下优先使用服务器原始质量；关闭则限制码率（MP3 320kbps）以节省带宽。", bundle: .module))
@@ -293,10 +294,8 @@ public struct MacSettingsWindow: View {
                     LabeledContent(String(localized: "规则版本", bundle: .module), value: status.rulesVersion)
                     LabeledContent(String(localized: "索引格式", bundle: .module), value: "索引包 v\(LocalCatalogStore.recommendationIndexPackageFormatVersion)")
                     HStack {
-                        Button(status.pendingTracks == 0 ? String(localized: "检查并更新索引", bundle: .module) : String(localized: "开始/继续全量索引", bundle: .module)) {
-                            model.startOrContinueRecommendationIndex()
-                        }
-                        .disabled(model.catalog.activeServerID == nil || model.agentCoordinator.isRunning)
+                        Button(String(localized: "标签分类", bundle: .module)) { settingsRouter.selection = .libraryPlayback }
+                        .disabled(model.catalog.activeServerID == nil || model.tagClassification.isRunning)
                         Button(String(localized: "导出索引…", bundle: .module)) { Task { await exportIndex() } }
                             .disabled(model.catalog.activeServerID == nil || isPerformingIndexTransfer)
                         Button(String(localized: "导入索引…", bundle: .module)) { isImportingIndex = true }
@@ -304,17 +303,15 @@ public struct MacSettingsWindow: View {
                         Button(role: .destructive) { isConfirmingIndexClear = true } label: {
                             Label(isClearingIndex ? String(localized: "正在清空索引…", bundle: .module) : String(localized: "清空索引…", bundle: .module), systemImage: "trash")
                         }
-                            .disabled(model.catalog.activeServerID == nil || model.agentCoordinator.isRunning || isClearingIndex || isPerformingIndexTransfer)
+                            .disabled(model.catalog.activeServerID == nil || model.tagClassification.isRunning || isClearingIndex || isPerformingIndexTransfer)
                         Button(String(localized: "刷新状态", bundle: .module)) { Task { await refreshIndexStatus() } }
                     }
                 } else {
                     Text(String(localized: "连接并同步音乐库后，可查看索引进度。", bundle: .module))
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
-                    Button(String(localized: "开始全量索引", bundle: .module)) {
-                        model.startOrContinueRecommendationIndex()
-                    }
-                    .disabled(model.catalog.activeServerID == nil || model.agentCoordinator.isRunning)
+                    Button(String(localized: "标签分类", bundle: .module)) { settingsRouter.selection = .libraryPlayback }
+                    .disabled(model.catalog.activeServerID == nil || model.tagClassification.isRunning)
                 }
                 if let indexTransferMessage {
                     Text(indexTransferMessage)

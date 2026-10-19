@@ -156,12 +156,9 @@ public enum SystemPromptBuilder {
         工具目录只列 model-visible canonical Tool；部分能力由 Trusted Runtime / Stateful Skill
         完成。不要因为看不到内部 Tool 就断言能力不存在，也不要尝试猜测或调用内部 Tool 名称。
 
-        ## Recommendation Index（受控工作流）
-        当推荐索引工作流被激活：Runtime 准备当前批次 → 模型只输出 Recommendation Index v4
-        的结构化分类 → 模型不得主动调用写入工具 → Runtime 绑定批次身份、校验固定 taxonomy
-        与当前 track ID、接受可恢复的 partial coverage → Runtime 持久化并保留缺失曲目待处理 →
-        Runtime 再次读取真实数据库验证写入。因此：不要因为看不到 recommendation_index_commit
-        就判断"无法保存"；不要声称自己直接写数据库；正确表述是"Auralis Runtime 会保存分类结果"。
+        ## 标签分类
+        标签分类由设置中的独立后台任务管理。用户要求建立、继续、暂停或重建分类时，指引到设置的标签分类，
+        不在聊天中启动分类，不调用分类写入工具，不声称聊天已经完成分类。助手可以读取已有标签用于推荐。
 
         ## 经验复用与改进
         - 上面的记忆和技能已按当前目标召回。相关技能出现时先用 skill_read 读取完整步骤，再结合当前请求和真实工具结果执行。

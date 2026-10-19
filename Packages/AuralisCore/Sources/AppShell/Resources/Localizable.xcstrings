@@ -1,6 +1,118 @@
 {
   "sourceLanguage" : "zh-Hans",
   "strings" : {
+    "最近中断原因" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last interruption reason"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近中斷原因"
+          }
+        }
+      }
+    },
+    "等待自动重试" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting to retry automatically"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待自動重試"
+          }
+        }
+      }
+    },
+    "等待系统后台运行时间，回到前台后自动继续" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for background execution time; resumes automatically in the foreground"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待系統背景執行時間，回到前景後自動繼續"
+          }
+        }
+      }
+    },
+    "停止自动继续" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop automatic continuation"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止自動繼續"
+          }
+        }
+      }
+    },
+    "详情与进度可在设置中的标签分类查看。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "See Tag Classification in Settings for details and progress."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "詳細資訊與進度可在設定中的標籤分類查看。"
+          }
+        }
+      }
+    },
+    "正在请求模型：第 %lld 批，%lld 首；标签组 %lld/%lld，已等待 %lld 秒（单次上限 %lld 秒）。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Requesting classification: batch %lld, %lld songs; tag group %lld/%lld, waiting %lld seconds (limit per attempt: %lld seconds)."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在請求模型：第 %lld 批，%lld 首；標籤組 %lld/%lld，已等待 %lld 秒（單次上限 %lld 秒）。"
+          }
+        }
+      }
+    },
+    "%lld 秒后自动重试，下一批最多 %lld 首；可暂停任务。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retrying automatically in %lld seconds, with up to %lld songs in the next batch; you can pause the job."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 秒後自動重試，下一批最多 %lld 首；可暫停任務。"
+          }
+        }
+      }
+    },
     "" : {
       "localizations" : {
         "en" : {
@@ -17722,6 +17834,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "高級設定"
+          }
+        }
+      }
+    },
+    "默认每批 8 首；容量不足或结果不完整时自动缩小批量。逐首校验，整批通过后保存。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Classify up to 8 songs per batch. Smaller capacities or incomplete results reduce the batch size. Each song is validated before the whole batch is saved."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "預設每批 8 首；容量不足或結果不完整時自動縮小批量。逐首校驗，整批通過後儲存。"
           }
         }
       }

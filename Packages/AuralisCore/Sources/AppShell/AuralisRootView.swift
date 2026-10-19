@@ -532,6 +532,7 @@ private struct IOSMusicShell: View {
             dockOverlay
                 .ignoresSafeArea(.keyboard, edges: .bottom)
         }
+        .overlay(alignment: .top) { TagClassificationNotice(model: model) }
         // 正在播放页必须真正覆盖整块屏幕。iOS 26 的 large sheet 会保留
         // 明显的顶部外露区域和圆角，视觉上仍像半屏卡片；改为 fullScreenCover，
         // 背景可延伸到状态栏，关闭手势由 NowPlayingView 自己的顶部拖拽柄承担。
@@ -542,6 +543,9 @@ private struct IOSMusicShell: View {
                     in: nowPlayingTransitionNamespace,
                     reduceMotion: reduceMotion
                 )
+                // Lyrics can be pulled down to restore their controls, including at
+                // the top of the scroll view. Reserve dismissal for our own handle.
+                .interactiveDismissDisabled()
         }
         .sheet(isPresented: $model.shouldPresentServerSetup) {
             ServerConnectionSheet(model: model, theme: themeStore.current)
@@ -1676,8 +1680,11 @@ struct BrowseDetailSheet: View {
                 // 本地按流派筛选为空时，从服务器按流派拉取真实歌曲
                 // （Navidrome 等服务器 getGenres 常为空，但按流派列专辑可用）。
                 model.loadGenreTracks(genre)
-            } else if case let .recommendationCategory(category) = destination {
-                loadRecommendationCategoryTracks(category)
+            }
+        }
+        .task(id: "\(destination.id)|\(model.tagClassificationRefreshID)") {
+            if case let .recommendationCategory(category) = destination {
+                await loadRecommendationCategoryTracks(category)
             }
         }
         .confirmationDialog(
@@ -1988,20 +1995,20 @@ struct BrowseDetailSheet: View {
         }
     }
 
-    private func loadRecommendationCategoryTracks(_ category: RecommendationIndexCategory) {
-        guard categoryTracks == nil, categoryLoadError == nil else { return }
-        categoryTracks = []
-        Task {
-            do {
-                let tracks = try await model.catalogCoordinator.store.recommendationIndexTracks(
-                    serverID: model.catalog.activeAccount?.id,
-                    dimension: category.dimension,
-                    value: category.value
-                )
-                categoryTracks = tracks
-            } catch {
+    private func loadRecommendationCategoryTracks(_ category: RecommendationIndexCategory) async {
+        guard let serverID = model.catalog.activeAccount?.id else {
+            categoryTracks = []; categoryLoadError = nil; return
+        }
+        categoryLoadError = nil
+        do {
+            let loaded = try await model.catalogCoordinator.store.recommendationIndexTracks(
+                serverID: serverID, dimension: category.dimension, value: category.value
+            )
+            guard model.catalog.activeAccount?.id == serverID, !Task.isCancelled else { return }
+            categoryTracks = loaded
+        } catch {
+            guard model.catalog.activeAccount?.id == serverID, !Task.isCancelled else { return }
             categoryLoadError = String(localized: "读取分类歌曲失败：\(error.localizedDescription)", bundle: .module)
-            }
         }
     }
 

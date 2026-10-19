@@ -651,6 +651,12 @@ public final class AgentCoordinator: ObservableObject {
             // 只取最近一条完整任务指令，避免第二次“继续”把索引/批处理意图
             // 降级成 conversation，进而让索引工具从动态 schema 中消失。
             let historyText = AgentHistoryPolicy.relevantHistoryText(for: trimmed, in: history)
+            if provider == nil, RecommendationIndexTaskRules.requiresCompleteBuild(text: trimmed, historyText: historyText) {
+                await self.receive(AgentChatMessage(role: .user, messages: [.text(trimmed)]), sessionID: sessionID, runID: runID)
+                await self.receive(AgentChatMessage(role: .assistant, messages: [.text("标签分类已移至设置，请在设置中的标签分类管理后台任务。")]), sessionID: sessionID, runID: runID)
+                self.finishOwnedRun(runID)
+                return
+            }
             var executionLineage = ExecutionLineageResolver.resolve(
                 currentUserText: trimmed,
                 originUserMessageID: originUserMessageID,

@@ -83,6 +83,9 @@ import com.auralis.core.domain.ServerId
 import com.auralis.core.domain.Track
 import com.auralis.core.image.AuralisArtwork
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 /**
  * Android Library mirrors iOS `LibraryView` and the surrounding `IOSMusicShell` navigation chrome.
@@ -408,14 +411,19 @@ private fun CategoryScope(
     var reload by remember(serverId) { mutableIntStateOf(0) }
 
     LaunchedEffect(serverId, reload) {
-        categories = null
         error = null
-        runCatching { graph.recommendationIndex.categories(serverId) }
-            .onSuccess { categories = it.sortedWith(compareByDescending<RecommendationIndexCategory> { item -> item.trackCount }.thenBy { item -> item.id }) }
-            .onFailure { throwable -> error = throwable.message ?: throwable::class.java.simpleName }
+        try {
+            val loaded = graph.recommendationIndex.categories(serverId)
+            currentCoroutineContext().ensureActive()
+            categories = loaded.sortedWith(compareByDescending<RecommendationIndexCategory> { item -> item.trackCount }.thenBy { item -> item.id })
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (throwable: Throwable) {
+            error = throwable.message ?: throwable::class.java.simpleName
+        }
     }
-    LaunchedEffect(recommendationIndexState.lastCompletedAtMillis) {
-        if (recommendationIndexState.lastCompletedAtMillis != null) reload += 1
+    LaunchedEffect(recommendationIndexState.progress?.indexedTracks, recommendationIndexState.isRunning, recommendationIndexState.lastCompletedAtMillis) {
+        if (recommendationIndexState.progress != null || recommendationIndexState.lastCompletedAtMillis != null) reload += 1
     }
 
     val refreshIndexAndCategories = {

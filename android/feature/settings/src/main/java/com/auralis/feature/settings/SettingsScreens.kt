@@ -97,6 +97,7 @@ fun SettingsScreen(
     modifier: Modifier = Modifier,
 ) {
     var pageOrdinal by rememberSaveable { mutableIntStateOf(NO_PAGE) }
+    LaunchedEffect(graph) { graph.tagClassification.refresh() }
     var returnFocusItem by rememberSaveable { mutableIntStateOf(NO_FOCUS_ITEM) }
     val rootListState = rememberLazyListState()
     val page = SettingsPage.entries.getOrNull(pageOrdinal)
@@ -169,11 +170,14 @@ private const val ROOT_ITEM_THEME = 14
 
 @Composable
 private fun RecommendationIndexSettingsCard(
+    graph: AuralisGraph,
     state: RecommendationIndexUiState,
     onStart: () -> Unit,
     onCancel: () -> Unit,
     onRefresh: () -> Unit,
 ) {
+    val consent by graph.preferences.classificationConsentFlow.collectAsState(initial = false)
+    val scope = rememberCoroutineScope()
     val colors = LocalAuralisTheme.current.colors
     val error = state.error
     val status = when {
@@ -183,6 +187,7 @@ private fun RecommendationIndexSettingsCard(
             state.totalTracks,
         )
         error != null -> stringResource(R.string.settings_recommendation_index_error_format, error)
+        state.isPaused -> stringResource(R.string.settings_classification_paused)
         state.totalTracks == 0 -> stringResource(R.string.settings_recommendation_index_no_tracks)
         state.pendingTracks > 0 -> stringResource(
             R.string.settings_recommendation_index_pending_format,
@@ -209,13 +214,28 @@ private fun RecommendationIndexSettingsCard(
                 Text(status, style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
             }
             when {
-                state.isRunning -> TextButton(onClick = onCancel) { Text(stringResource(AuralisR.string.cancel)) }
-                state.pendingTracks > 0 || state.error != null -> TextButton(onClick = onStart) {
+                state.isRunning -> TextButton(onClick = onCancel) { Text(stringResource(R.string.settings_classification_pause)) }
+                else -> TextButton(onClick = onStart, enabled = consent) {
                     Text(stringResource(R.string.settings_recommendation_index_start))
                 }
-                else -> TextButton(onClick = onRefresh) {
-                    Text(stringResource(R.string.settings_recommendation_index_refresh))
-                }
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(R.string.settings_classification_consent), modifier = Modifier.weight(1f), color = colors.primaryText)
+            androidx.compose.material3.Switch(checked = consent, onCheckedChange = { allowed ->
+                if (!allowed) graph.tagClassification.pause()
+                scope.launch { graph.preferences.setClassificationConsent(allowed) }
+            })
+        }
+        Text(stringResource(R.string.settings_classification_note), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+        if (state.isRunning && error != null) {
+            Text(error, style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+        }
+        TextButton(onClick = onRefresh) { Text(stringResource(R.string.settings_recommendation_index_refresh)) }
+        if (state.unlabeledTracks > 0) {
+            Text(stringResource(R.string.settings_classification_unlabeled, state.unlabeledTracks), color = colors.secondaryText)
+            TextButton(onClick = graph.tagClassification::retryUnlabeled, enabled = consent && !state.isRunning) {
+                Text(stringResource(R.string.settings_classification_retry_unlabeled))
             }
         }
         if (state.isRunning && state.totalTracks > 0) {
@@ -340,6 +360,7 @@ private fun SettingsRootPage(
             }
             item {
                 RecommendationIndexSettingsCard(
+                    graph = graph,
                     state = recommendationIndexState,
                     onStart = onStartRecommendationIndex,
                     onCancel = onCancelRecommendationIndex,

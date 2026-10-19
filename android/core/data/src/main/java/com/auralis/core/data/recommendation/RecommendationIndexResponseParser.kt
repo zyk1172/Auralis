@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-package com.auralis.feature.assistant
+package com.auralis.core.data.recommendation
 
 import com.auralis.core.domain.GlobalId
 import com.auralis.core.domain.RecommendationIndex
@@ -63,7 +63,7 @@ internal class RecommendationIndexResponseParser(
             runCatching { element.jsonArray }.getOrNull()?.forEach { tagElement ->
                 val id = runCatching { tagElement.jsonPrimitive.contentOrNull }.getOrNull()?.trim()
                     ?: return@forEach
-                val definition = RecommendationIndexTaxonomy.definition(id) ?: return@forEach
+                val definition = RecommendationIndexTaxonomy.resolve(id) ?: return@forEach
                 if (seen.size >= 64 || !seen.add(definition.id)) return@forEach
                 tags += RecommendationIndexTag(definition.dimension, definition.id, confidence)
             }

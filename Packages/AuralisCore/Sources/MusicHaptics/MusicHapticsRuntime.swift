@@ -2726,6 +2726,10 @@ public final class MusicHapticsCoordinator {
         // otherwise a fast remote progress update could make a live tap look
         // detached or reset its throughput to zero.
         analysisSnapshot.tapAttached = snapshot.tapAttached || previous.tapAttached
+        analysisSnapshot.coverage = max(snapshot.coverage, previous.coverage)
+        analysisSnapshot.eventCount = max(snapshot.eventCount, previous.eventCount)
+        analysisSnapshot.transientCount = max(snapshot.transientCount, previous.transientCount)
+        analysisSnapshot.continuousCount = max(snapshot.continuousCount, previous.continuousCount)
         analysisSnapshot.droppedFrames = max(snapshot.droppedFrames, previous.droppedFrames)
         analysisSnapshot.droppedAudioDuration = max(
             snapshot.droppedAudioDuration,

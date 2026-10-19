@@ -70,6 +70,16 @@ public final class AuralisAppModel: ObservableObject {
     /// 视图持有它而非各自新建，保证「统一播放状态」。
     public static let shared = AuralisAppModel()
     @Published public var selectedSection: AppSection = .home
+    @Published public internal(set) var tagClassification = TagClassificationState()
+    var tagClassificationTask: Task<Void, Never>?
+    var tagClassificationDefaults: UserDefaults { defaults }
+#if os(iOS)
+    var tagClassificationBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+    var tagClassificationExecution = TagClassificationExecutionState()
+    var tagClassificationProcessingLeaseID: UUID?
+#elseif os(macOS)
+    var tagClassificationActivity: NSObjectProtocol?
+#endif
     public let playbackStore: PlaybackStore
     /// 播放队列展示状态：与高频播放状态分离，上万首队列更新只发布到这里，
     /// 普通播放器控件不再因 queue 变化整体 invalidate。
@@ -1084,6 +1094,7 @@ public final class AuralisAppModel: ObservableObject {
             schedulePlaybackSessionPersistence(immediate: true)
         }
         syncProgressTimer()
+        updateTagClassificationExecutionForPlayback()
     }
 
     /// Scene lifecycle boundary. The coordinator preserves analysis state in
@@ -1091,6 +1102,7 @@ public final class AuralisAppModel: ObservableObject {
     /// AVPlayer position is available again.
     public func applicationDidEnterBackground() {
         isInBackground = true
+        tagClassificationDidEnterBackground()
         // UI position publishing is not needed to keep AVPlayer alive. Stop
         // the RunLoop timer before the scene is suspended so it cannot keep
         // waking the MainActor while audio continues in the background.
@@ -1103,6 +1115,7 @@ public final class AuralisAppModel: ObservableObject {
 
     public func applicationDidBecomeActive() async {
         isInBackground = false
+        tagClassificationDidBecomeActive()
         await keepAudioSessionActive()
         let state = await engine.state()
         let position = await engine.currentPosition() ?? playbackPosition
@@ -2952,14 +2965,9 @@ public final class AuralisAppModel: ObservableObject {
         pendingApplyDerivations = nil
     }
 
-    /// 设置页的快捷入口：复用 Agent 已验证的“状态 → 分批分类 → 写回至 0”流程，
-    /// 由 RecommendationIndexWorkflow 的索引任务约束保证不会在中途把自然语言回复误报为完成。
+    /// Compatibility entry point; classification is owned by the app, never the chat session.
     public func startOrContinueRecommendationIndex() {
-        selectTopLevelSection(.assistant)
-        agentCoordinator.send(
-            "开始并一次性完成推荐索引：持续分批分类并写回，直到待分类为 0。",
-            intent: .libraryManagement
-        )
+        startTagClassification()
     }
 
     /// 助手是否正在运行（输入框按钮在「发送 / 停止」之间切换）。
@@ -5930,6 +5938,7 @@ public final class AuralisAppModel: ObservableObject {
             }
             guard !result.tracks.isEmpty else { throw ServerConnectionError.emptyLibrary }
             apply(result)
+            resumeRequestedTagClassification()
             recordConnectionDiagnostics(host: input.baseURL.host, url: input.baseURL, error: nil, message: String(localized: "连接成功", bundle: .module), requestAttempted: true)
         } catch is CancellationError {
             serverConnectionState = .failed(ServerConnectionError.cancelled.localizedDescription)
@@ -6014,6 +6023,7 @@ public final class AuralisAppModel: ObservableObject {
                 metadata: startupMetadata
             )
             schedulePostRestoreMaintenance()
+            resumeRequestedTagClassification()
             // apply() 末尾已触发 registerAndSync，此处不再重复。
             // 自愈：恢复出的资料库为空（旧快照损坏 / 历史某次同步失败遗留）时，
             // 后台用服务器凭据重新全量同步并刷回界面，避免资料库一直显示 0 首。

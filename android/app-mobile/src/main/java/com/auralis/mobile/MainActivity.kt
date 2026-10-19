@@ -18,7 +18,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -99,10 +98,9 @@ private sealed interface Route {
 private fun AppRoot(graph: AuralisGraph) {
     var route by rememberSaveable(stateSaver = MobileRouteSaver) { mutableStateOf<Route>(Route.Boot) }
     var shellReady by rememberSaveable { mutableStateOf(false) }
-    var startRecommendationIndexToken by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     val assistantCoordinator = remember(graph, scope) { AssistantCoordinator(graph, scope) }
-    val recommendationIndexState by assistantCoordinator.recommendationIndex.collectAsState()
+    val recommendationIndexState by graph.tagClassification.state.collectAsState()
 
     LaunchedEffect(graph) {
         val restoredServers = runCatching { graph.bootstrapFromLocal() }.getOrDefault(emptyList())
@@ -130,8 +128,6 @@ private fun AppRoot(graph: AuralisGraph) {
                 onOpenAiSettings = { route = Route.AiSettings },
                 onOpenEditHomeLayout = { route = Route.HomeLayoutEdit },
                 recommendationIndexState = recommendationIndexState,
-                startRecommendationIndexToken = startRecommendationIndexToken,
-                onRecommendationIndexStartConsumed = { startRecommendationIndexToken = 0 },
             )
         }
 
@@ -179,12 +175,9 @@ private fun AppRoot(graph: AuralisGraph) {
                 onEditHomeLayout = { route = Route.HomeLayoutEdit },
                 onOpenAiSettings = { route = Route.AiSettings },
                 recommendationIndexState = recommendationIndexState,
-                onStartRecommendationIndex = {
-                    startRecommendationIndexToken += 1
-                    route = Route.Shell
-                },
-                onCancelRecommendationIndex = assistantCoordinator::cancelRecommendationIndexBuild,
-                onRefreshRecommendationIndex = assistantCoordinator::refreshRecommendationIndexStatus,
+                onStartRecommendationIndex = graph.tagClassification::start,
+                onCancelRecommendationIndex = graph.tagClassification::pause,
+                onRefreshRecommendationIndex = graph.tagClassification::refresh,
             )
 
             Route.AiSettings -> AiSettingsPage(

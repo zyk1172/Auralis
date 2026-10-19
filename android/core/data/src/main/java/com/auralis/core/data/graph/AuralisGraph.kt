@@ -98,6 +98,7 @@ class AuralisGraph(context: Context) {
 
     /** 与 Catalog 使用同一个 Room 实例；Categories / Agent classifier 只能从这里访问索引。 */
     val recommendationIndex = RecommendationIndexStore(database)
+    val tagClassification = com.auralis.core.data.recommendation.TagClassificationManager(this)
 
     val connector = ProductionServerConnector(vault, roomCatalogRepository)
 
@@ -249,6 +250,8 @@ class AuralisGraph(context: Context) {
 
     /** App 启动装配（幂等、同步、不阻塞：本地目录扫描放到 appScope 后台执行）。 */
     fun install() {
+        com.auralis.core.data.recommendation.TagClassificationService.manager = tagClassification
+        tagClassification.refresh()
         PlaybackDependencies.install(playbackResolver, historyCoordinator)
         // 封面 URL 解析可能触及凭据读取（Keystore 解密），因此必须保持挂起语义：
         // 历史实现用 runBlocking 包了 suspend 调用，任何在 Main 上解析封面的调用点都会直接卡住主线程。

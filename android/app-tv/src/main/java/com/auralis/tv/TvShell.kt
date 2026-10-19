@@ -90,8 +90,6 @@ fun TvShell(
     onOpenServers: () -> Unit,
     onOpenAiSettings: () -> Unit,
     recommendationIndexState: RecommendationIndexUiState = RecommendationIndexUiState(),
-    startRecommendationIndexToken: Int = 0,
-    onRecommendationIndexStartConsumed: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
@@ -131,16 +129,7 @@ fun TvShell(
         runCatching { sectionFocus.getValue(section).requestFocus() }
     }
 
-    LaunchedEffect(startRecommendationIndexToken) {
-        if (startRecommendationIndexToken > 0) {
-            section = TvSection.Assistant
-            browseDestination = null
-            playerOpen = false
-            onRecommendationIndexStartConsumed()
-            yield()
-            runCatching { sectionFocus.getValue(TvSection.Assistant).requestFocus() }
-        }
-    }
+
 
     LaunchedEffect(playerOpen, browseDestination, pendingFocusRestore) {
         if (playerOpen) return@LaunchedEffect
@@ -293,12 +282,9 @@ fun TvShell(
                                         onAppendToQueue = ::appendQueueShelf,
                                         onBrowse = ::openBrowse,
                                         recommendationIndexState = recommendationIndexState,
-                                        onStartRecommendationIndex = {
-                                            section = TvSection.Assistant
-                                            assistantCoordinator.startRecommendationIndexBuild()
-                                        },
-                                        onCancelRecommendationIndex = assistantCoordinator::cancelRecommendationIndexBuild,
-                                        onRefreshRecommendationIndex = assistantCoordinator::refreshRecommendationIndexStatus,
+                                        onStartRecommendationIndex = onOpenSettings,
+                                        onCancelRecommendationIndex = graph.tagClassification::pause,
+                                        onRefreshRecommendationIndex = graph.tagClassification::refresh,
                                         bottomChromeClearance = 24.dp,
                                         modifier = Modifier.fillMaxSize(),
                                     )
