@@ -5,6 +5,9 @@ import android.content.Intent
 import androidx.core.content.ContextCompat
 import com.auralis.core.ai.AiProviderConfiguration
 import com.auralis.core.ai.AiProviderFactory
+import com.auralis.core.ai.AiReasoningConfiguration
+import com.auralis.core.ai.AiReasoningDialect
+import com.auralis.core.data.R
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.data.prefs.AiConnectionSettings
 import com.auralis.core.domain.RecommendationIndexStatus
@@ -58,12 +61,18 @@ class TagClassificationManager(private val graph: AuralisGraph) {
                     id = "tag-classification", name = "标签分类", baseUrl = settings.baseUrl,
                     apiPath = settings.apiPath, model = settings.model, credentialId = AiConnectionSettings.API_KEY_REFERENCE,
                     maxTokens = settings.maxOutputTokens, maxContextTokens = settings.maxContextTokens,
-                    usesStreaming = false, supportsToolCalling = false,
+                    timeoutMillis = 300_000,
+                    usesStreaming = true, supportsToolCalling = false, supportsReasoningControl = true,
+                    reasoningDialect = runCatching { AiReasoningDialect.valueOf(settings.reasoningDialect) }.getOrDefault(AiReasoningDialect.Manual),
                     assumesImplicitStreamTermination = settings.assumesImplicitStreamTermination,
                 ), apiKeyProvider = { key })
                 TagClassificationRunner(graph.recommendationIndex, provider, settings.model,
-                    maxOutputTokens = settings.maxOutputTokens).run(target, authorize = { authorize(target) }) { progress ->
-                    mutableState.update { it.copy(progress = progress, status = RecommendationIndexStatus(
+                    maxOutputTokens = settings.maxOutputTokens,
+                    reasoning = if (settings.reasoningEnabled) AiReasoningConfiguration() else null,
+                ).run(target, authorize = { authorize(target) }, onRetry = { seconds, reason ->
+                    mutableState.update { it.copy(error = graph.appContext.getString(R.string.classification_retry, seconds.toInt(), reason)) }
+                }) { progress ->
+                    mutableState.update { it.copy(progress = progress, error = null, status = RecommendationIndexStatus(
                         progress.totalTracks, progress.indexedTracks, progress.pendingTracks)) }
                 }
                 mutableState.update { it.copy(lastCompletedAtMillis = System.currentTimeMillis()) }

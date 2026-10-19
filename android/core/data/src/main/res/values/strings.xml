@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
 <resources>
+    <string name="classification_retry">分类请求暂时未完成，%1$d 秒后自动重试：%2$s</string>
     <string name="classification_title">标签分类</string>
     <string name="classification_pause">暂停</string>
     <string name="classification_running">正在准备分类</string>

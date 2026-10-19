@@ -53,7 +53,7 @@ class TagClassificationService : Service() {
         observation = scope.launch {
             controller.state.collect { state ->
                 if (!state.isRunning) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
-                else notifications.notify(NOTIFICATION, notification(getString(R.string.classification_progress, state.indexedTracks, state.totalTracks)))
+                else notifications.notify(NOTIFICATION, notification(state.error ?: getString(R.string.classification_progress, state.indexedTracks, state.totalTracks)))
             }
         }
         return START_NOT_STICKY

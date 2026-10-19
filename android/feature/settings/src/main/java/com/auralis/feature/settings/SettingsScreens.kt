@@ -228,6 +228,9 @@ private fun RecommendationIndexSettingsCard(
             })
         }
         Text(stringResource(R.string.settings_classification_note), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+        if (state.isRunning && error != null) {
+            Text(error, style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+        }
         TextButton(onClick = onRefresh) { Text(stringResource(R.string.settings_recommendation_index_refresh)) }
         if (state.unlabeledTracks > 0) {
             Text(stringResource(R.string.settings_classification_unlabeled, state.unlabeledTracks), color = colors.secondaryText)
