@@ -226,5 +226,5 @@ func localizedTimestampCannotOutrunNextDSPObservation(stride: Int) {
 }
 
 @Test func v4TimelineInvalidatesOlderCachedHapticAnalysis() {
-    #expect(MusicHapticsTimeline.algorithmVersion == "auralis-haptics-v4.0")
+    #expect(MusicHapticsTimeline.algorithmVersion == "auralis-haptics-v4.1")
 }

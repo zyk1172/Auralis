@@ -176,7 +176,7 @@ struct PlaybackSettingsPage: View {
             Text(String(localized: "强", bundle: .module)).tag(MusicHapticsIntensity.strong.rawValue)
         }
         .accessibilityIdentifier("auralis.settings.musicHaptics.intensity")
-        Text(String(localized: "节奏清晰突出主拍，音乐沉浸保留更多纹理。力度独立调整，轻档也会保留主要节奏。", bundle: .module))
+        Text(String(localized: "两种风格都保留音乐细节与持续纹理；节奏清晰在此基础上加强主拍。轻档只降低力度，不删减层次。", bundle: .module))
             .font(.caption).foregroundStyle(.secondary)
         Text(String(localized: "以上设置用于本地生成的震动；系统 Music Haptics 的风格和力度请在系统辅助功能中调整。", bundle: .module))
             .font(.caption).foregroundStyle(.secondary)

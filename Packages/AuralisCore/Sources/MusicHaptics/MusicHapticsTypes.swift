@@ -238,23 +238,11 @@ public enum MusicHapticsIntensity: String, Codable, CaseIterable, Hashable, Send
         }
     }
 
-    /// Fraction of low-energy events retained by the scheduler.  This is a
-    /// deterministic class-aware filter, not random thinning.
-    public var weakEventFloor: Float {
-        switch self {
-        case .light: 0.42
-        case .medium: 0.18
-        case .strong: 0.08
-        }
-    }
+    /// A shared near-zero event floor. All force levels retain the same music.
+    public var weakEventFloor: Float { 0.03 }
 
-    public var continuousTextureScale: Float {
-        switch self {
-        case .light: 0.55
-        case .medium: 1.0
-        case .strong: 1.16
-        }
-    }
+    /// Keep the balance between texture and attacks at every force level.
+    public var continuousTextureScale: Float { 1 }
 }
 
 public enum MusicHapticsStyle: String, Codable, CaseIterable, Hashable, Sendable {
@@ -386,9 +374,10 @@ public struct MusicHapticsTimeline: Codable, Hashable, Sendable {
     /// changes. Stored timelines from an older algorithm deliberately become
     /// cache misses so playback cannot silently mix old and new tactile
     /// semantics.
-    /// v4 preserves per-event rhythm through mixing/caching and protects
-    /// observed pulses. Render-time style/intensity never enter this cache.
-    public static let algorithmVersion = "auralis-haptics-v4.0"
+    /// v4.1 gives observed pulses a separate voice and density budget so they
+    /// cannot displace existing details or attenuate their texture via fatigue.
+    /// Render-time style/intensity never enter this cache.
+    public static let algorithmVersion = "auralis-haptics-v4.1"
     public var formatVersion: Int
     public var algorithmVersion: String
     public var identity: MusicHapticsIdentity

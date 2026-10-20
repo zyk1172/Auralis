@@ -198,6 +198,7 @@ import Testing
     for staleAlgorithmVersion in [
         MusicHapticsTimeline.legacyAlgorithmVersion,
         "auralis-haptics-v2.1",
+        "auralis-haptics-v4.0",
     ] {
         let stale = MusicHapticsTimeline(
             identity: identity,
@@ -320,7 +321,7 @@ import Testing
 
 @Test func voiceBudgetSeparatesTransientAndContinuousCaps() {
     let budget = HapticVoiceBudget(maxContinuousVoices: 4)
-    #expect(budget.maxTransientVoices == 1)
+    #expect(budget.maxTransientVoices == 2)
     #expect(budget.maxContinuousVoices == 1)
 }
 

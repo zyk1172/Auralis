@@ -829,23 +829,24 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         while result < value { result *= 2 }
         return result
     }
-
 }
 
-/// Event thinning keeps continuous texture curves class-aware, but transient
-/// collisions are always collapsed across classes. The final timeline must
-/// preserve the same one-transient voice budget as the streaming mixer.
+/// Cache merging preserves the mixer's independent pulse and detail lanes.
+/// Repeated analysis of one attack is still deduplicated within its class.
 public enum MusicHapticsEventDeduplicator {
     public static func merge(_ input: [MusicHapticsEvent]) -> [MusicHapticsEvent] {
         var result: [MusicHapticsEvent] = []
         for event in input.sorted(by: { $0.time < $1.time }) {
-            guard let index = result.lastIndex(where: { $0.classification == event.classification }),
+            guard let index = result.lastIndex(where: {
+                $0.classification == event.classification && $0.kind == event.kind
+            }),
                   event.time - result[index].time < event.classification.deduplicationWindow
             else {
                 result.append(event)
                 continue
             }
             let existing = result[index]
+            if existing == event { continue }
             if existing.kind == .continuous || event.kind == .continuous {
                 let end = max(existing.time + (existing.duration ?? 0), event.time + (event.duration ?? 0))
                 let start = min(existing.time, event.time)
@@ -870,7 +871,8 @@ public enum MusicHapticsEventDeduplicator {
                     sharpness: max(existing.sharpness, event.sharpness),
                     kind: .continuous,
                     classification: event.classification,
-                    curve: (existingCurve + eventCurve).sorted { $0.timeOffset < $1.timeOffset }
+                    curve: (existingCurve + eventCurve).sorted { $0.timeOffset < $1.timeOffset },
+                    rhythm: event.rhythm ?? existing.rhythm
                 )
             } else {
                 var selected = event.intensity > existing.intensity ? event : existing
@@ -894,9 +896,7 @@ public enum MusicHapticsEventDeduplicator {
 
         func flushCluster() {
             guard !cluster.isEmpty else { return }
-            if let fused = fusedTransientEventForDeduplication(cluster) {
-                result.append(fused)
-            }
+            result.append(contentsOf: layeredTransientEvents(cluster))
             cluster.removeAll(keepingCapacity: true)
         }
 
@@ -915,25 +915,5 @@ public enum MusicHapticsEventDeduplicator {
         }
         flushCluster()
         return result.sorted { $0.time < $1.time }
-    }
-
-    private static func fusedTransientEventForDeduplication(
-        _ cluster: [MusicHapticsEvent]
-    ) -> MusicHapticsEvent? {
-        let realCandidates = cluster.filter { $0.classification != .climax }
-        guard let dominant = realCandidates.max(by: {
-            deduplicationScore($0) < deduplicationScore($1)
-        }) else { return nil }
-        let supports = realCandidates.filter { $0 != dominant }
-        let modifiers = cluster.filter { $0.classification == .climax }
-        return fusedTransientEvent(
-            dominant: dominant,
-            supports: supports,
-            climaxModifiers: modifiers
-        )
-    }
-
-    private static func deduplicationScore(_ event: MusicHapticsEvent) -> Float {
-        transientScore(event)
     }
 }

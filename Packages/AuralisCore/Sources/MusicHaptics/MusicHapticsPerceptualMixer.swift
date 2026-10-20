@@ -531,14 +531,12 @@ public struct MusicHapticsCandidateFrame: Hashable, Sendable {
     }
 }
 
-/// The perceptual budget is intentionally small. A collision can produce one
-/// fused transient and one independent continuous texture, but never a stack
-/// of transient voices.
+/// A collision has one musical-detail voice plus one observed-pulse voice,
+/// alongside the independent continuous texture. Adding the pulse must not
+/// replace the detail voice; duplicate observations still share one voice.
 public struct HapticVoiceBudget: Hashable, Sendable {
     public let collisionWindow: TimeInterval
-    /// Collision resolution is intentionally hard-capped at one transient;
-    /// this is a perceptual invariant, not a caller-tunable stack size.
-    public let maxTransientVoices: Int = 1
+    public let maxTransientVoices: Int = 2
     public let maxContinuousVoices: Int
 
     public init(
@@ -603,8 +601,8 @@ public struct MusicHapticsMixerResult: Hashable, Sendable {
 }
 
 /// Stateful perceptual mixing sits between DSP candidates and the final
-/// haptic event stream. It owns only bounded history and deliberately does not
-/// amplify intensity when reducing voices.
+/// haptic event stream. It owns bounded history, composes pulse/detail voices,
+/// and keeps the continuous texture envelope independent of added pulses.
 public struct MusicHapticsPerceptualMixer: Sendable {
     private struct PendingTransientCluster: Sendable {
         let firstTime: TimeInterval
@@ -844,7 +842,7 @@ public struct MusicHapticsPerceptualMixer: Sendable {
     private var activeTexture: TextureAccumulator?
     private var pendingTransientCluster: PendingTransientCluster?
     private var recentOutput: [MusicHapticsEvent] = []
-    private var acceptedTransientTimes: [TimeInterval] = []
+    private var acceptedDetailTimes: [TimeInterval] = []
     private var lastHighPercussionTime: TimeInterval = -.infinity
     private var totalDominant = 0
     private var totalPulseCandidates = 0
@@ -875,7 +873,7 @@ public struct MusicHapticsPerceptualMixer: Sendable {
         activeTexture = nil
         pendingTransientCluster = nil
         recentOutput.removeAll(keepingCapacity: true)
-        acceptedTransientTimes.removeAll(keepingCapacity: true)
+        acceptedDetailTimes.removeAll(keepingCapacity: true)
         lastHighPercussionTime = -.infinity
         totalDominant = 0
         totalPulseCandidates = 0
@@ -907,7 +905,7 @@ public struct MusicHapticsPerceptualMixer: Sendable {
             }
         }
         // A transient is held for one collision window so adjacent DSP frames
-        // cannot escape the same one-voice cluster. Texture sections remain a
+        // share the same bounded pulse/detail composition. Texture sections remain a
         // single logical accumulator, but materialize non-overlapping suffixes
         // progressively instead of waiting for section close.
         let resultEvents = output.sorted { $0.time < $1.time }
@@ -1130,64 +1128,44 @@ public struct MusicHapticsPerceptualMixer: Sendable {
             var realCandidates = cluster.filter { $0.classification != .climax }
             if quietMode {
                 let before = realCandidates.count
+                let highPercussionBefore = realCandidates.filter { $0.classification == .highPercussion }.count
                 let quietNoiseFloor = 0.20 + 0.12 * quietGain
                 realCandidates.removeAll {
                     !$0.isRhythmicPulse && ($0.classification == .highPercussion || $0.classification == .unknown)
                         && $0.intensity < quietNoiseFloor
                 }
                 totalSuppressedTransient += before - realCandidates.count
-                totalSuppressedHighPercussion += before - realCandidates.filter { $0.classification != .highPercussion }.count
+                totalSuppressedHighPercussion += highPercussionBefore - realCandidates.filter { $0.classification == .highPercussion }.count
             }
-            guard let dominant = realCandidates.max(by: {
-                score($0, beat: frame.beat) < score($1, beat: frame.beat)
-            }) else {
-                totalSuppressedTransient += cluster.count
-                totalMergedCollisions += max(0, cluster.count - 1)
-                continue
-            }
-            let supports = realCandidates.filter { $0 != dominant }
-            var selected = fusedTransientEvent(
-                dominant: dominant,
-                supports: supports,
-                climaxModifiers: modifiers,
-                beat: frame.beat
-            )
-            pruneTransientTimes(at: selected.time)
-            if shouldSuppressForDensity(selected, beat: frame.beat) {
-                totalSuppressedTransient += cluster.count
-                if dominant.classification == .highPercussion {
-                    totalSuppressedHighPercussion += 1
+            let selectedEvents = layeredTransientEvents(realCandidates + modifiers, beat: frame.beat)
+            totalMergedCollisions += max(0, realCandidates.count - selectedEvents.count)
+            totalSuppressedTransient += max(0, realCandidates.count - selectedEvents.count)
+            for var selected in selectedEvents {
+                pruneDetailTimes(at: selected.time)
+                if shouldSuppressForDensity(selected, beat: frame.beat)
+                    || (selected.classification == .highPercussion && !selected.isRhythmicPulse
+                        && selected.time - lastHighPercussionTime < highPercussionSpacing(energyLevel: frame.energyLevel)) {
+                    totalSuppressedTransient += 1
+                    if selected.classification == .highPercussion { totalSuppressedHighPercussion += 1 }
+                    continue
                 }
-                continue
+                // The added pulse has its own bounded lane. It must not consume
+                // the pre-existing detail rate, spacing or fatigue allowance.
+                let fatigueGain = selected.classification == .highPercussion && !selected.isRhythmicPulse
+                    ? Float(fatigue(at: selected.time)) : 1
+                let quietAttenuation: Float = !selected.isRhythmicPulse
+                    && (selected.classification == .highPercussion || selected.classification == .unknown)
+                    ? quietGain : 1
+                selected = attenuate(selected, factor: fatigueGain * quietAttenuation)
+                output.append(selected)
+                if selected.isRhythmicPulse {
+                    totalPulseOutput += 1
+                } else {
+                    acceptedDetailTimes.append(selected.time)
+                    if selected.classification == .highPercussion { lastHighPercussionTime = selected.time }
+                }
+                totalDominant += 1
             }
-            if dominant.classification == .highPercussion, !selected.isRhythmicPulse,
-               dominant.time - lastHighPercussionTime < highPercussionSpacing(energyLevel: frame.energyLevel) {
-                totalSuppressedTransient += cluster.count
-                totalSuppressedHighPercussion += 1
-                continue
-            }
-            let fatigueGain = dominant.classification == .highPercussion
-                ? Float(fatigue(at: selected.time))
-                : 1
-            let quietAttenuation: Float = switch dominant.classification {
-            case .highPercussion, .unknown: quietGain
-            default: 1
-            }
-            selected = attenuate(selected, factor: fatigueGain * quietAttenuation)
-            output.append(selected)
-            if selected.isRhythmicPulse { totalPulseOutput += 1 }
-            acceptedTransientTimes.append(selected.time)
-            totalDominant += 1
-            if dominant.classification == .highPercussion {
-                lastHighPercussionTime = dominant.time
-            }
-            // Every non-dominant transient becomes a small accent inside the
-            // selected event. It is never emitted as a second haptic voice.
-            totalSuppressedTransient += max(0, cluster.count - 1)
-            totalSuppressedHighPercussion += supports.filter {
-                $0.classification == .highPercussion
-            }.count
-            totalMergedCollisions += max(0, cluster.count - 1)
         }
     }
 
@@ -1263,15 +1241,11 @@ public struct MusicHapticsPerceptualMixer: Sendable {
         )
     }
 
-    private func score(_ event: MusicHapticsEvent, beat: MusicHapticsBeatEstimate) -> Float {
-        transientScore(event)
-    }
-
     private func shouldSuppressForDensity(
         _ event: MusicHapticsEvent,
         beat: MusicHapticsBeatEstimate
     ) -> Bool {
-        let projectedRate = Double(acceptedTransientTimes.count + 1) / shortDensityWindow
+        let projectedRate = Double(acceptedDetailTimes.count + 1) / shortDensityWindow
         guard projectedRate > transientDensityRate else { return false }
         return !isImportantAttack(event, beat: beat)
     }
@@ -1290,8 +1264,8 @@ public struct MusicHapticsPerceptualMixer: Sendable {
         beat: MusicHapticsBeatEstimate = .init()
     ) -> Bool {
         // Pulse density is protected independently of the decoration budget.
-        // The tracker bounds it to 55...200 BPM; collisions still share one voice.
-        if event.isRhythmicPulse, event.intensity >= 0.12 { return true }
+        // The tracker bounds it to 55...200 BPM; details keep their own voice.
+        if event.isRhythmicPulse, event.intensity >= 0.03 { return true }
         if beat.isBeat && event.rhythm == nil {
             switch beat.strength {
             case .strongBeat:
@@ -1318,11 +1292,11 @@ public struct MusicHapticsPerceptualMixer: Sendable {
 
     private mutating func pruneHistory(at time: TimeInterval) {
         recentOutput.removeAll { time - $0.time > 15 }
-        pruneTransientTimes(at: time)
+        pruneDetailTimes(at: time)
     }
 
-    private mutating func pruneTransientTimes(at time: TimeInterval) {
-        acceptedTransientTimes.removeAll { time - $0 > shortDensityWindow }
+    private mutating func pruneDetailTimes(at time: TimeInterval) {
+        acceptedDetailTimes.removeAll { time - $0 > shortDensityWindow }
     }
 
     private mutating func appendHistory(_ events: [MusicHapticsEvent]) {
@@ -1332,7 +1306,7 @@ public struct MusicHapticsPerceptualMixer: Sendable {
 
     private func fatigue(at time: TimeInterval) -> Double {
         let recent = recentOutput.filter { time - $0.time >= 0 && time - $0.time <= 15 }
-        let transientRate = Double(recent.filter { $0.kind == .transient }.count) / 15
+        let transientRate = Double(recent.filter { $0.kind == .transient && !$0.isRhythmicPulse }.count) / 15
         let duty = recent
             .filter { $0.kind == .continuous }
             .reduce(0) { $0 + ($1.duration ?? 0) } / 15
@@ -1387,11 +1361,43 @@ func transientScore(_ event: MusicHapticsEvent) -> Float {
     case .unknown: 0.25
     case .sustainedBass, .buildTexture, .climax: 0.10
     }
-    let pulsePriority: Float = event.isRhythmicPulse ? 0.35 : 0
-    return event.intensity * 0.70 + classWeight * 0.30 + pulsePriority
+    return event.intensity * 0.70 + classWeight * 0.30
 }
 
-/// Fuses all transient candidates in one collision into the dominant event.
+/// Preserve the original detail voice when a newly recognized pulse shares
+/// its collision window. Copies of that same instrument attack are supports,
+/// not another layer. Both the streaming mixer and cache merge use this rule.
+func layeredTransientEvents(
+    _ candidates: [MusicHapticsEvent],
+    beat: MusicHapticsBeatEstimate = .init()
+) -> [MusicHapticsEvent] {
+    let modifiers = candidates.filter { $0.classification == .climax }
+    let real = candidates.filter { $0.classification != .climax }
+    let pulses = real.filter(\.isRhythmicPulse)
+    guard let pulse = pulses.max(by: { transientScore($0) < transientScore($1) }) else {
+        guard let dominant = real.max(by: { transientScore($0) < transientScore($1) }) else { return [] }
+        return [fusedTransientEvent(dominant: dominant, supports: real.filter { $0 != dominant },
+                                    climaxModifiers: modifiers, beat: beat)]
+    }
+    let copies = real.filter { event in
+        !event.isRhythmicPulse && pulses.contains {
+            $0.classification == event.classification
+                && abs($0.time - event.time) < event.classification.deduplicationWindow
+        }
+    }
+    var observedPulse = pulse
+    observedPulse.intensity = max(pulse.intensity, copies.map(\.intensity).max() ?? 0)
+    var result = [fusedTransientEvent(dominant: observedPulse,
+        supports: pulses.filter { $0 != pulse }, climaxModifiers: modifiers, beat: beat)]
+    let details = real.filter { !$0.isRhythmicPulse && !copies.contains($0) }
+    if let detail = details.max(by: { transientScore($0) < transientScore($1) }) {
+        result.append(fusedTransientEvent(dominant: detail, supports: details.filter { $0 != detail },
+                                          climaxModifiers: []))
+    }
+    return result.sorted { $0.time < $1.time }
+}
+
+/// Fuses candidates within one pulse or detail lane into the dominant event.
 /// Supporting attacks only contribute a bounded intensity accent and a small
 /// sharpness blend; they never become another Core Haptics event.
 func fusedTransientEvent(

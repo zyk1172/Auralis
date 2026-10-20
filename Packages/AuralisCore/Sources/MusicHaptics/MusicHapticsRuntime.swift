@@ -522,7 +522,6 @@ final class CustomMusicHapticsEngine: MusicHapticsOutputEngine {
 
     private var currentTimeline: MusicHapticsTimeline?
     private var configuration = MusicHapticsRenderConfiguration()
-    private var precedingAttacks: [TimeInterval] = []
 
     func configure(_ configuration: MusicHapticsRenderConfiguration) {
         self.configuration = configuration
@@ -698,7 +697,6 @@ final class CustomMusicHapticsEngine: MusicHapticsOutputEngine {
 
     func stop() {
         currentTimeline = nil
-        precedingAttacks.removeAll(keepingCapacity: true)
         #if os(iOS)
         players.forEach { try? $0.player.stop(atTime: CHHapticTimeImmediate) }
         players.removeAll()
@@ -765,14 +763,7 @@ final class CustomMusicHapticsEngine: MusicHapticsOutputEngine {
                     ? event.time >= offset
                     : event.time + (event.duration ?? 0) > offset)
         }
-        let rendered = MusicHapticsRendering.events(future, style: configuration.style,
-                                                    precedingAttacks: precedingAttacks)
-        precedingAttacks = (precedingAttacks + future.filter(MusicHapticsRendering.isStructuralAttack).map(\.time))
-            .filter { $0 >= offset - 0.10 }
-            .sorted()
-        // Bound history to the rolling horizon; full cached timelines need no
-        // history after their one render pass.
-        precedingAttacks = Array(precedingAttacks.suffix(64))
+        let rendered = MusicHapticsRendering.events(future, style: configuration.style)
         return try MusicHapticsPatternComposer.layers(for: rendered).map {
             try makePattern(events: $0, timeShift: timeShift, offset: offset,
                             intensity: intensity, playbackRate: playbackRate)

@@ -25,16 +25,20 @@ struct MusicHapticsRhythmTests {
         #expect(try JSONDecoder().decode(MusicHapticsEvent.self, from: legacy).rhythm == nil)
     }
 
-    @Test func laterDecorationCannotOverwritePulseInCollision() throws {
+    @Test func laterDecorationAndPulseRetainTheirOwnTimingAndTimbre() throws {
         var mixer = MusicHapticsPerceptualMixer()
         _ = mixer.mix(events: [rhythmPulse(1, intensity: 0.28)], time: 1, energyLevel: 0.1)
         _ = mixer.mix(events: [.init(time: 1.04, intensity: 1, sharpness: 0.9,
                                     kind: .transient, classification: .highPercussion)], time: 1.04, energyLevel: 0.1)
         let events = mixer.finish().events
-        let pulse = try #require(events.first)
-        #expect(events.count == 1)
+        let pulse = try #require(events.first { $0.isRhythmicPulse })
+        let detail = try #require(events.first { !$0.isRhythmicPulse })
+        #expect(events.count == 2)
         #expect(pulse.isRhythmicPulse)
         #expect(pulse.time == 1)
+        #expect(pulse.classification == .kick)
+        #expect(detail.time == 1.04)
+        #expect(detail.classification == .highPercussion)
     }
 
     @Test func quiet120BPMMainPulseSurvivesDecorationBudget() {
@@ -59,27 +63,35 @@ struct MusicHapticsRhythmTests {
         #expect(pulse.time == 1)
     }
 
-    @Test func textureDucksAtPulseWithoutChangingAttackOrCachedInput() throws {
+    @Test(arguments: [MusicHapticsStyle.rhythm, .immersive])
+    func pulseAddsToTextureWithoutReducingItsEnvelope(style: MusicHapticsStyle) throws {
         let pulse = rhythmPulse(0.5, intensity: 0.6)
         let texture = MusicHapticsEvent(time: 0, duration: 2, intensity: 0.5, sharpness: 0.2,
                                         kind: .continuous, classification: .sustainedBass)
-        let rendered = MusicHapticsRendering.events([texture, pulse], style: .rhythm)
+        let rendered = MusicHapticsRendering.events([texture, pulse], style: style)
         let output = try #require(rendered.first { $0.kind == .continuous })
         let onBeat = MusicHapticsRendering.curvePoint(in: output, at: 0.5).intensity
         let away = MusicHapticsRendering.curvePoint(in: output, at: 1).intensity
-        #expect(onBeat < away * 0.4)
-        #expect(rendered.contains(pulse))
+        #expect(onBeat == 0.5)
+        #expect(away == 0.5)
+        #expect(output == texture)
+        let attack = try #require(rendered.first { $0.isRhythmicPulse })
+        #expect(attack.intensity >= pulse.intensity)
+        #expect(attack.time == pulse.time)
         #expect(texture.curve.isEmpty)
-        let immersive = MusicHapticsRendering.events([texture, pulse], style: .immersive)
-        #expect(immersive[0].intensity > output.intensity)
     }
 
-    @Test func previousSlicePulseStillDucksTextureAcrossBoundary() throws {
+    @Test func adjacentTextureSlicesRemainContinuousThroughPulse() throws {
+        let preceding = MusicHapticsEvent(time: 0.54, duration: 0.5, intensity: 0.5, sharpness: 0.2,
+                                          kind: .continuous, classification: .sustainedBass)
         let texture = MusicHapticsEvent(time: 1.04, duration: 0.5, intensity: 0.5, sharpness: 0.2,
                                         kind: .continuous, classification: .sustainedBass)
-        let output = try #require(MusicHapticsRendering.events([texture], style: .immersive,
-                                                               precedingAttacks: [1]).first)
-        #expect(output.curve.first!.intensity < output.curve.last!.intensity * 0.4)
+        let first = try #require(MusicHapticsRendering.events([preceding, rhythmPulse(1)], style: .rhythm).first)
+        let next = try #require(MusicHapticsRendering.events([texture], style: .rhythm).first)
+        #expect(first.time + (first.duration ?? 0) == next.time)
+        #expect(MusicHapticsRendering.curvePoint(in: first, at: 0.5).intensity == 0.5)
+        #expect(MusicHapticsRendering.curvePoint(in: next, at: 0).intensity == 0.5)
+        #expect(next == texture)
     }
 
     @Test func windowClippingPreservesPulseAndInterpolatesTextureBoundaries() throws {

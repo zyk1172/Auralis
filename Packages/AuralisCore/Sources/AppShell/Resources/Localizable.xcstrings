@@ -116,25 +116,25 @@
         }
       }
     },
-    "节奏清晰突出主拍，音乐沉浸保留更多纹理。力度独立调整，轻档也会保留主要节奏。" : {
+    "两种风格都保留音乐细节与持续纹理；节奏清晰在此基础上加强主拍。轻档只降低力度，不删减层次。" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clear rhythm emphasizes the pulse; immersive music retains more texture. Intensity is independent, so Light still preserves the main rhythm."
+            "value" : "Both styles retain musical details and continuous texture. Clear rhythm adds emphasis to the pulse. Light reduces force while preserving every layer."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "节奏清晰突出主拍，音乐沉浸保留更多纹理。力度独立调整，轻档也会保留主要节奏。"
+            "value" : "两种风格都保留音乐细节与持续纹理；节奏清晰在此基础上加强主拍。轻档只降低力度，不删减层次。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "節奏清晰突顯主拍，音樂沉浸保留更多紋理。力度獨立調整，輕檔也會保留主要節奏。"
+            "value" : "兩種風格都保留音樂細節與持續紋理；節奏清晰在此基礎上加強主拍。輕檔只降低力度，不刪減層次。"
           }
         }
       }
