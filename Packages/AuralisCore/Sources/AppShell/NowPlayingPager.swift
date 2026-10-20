@@ -16,6 +16,9 @@ struct NowPlayingPager<Content: View>: View {
     @State private var scrollPosition: ScrollPosition
     @State private var accessibilityPage: NowPlayingPage
     @State private var userIsScrolling = false
+    /// Insets constrain foreground content, never the page's drawing surface.
+    /// Shadows may extend into this gutter, but cannot enter a neighbouring page.
+    let horizontalContentInset: CGFloat
     let content: (NowPlayingPage) -> Content
 #if DEBUG
     @State private var hasPageCommand = false
@@ -28,11 +31,13 @@ struct NowPlayingPager<Content: View>: View {
     @State private var firstPresentationFrameDelay: Int?
 #endif
 
-    init(selection: Binding<NowPlayingPage>, @ViewBuilder content: @escaping (NowPlayingPage) -> Content) {
+    init(selection: Binding<NowPlayingPage>, horizontalContentInset: CGFloat = 0,
+         @ViewBuilder content: @escaping (NowPlayingPage) -> Content) {
         self._selection = selection
         self._initialPage = State(initialValue: selection.wrappedValue)
         self._scrollPosition = State(initialValue: .init(id: selection.wrappedValue, anchor: .leading))
         self._accessibilityPage = State(initialValue: selection.wrappedValue)
+        self.horizontalContentInset = max(0, horizontalContentInset)
         self.content = content
     }
 
@@ -50,7 +55,10 @@ struct NowPlayingPager<Content: View>: View {
                 HStack(spacing: 0) {
                     ForEach(NowPlayingPage.allCases, id: \.self) { page in
                         content(page)
+                            .frame(width: max(0, geometry.size.width - 2 * horizontalContentInset),
+                                   height: geometry.size.height)
                             .frame(width: geometry.size.width, height: geometry.size.height)
+                            .clipped()
                             .id(page)
                             .accessibilityHidden(page != accessibilityPage)
                     }

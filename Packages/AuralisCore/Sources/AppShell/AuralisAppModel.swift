@@ -2914,6 +2914,26 @@ public final class AuralisAppModel: ObservableObject {
             assertionFailure("Unable to install Now Playing smoke audio: \(error)")
             return
         }
+        // A cached, high-contrast cover makes inset shadow cuts and neighbouring
+        // page bleed observable without network or a developer's music library.
+        let edgeArtworkKey = CommandLine.arguments.contains("-auralis-ui-smoke-player-edges")
+            ? "now-playing-edge-cover" : nil
+        if let edgeArtworkKey {
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            format.opaque = true
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 512, height: 512), format: format).image { context in
+                UIColor(red: 0.10, green: 0.07, blue: 0.05, alpha: 1).setFill()
+                context.fill(CGRect(x: 0, y: 0, width: 512, height: 512))
+                UIColor(red: 0.58, green: 0.28, blue: 0.12, alpha: 1).setFill()
+                context.fill(CGRect(x: 120, y: 0, width: 160, height: 512))
+            }
+            for size in [64, 96, 160, 256, 384, 512, 768, 1024, 1536, 2048] {
+                if let key = artworkStore.requestIdentifier(remoteKey: edgeArtworkKey, targetPixelSize: size, serverID: serverID) {
+                    artworkStore.setImage(image, forKey: key)
+                }
+            }
+        }
         let tracks = ["A", "B", "C"].map { suffix in
             Track(
                 id: TrackID(rawValue: "now-playing-smoke-\(suffix.lowercased())"),
@@ -2924,6 +2944,7 @@ public final class AuralisAppModel: ObservableObject {
                 artistName: "Smoke Artist",
                 albumTitle: "Smoke Album",
                 duration: 180,
+                artworkKey: edgeArtworkKey,
                 streamURL: audioURL
             )
         }

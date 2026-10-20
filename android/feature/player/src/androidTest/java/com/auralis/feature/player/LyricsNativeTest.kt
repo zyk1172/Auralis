@@ -44,7 +44,7 @@ class LyricsNativeTest : LyricsUiTestCases() {
                         chromeHidden = false,
                         onClose = {},
                         artwork = { Box(Modifier.fillMaxSize().background(Color(0xFF547B98))) },
-                        pageContent = { Text("Lyrics", Modifier.testTag("nativeLyrics")) },
+                        pageContent = { _, _ -> Text("Lyrics", Modifier.testTag("nativeLyrics")) },
                         pageFooter = { Text("Track identity") },
                         controls = { _, _ -> },
                     )

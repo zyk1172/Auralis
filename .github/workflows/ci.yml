@@ -208,6 +208,17 @@ jobs:
             echo "::error::AuralisUITests did not report an executed passing test run."
             exit 1
           fi
+          xcrun xcresulttool export attachments \
+            --path "${test_log%.log}.xcresult" \
+            --output-path "$RUNNER_TEMP/auralis-ui-rendering"
+
+      - name: Preserve passing UI rendering evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ui-rendering
+          path: ${{ runner.temp }}/auralis-ui-rendering
+          retention-days: 3
+          if-no-files-found: error
 
       - name: Preserve failed simulator diagnostics
         if: failure()

@@ -345,6 +345,75 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         assertCollapsedDockHitTesting(with: "-auralis-ui-smoke-dock-home")
     }
 
+    func testPlayerBackdropHasNoInsetSeamsOrNeighbourShadow() throws {
+        launchSmokeApp(with: "-auralis-ui-smoke-now-playing", "-auralis-ui-smoke-lyrics",
+                       "-auralis-ui-smoke-player-edges")
+        let playPause = app.buttons["auralis.nowPlaying.playPause"].firstMatch
+        XCTAssertTrue(playPause.waitForExistence(timeout: 15))
+        playPause.tap()
+        waitForLabelContaining("暂停", element: playPause, message: "Render the full playing artwork and shadow")
+
+        let pager = app.scrollViews["auralis.nowPlaying.pages"].firstMatch
+        XCTAssertTrue(pager.exists)
+        XCTAssertEqual(pager.frame.minX, app.frame.minX, accuracy: 1)
+        XCTAssertEqual(pager.frame.maxX, app.frame.maxX, accuracy: 1,
+                       "Only the drawing viewport expands to the window edges")
+        let artwork = app.descendants(matching: .any)["auralis.nowPlaying.artwork"].firstMatch
+        XCTAssertTrue(artwork.exists)
+        XCTAssertEqual(artwork.frame.midX, app.frame.midX, accuracy: 1)
+        XCTAssertEqual(artwork.frame.width, min(350, (app.frame.width - 40) * 0.84), accuracy: 1.5,
+                       "The cover must keep its original size, despite the wider drawing surface")
+        let artworkShot = app.screenshot()
+        let coverAttachment = XCTAttachment(screenshot: artworkShot)
+        coverAttachment.name = "Player backdrop — artwork"
+        coverAttachment.lifetime = .keepAlways
+        add(coverAttachment)
+        try assertNoInsetSeams(in: artworkShot.image, windowWidth: app.frame.width, name: "artwork")
+
+        app.buttons["auralis.nowPlaying.lyrics"].firstMatch.tap()
+        let immersive = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: playPause)
+        XCTAssertEqual(XCTWaiter.wait(for: [immersive], timeout: 10), .completed)
+        let lyricsShot = app.screenshot()
+        let lyricsAttachment = XCTAttachment(screenshot: lyricsShot)
+        lyricsAttachment.name = "Player backdrop — lyrics"
+        lyricsAttachment.lifetime = .keepAlways
+        add(lyricsAttachment)
+        try assertNoInsetSeams(in: lyricsShot.image, windowWidth: app.frame.width, name: "lyrics")
+    }
+
+    /// Scan the former 20pt + 12pt clipping boundaries in actual rendered pixels.
+    /// Smooth gradients/shadows have small neighbouring-pixel deltas; an inset
+    /// rectangular clip or an offscreen artwork page produces a sharp step.
+    private func assertNoInsetSeams(in image: UIImage, windowWidth: CGFloat, name: String) throws {
+        let source = try XCTUnwrap(image.cgImage)
+        let width = source.width, height = source.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let context = try XCTUnwrap(CGContext(data: &pixels, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue))
+        context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let scale = CGFloat(width) / windowWidth
+        for boundary in [CGFloat(32), windowWidth - 32] {
+            let center = Int((boundary * scale).rounded())
+            let radius = max(2, Int(scale.rounded()))
+            var rowJumps: [Int] = []
+            for y in stride(from: height / 5, to: height * 7 / 10, by: max(1, height / 160)) {
+                var jump = 0
+                for x in max(1, center - radius)...min(width - 1, center + radius) {
+                    for channel in 0..<3 {
+                        jump = max(jump, abs(Int(pixels[(y * width + x) * 4 + channel])
+                            - Int(pixels[(y * width + x - 1) * 4 + channel])))
+                    }
+                }
+                rowJumps.append(jump)
+            }
+            rowJumps.sort()
+            let percentile90 = rowJumps[rowJumps.count * 9 / 10]
+            print("Player backdrop \(name), edge \(boundary)pt: pixel jump p90=\(percentile90)")
+            XCTAssertLessThanOrEqual(percentile90, 6, "\(name) has a visible inset edge at \(boundary)pt")
+        }
+    }
+
     func testHomeShelvesUseFullViewportWidthAfterRotation() throws {
         launchSmokeApp(with: "-auralis-ui-smoke-dock-clearance-home")
 

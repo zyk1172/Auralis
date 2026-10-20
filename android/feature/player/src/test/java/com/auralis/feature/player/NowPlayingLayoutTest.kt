@@ -22,6 +22,7 @@ import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import com.auralis.core.designsystem.AuralisTheme
@@ -32,12 +33,62 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.LooperMode
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 @LooperMode(LooperMode.Mode.PAUSED)
 class NowPlayingLayoutTest {
     @get:Rule val compose = createComposeRule()
+
+    @Test
+    @Config(qualifiers = "w390dp-h844dp-port")
+    fun `phone viewport fills window while all page contents retain their original width`() = verifyDrawingViewport()
+
+    @Test
+    @Config(qualifiers = "w1200dp-h1600dp-port")
+    fun `tablet viewport fills window while page contents retain their original cap`() = verifyDrawingViewport()
+
+    private fun verifyDrawingViewport() {
+        lateinit var pager: PagerState
+        lateinit var scope: CoroutineScope
+        compose.setContent {
+            AuralisTheme {
+                pager = rememberPagerState(initialPage = PlayerTab.Player.ordinal) { 3 }
+                scope = rememberCoroutineScope()
+                NowPlayingChromeLayout(
+                    page = PlayerTab.entries[pager.currentPage], chromeHidden = false, onClose = {},
+                    artwork = {},
+                    pageContent = { _, inset ->
+                        HorizontalPager(pager, Modifier.fillMaxSize().testTag("viewport")) { index ->
+                            NowPlayingPageSurface(inset) {
+                                Box(Modifier.fillMaxSize().testTag("content-$index"))
+                            }
+                        }
+                    },
+                    controls = { _, _ ->
+                        Box(Modifier.fillMaxWidth().height(80.dp).testTag("controlsWidth"))
+                    },
+                )
+            }
+        }
+        val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
+        val expectedWidth = minOf(root.width, with(compose.density) { 900.dp.toPx() }) -
+            with(compose.density) { 64.dp.toPx() }
+        for (target in listOf(PlayerTab.Player, PlayerTab.Lyrics, PlayerTab.Queue)) {
+            compose.runOnIdle { scope.launch { pager.scrollToPage(target.ordinal) } }
+            compose.waitForIdle()
+            val viewport = compose.onNodeWithTag("viewport").fetchSemanticsNode().boundsInRoot
+            val content = compose.onNodeWithTag("content-${target.ordinal}").fetchSemanticsNode().boundsInRoot
+            val controls = compose.onNodeWithTag("controlsWidth").fetchSemanticsNode().boundsInRoot
+            assertThat(viewport.left).isWithin(1f).of(root.left)
+            assertThat(viewport.right).isWithin(1f).of(root.right)
+            assertThat(content.width).isWithin(1f).of(expectedWidth)
+            assertThat(controls.width).isWithin(1f).of(expectedWidth)
+            assertThat(content.center.x).isWithin(1f).of(root.center.x)
+        }
+    }
 
     @Test
     @Config(qualifiers = "w390dp-h844dp-port")
@@ -50,7 +101,7 @@ class NowPlayingLayoutTest {
                     chromeHidden = false,
                     onClose = { closed = true },
                     artwork = { Text("Artwork") },
-                    pageContent = { Box(Modifier.fillMaxSize().testTag("page")) },
+                    pageContent = { _, _ -> Box(Modifier.fillMaxSize().testTag("page")) },
                     controls = { _, _ -> Text("Controls", Modifier.testTag("controls")) },
                 )
             }
@@ -71,7 +122,7 @@ class NowPlayingLayoutTest {
                     chromeHidden = false,
                     onClose = {},
                     artwork = { Box(Modifier.fillMaxSize()) },
-                    pageContent = { Text("Lyrics", Modifier.testTag("lyricsContent")) },
+                    pageContent = { _, _ -> Text("Lyrics", Modifier.testTag("lyricsContent")) },
                     controls = { _, _ ->
                         Box(Modifier.fillMaxWidth().height(180.dp).testTag("fullControls"))
                     },
@@ -106,7 +157,7 @@ class NowPlayingLayoutTest {
                     chromeHidden = true,
                     onClose = {},
                     artwork = { Box(Modifier.fillMaxSize()) },
-                    pageContent = { Text("Lyrics") },
+                    pageContent = { _, _ -> Text("Lyrics") },
                     controls = { _, _ -> Text("Full controls", Modifier.testTag("fullControls")) },
                     pageFooter = { Text("Track identity", Modifier.testTag("identity")) },
                 )
@@ -129,7 +180,7 @@ class NowPlayingLayoutTest {
                     chromeHidden = false,
                     onClose = {},
                     artwork = { Box(Modifier.fillMaxSize()) },
-                    pageContent = { Box(Modifier.fillMaxSize().testTag("secondaryContent")) },
+                    pageContent = { _, _ -> Box(Modifier.fillMaxSize().testTag("secondaryContent")) },
                     controls = { _, _ ->
                         Box(Modifier.fillMaxWidth().height(260.dp).testTag("fullControls"))
                     },
@@ -218,7 +269,7 @@ class NowPlayingLayoutTest {
                     chromeHidden = false,
                     onClose = {},
                     artwork = { Box(Modifier.fillMaxSize()) },
-                    pageContent = {
+                    pageContent = { _, _ ->
                         HorizontalPager(pager, Modifier.fillMaxSize()) { Text("Page $it") }
                     },
                     controls = { _, _ ->

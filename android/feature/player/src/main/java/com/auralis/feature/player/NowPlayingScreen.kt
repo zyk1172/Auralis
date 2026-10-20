@@ -87,6 +87,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -246,27 +247,29 @@ fun NowPlayingScreen(
             chromeHidden = immersive,
             onClose = onClose,
             artwork = { side -> HeroContent(track, playback.state is PlaybackState.Playing, side) },
-            pageContent = { landscape ->
+            pageContent = { landscape, horizontalContentInset ->
                 HorizontalPager(
                     state = pagerState,
                     modifier = Modifier.fillMaxSize().then(activityModifier),
                 ) { index ->
-                    when (PlayerTab.entries[index]) {
-                        PlayerTab.Lyrics ->
-                            LyricsContent(
-                                graph,
-                                track,
-                                positionMs = displayMs,
-                                isPlaying = playback.state is PlaybackState.Playing,
-                                isPageActive = page == PlayerTab.Lyrics,
-                                followState = lyricFollow,
-                                speed = playback.speed,
-                            )
-                        PlayerTab.Player ->
-                            if (!landscape)
-                                HeroContent(track, playback.state is PlaybackState.Playing)
-                            else Spacer(Modifier.fillMaxSize())
-                        PlayerTab.Queue -> QueueContent(queue, controller)
+                    NowPlayingPageSurface(horizontalContentInset) {
+                        when (PlayerTab.entries[index]) {
+                            PlayerTab.Lyrics ->
+                                LyricsContent(
+                                    graph,
+                                    track,
+                                    positionMs = displayMs,
+                                    isPlaying = playback.state is PlaybackState.Playing,
+                                    isPageActive = page == PlayerTab.Lyrics,
+                                    followState = lyricFollow,
+                                    speed = playback.speed,
+                                )
+                            PlayerTab.Player ->
+                                if (!landscape)
+                                    HeroContent(track, playback.state is PlaybackState.Playing)
+                                else Spacer(Modifier.fillMaxSize())
+                            PlayerTab.Queue -> QueueContent(queue, controller)
+                        }
                     }
                 }
             },
@@ -312,7 +315,7 @@ internal fun NowPlayingChromeLayout(
     chromeHidden: Boolean,
     onClose: () -> Unit,
     artwork: @Composable (Dp) -> Unit,
-    pageContent: @Composable (Boolean) -> Unit,
+    pageContent: @Composable (Boolean, Dp) -> Unit,
     controls: @Composable (Dp, Dp) -> Unit,
     pageFooter: @Composable () -> Unit = {},
 ) {
@@ -332,11 +335,12 @@ internal fun NowPlayingChromeLayout(
                 .dp
         val compactLandscape = landscape && maxHeight < 460.dp
         val compactPortrait = maxHeight < 700.dp || (maxWidth >= 600.dp && maxWidth < 620.dp)
+        val portraitPageInset = (maxWidth - minOf(maxWidth, 900.dp)) / 2 +
+            AuralisSpacing.large + AuralisSpacing.medium
         Column(
             Modifier.align(Alignment.TopCenter)
-                .widthIn(max = if (landscape) Dp.Unspecified else 900.dp)
                 .fillMaxSize()
-                .padding(horizontal = if (landscape) NowPlayingUiPolicy.landscapeHorizontalPadding(isTablet).dp else AuralisSpacing.large)
+                .padding(horizontal = if (landscape) NowPlayingUiPolicy.landscapeHorizontalPadding(isTablet).dp else 0.dp)
                 .padding(top = 2.dp, bottom = if (compactLandscape) 6.dp else if (landscape) AuralisSpacing.small else AuralisSpacing.large),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement =
@@ -392,7 +396,7 @@ internal fun NowPlayingChromeLayout(
                         ) {
                             // The landscape player keeps artwork on the left. Lyrics/queue
                             // occupy the right column; the artwork page needs only controls.
-                            Box(Modifier.weight(1f).fillMaxWidth()) { pageContent(true) }
+                            Box(Modifier.weight(1f).fillMaxWidth()) { pageContent(true, 0.dp) }
                             if (page == PlayerTab.Player) {
                                 controls(
                                     if (compactLandscape) 10.dp else 15.dp,
@@ -410,6 +414,8 @@ internal fun NowPlayingChromeLayout(
                     }
                 }
             } else {
+                // The viewport fills this window; foreground content retains the
+                // original 900dp cap and 20dp + 12dp insets, including split view.
                 Column(
                     Modifier.weight(1f).fillMaxWidth().testTag("player.portrait"),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -418,11 +424,11 @@ internal fun NowPlayingChromeLayout(
                     Box(
                         Modifier.weight(1f)
                             .fillMaxWidth()
-                            .padding(horizontal = AuralisSpacing.medium)
                     ) {
-                        pageContent(false)
+                        pageContent(false, portraitPageInset)
                     }
-                    Box(Modifier.padding(horizontal = AuralisSpacing.medium)) {
+                    Box(Modifier.widthIn(max = 900.dp).fillMaxWidth()
+                        .padding(horizontal = AuralisSpacing.large + AuralisSpacing.medium)) {
                         controls(
                             if (compactPortrait) 14.dp else 20.dp,
                             if (compactPortrait) 56.dp else 64.dp,
@@ -430,6 +436,16 @@ internal fun NowPlayingChromeLayout(
                     }
                 }
             }
+        }
+    }
+}
+
+/** Clip at the page boundary, after giving shadows room in the window gutters. */
+@Composable
+internal fun NowPlayingPageSurface(horizontalContentInset: Dp, content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxSize().clipToBounds(), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize().padding(horizontal = horizontalContentInset)) {
+            content()
         }
     }
 }
