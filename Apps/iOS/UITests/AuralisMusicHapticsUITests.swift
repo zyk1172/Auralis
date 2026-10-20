@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 import CoreGraphics
+import UIKit
 import XCTest
 
 @MainActor
@@ -342,6 +343,43 @@ final class AuralisMusicHapticsUITests: XCTestCase {
 
     func testHomeCollapsedDockDoesNotHitExpandedPlayerRegion() throws {
         assertCollapsedDockHitTesting(with: "-auralis-ui-smoke-dock-home")
+    }
+
+    func testHomeShelvesUseFullViewportWidthAfterRotation() throws {
+        launchSmokeApp(with: "-auralis-ui-smoke-dock-clearance-home")
+
+        let feed = app.scrollViews["auralis.home.feed"].firstMatch
+        let shelf = app.scrollViews["auralis.home.shelf.random"].firstMatch
+        XCTAssertTrue(feed.waitForExistence(timeout: 15))
+        XCTAssertTrue(shelf.waitForExistence(timeout: 10))
+
+        for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
+            XCUIDevice.shared.orientation = orientation
+            let landscape = orientation == .landscapeLeft
+            let settled = NSPredicate { _, _ in
+                landscape == (self.app.frame.width > self.app.frame.height)
+                    && abs(shelf.frame.width - feed.frame.width) < 1
+            }
+            expectation(for: settled, evaluatedWith: app)
+            waitForExpectations(timeout: 10)
+
+            XCTAssertEqual(shelf.frame.minX, feed.frame.minX, accuracy: 1,
+                           "The shelf must not clip at the inner content margin")
+            XCTAssertEqual(shelf.frame.maxX, feed.frame.maxX, accuracy: 1)
+            let firstCard = shelf.buttons.matching(NSPredicate(
+                format: "identifier BEGINSWITH %@", "auralis.home.card.random."
+            )).firstMatch
+            XCTAssertTrue(firstCard.exists)
+            XCTAssertEqual(firstCard.frame.minX - shelf.frame.minX, 20, accuracy: 1,
+                           "Inset the cards rather than the scroll viewport")
+            XCTAssertEqual(firstCard.frame.width, 140, accuracy: 1,
+                           "Wider windows must reveal more cards without stretching them")
+
+            let screenshot = XCTAttachment(screenshot: app.screenshot())
+            screenshot.name = landscape ? "Home full-width landscape" : "Home full-width portrait"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+        }
     }
 
     func testLibraryCollapsedDockDoesNotHitExpandedPlayerRegion() throws {

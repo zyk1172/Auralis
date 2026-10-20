@@ -16,8 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -142,30 +140,26 @@ private fun HomeContent(
     onBrowse: (BrowseDestination) -> Unit,
 ) {
     val colors = LocalAuralisTheme.current.colors
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            start = AuralisSpacing.large,
-            end = AuralisSpacing.large,
-            top = AuralisSpacing.medium,
-            bottom = AuralisChrome.dockHeight + AuralisChrome.dockBottomPadding + AuralisSpacing.xLarge,
-        ),
-        verticalArrangement = Arrangement.spacedBy(AuralisSpacing.xLarge),
+    HomeFeed(
+        topPadding = AuralisSpacing.medium,
+        bottomPadding = AuralisChrome.dockHeight + AuralisChrome.dockBottomPadding + AuralisSpacing.xLarge,
     ) {
         if (state.quickModules.isNotEmpty()) {
             item(key = "quick") {
-                QuickEntriesGrid(
-                    modules = state.quickModules,
-                    onOpen = { entry ->
-                        onBrowse(
-                            when (entry.id) {
-                                com.auralis.core.domain.HomeQuickEntry.Playlists -> BrowseDestination.Playlists
-                                com.auralis.core.domain.HomeQuickEntry.Favorites -> BrowseDestination.Favorites
-                                com.auralis.core.domain.HomeQuickEntry.MostPlayed -> BrowseDestination.MostPlayed
-                            },
-                        )
-                    },
-                )
+                Box(Modifier.padding(horizontal = AuralisSpacing.large)) {
+                    QuickEntriesGrid(
+                        modules = state.quickModules,
+                        onOpen = { entry ->
+                            onBrowse(
+                                when (entry.id) {
+                                    com.auralis.core.domain.HomeQuickEntry.Playlists -> BrowseDestination.Playlists
+                                    com.auralis.core.domain.HomeQuickEntry.Favorites -> BrowseDestination.Favorites
+                                    com.auralis.core.domain.HomeQuickEntry.MostPlayed -> BrowseDestination.MostPlayed
+                                },
+                            )
+                        },
+                    )
+                }
             }
         }
         items(state.contentModules, key = { "module-${it.id.name}" }) { module ->
@@ -177,7 +171,9 @@ private fun HomeContent(
             )
         }
         item(key = "stats") {
-            LibrarySummaryCard(stats = state.stats)
+            Box(Modifier.padding(horizontal = AuralisSpacing.large)) {
+                LibrarySummaryCard(stats = state.stats)
+            }
         }
     }
 }
@@ -224,14 +220,16 @@ private fun QuickEntriesGrid(
 
 /** 内容模块：模块标题行 + 横向货架。 */
 @Composable
-private fun HomeModuleSection(
+internal fun HomeModuleSection(
     module: HomeModuleSnapshot,
     onPlayTracks: (tracks: List<Track>, startIndex: Int) -> Unit,
     onBrowse: (BrowseDestination) -> Unit,
     onReshuffle: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(AuralisSpacing.medium)) {
-        ModuleHeader(module = module, onBrowse = onBrowse, onReshuffle = onReshuffle)
+        Box(Modifier.padding(horizontal = AuralisSpacing.large)) {
+            ModuleHeader(module = module, onBrowse = onBrowse, onReshuffle = onReshuffle)
+        }
         when {
             module.tracks.isNotEmpty() -> TrackShelf(
                 module = module,
@@ -340,7 +338,7 @@ private fun TrackShelf(
     module: HomeModuleSnapshot,
     onPlayTracks: (tracks: List<Track>, startIndex: Int) -> Unit,
 ) {
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(AuralisChrome.homeCardSpacing)) {
+    HomeShelf {
         // 用 itemsIndexed 直接拿下标。历史实现对每个 item 做
         // `indexOfFirst { it.globalId.serialized == track.globalId.serialized }`：
         // 单个货架 O(n²)，而且 `GlobalId.serialized` 是计算属性 —— 每次比较都新建字符串
@@ -360,7 +358,7 @@ private fun ArtistShelf(
     artists: List<Pair<Artist, Int>>,
     onOpen: (Artist) -> Unit,
 ) {
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(AuralisChrome.homeCardSpacing)) {
+    HomeShelf {
         items(artists, key = { it.first.globalId.serialized }) { (artist, playCount) ->
             HomeArtistCard(artist = artist, playCount = playCount, onClick = { onOpen(artist) })
         }
@@ -373,7 +371,7 @@ private fun AlbumShelf(
     albums: List<Pair<Album, Int>>,
     onOpen: (Album) -> Unit,
 ) {
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(AuralisChrome.homeCardSpacing)) {
+    HomeShelf {
         items(albums, key = { it.first.globalId.serialized }) { (album, playCount) ->
             HomeAlbumCard(album = album, playCount = playCount, onClick = { onOpen(album) })
         }

@@ -735,7 +735,6 @@ struct AssistantView: View {
         .padding(.horizontal, IOSTopLevelChromeMetrics.horizontalPadding)
         .padding(.vertical, IOSTopLevelChromeMetrics.verticalPadding)
         .frame(minHeight: IOSTopLevelChromeMetrics.titleWithSubtitleHeight)
-        .frame(maxWidth: IOSLayoutMetrics.readableContentMaxWidth)
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("auralis.assistant.header")

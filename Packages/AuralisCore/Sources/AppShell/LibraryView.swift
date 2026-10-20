@@ -124,7 +124,6 @@ struct LibraryView: View {
         }
         .padding(.horizontal, IOSTopLevelChromeMetrics.horizontalPadding)
         .frame(height: IOSTopLevelChromeMetrics.titleOnlyHeight)
-        .frame(maxWidth: IOSLayoutMetrics.readableContentMaxWidth)
         .frame(maxWidth: .infinity)
         .accessibilityIdentifier("auralis.library.header")
     }

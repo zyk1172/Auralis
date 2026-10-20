@@ -28,7 +28,6 @@ struct MacHomeView: View {
                         homeModule(module, metrics: homeMetrics)
                     }
                 }
-                .padding(.horizontal, homeMetrics.horizontalPadding)
                 .padding(.top, 32)
                 .padding(.bottom, 24)
             }
@@ -174,8 +173,8 @@ struct MacHomeView: View {
                     }
                     .buttonStyle(.link)
                 }
-                .padding(.horizontal, 2)
-                ScrollView(.horizontal, showsIndicators: false) {
+                .padding(.horizontal, metrics.horizontalPadding + 2)
+                ArtworkShelf(horizontalInset: metrics.horizontalPadding + 2) {
                     LazyHStack(alignment: .top, spacing: 20) {
                         ForEach(items) { item in
                             let track = item.track
@@ -189,7 +188,6 @@ struct MacHomeView: View {
                             )
                         }
                     }
-                    .padding(.horizontal, 2)
                 }
             }
         }
@@ -208,7 +206,8 @@ struct MacHomeView: View {
             let size = min(210, metrics.itemWidth)
             VStack(alignment: .leading, spacing: 12) {
                 MacSectionHeader(title: title, actionTitle: actionTitle, onAction: onAction)
-                ScrollView(.horizontal, showsIndicators: false) {
+                    .padding(.horizontal, metrics.horizontalPadding)
+                ArtworkShelf(horizontalInset: metrics.horizontalPadding + 2) {
                     LazyHStack(alignment: .top, spacing: 20) {
                         ForEach(items) { item in
                             let track = item.track
@@ -222,7 +221,6 @@ struct MacHomeView: View {
                             )
                         }
                     }
-                    .padding(.horizontal, 2)
                 }
             }
         }
@@ -237,7 +235,8 @@ struct MacHomeView: View {
                 MacSectionHeader(title: title, actionTitle: seeAll == nil ? nil : String(localized: "查看全部", bundle: .module)) {
                     if let seeAll { onNavigate(.sidebar(seeAll)) }
                 }
-                ScrollView(.horizontal, showsIndicators: false) {
+                .padding(.horizontal, metrics.horizontalPadding)
+                ArtworkShelf(horizontalInset: metrics.horizontalPadding + 2) {
                     LazyHStack(alignment: .top, spacing: 24) {
                         ForEach(items) { album in
                             MacAlbumTile(
@@ -250,7 +249,6 @@ struct MacHomeView: View {
                             )
                         }
                     }
-                    .padding(.horizontal, 2)
                 }
             }
         }
@@ -265,7 +263,8 @@ struct MacHomeView: View {
                 MacSectionHeader(title: title, actionTitle: seeAll == nil ? nil : String(localized: "查看全部", bundle: .module)) {
                     if let seeAll { onNavigate(.sidebar(seeAll)) }
                 }
-                ScrollView(.horizontal, showsIndicators: false) {
+                .padding(.horizontal, metrics.horizontalPadding)
+                ArtworkShelf(horizontalInset: metrics.horizontalPadding + 2) {
                     LazyHStack(alignment: .top, spacing: 20) {
                         ForEach(items) { artist in
                             let representativeAlbums = MacLibraryQuery.artistAlbums(artist, model: model)
@@ -282,7 +281,6 @@ struct MacHomeView: View {
                             )
                         }
                     }
-                    .padding(.horizontal, 2)
                 }
             }
         }
