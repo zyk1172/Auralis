@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #if os(iOS)
 import SwiftUI
+#if DEBUG
+import UIKit
+#endif
 
 /// One horizontal scroll container for button navigation and interactive swipes. Its vertical
 /// child scroll views retain their own native pan velocity and deceleration.
@@ -15,6 +18,8 @@ struct NowPlayingPager<Content: View>: View {
     @State private var hasPageCommand = false
     @State private var observedAnimatedOffset = false
     @State private var sampledOffset = 0
+    @State private var presentationOffset: Int?
+    @State private var presentationSamples = 0
 #endif
 
     init(selection: Binding<NowPlayingPage>, @ViewBuilder content: @escaping (NowPlayingPage) -> Content) {
@@ -44,6 +49,19 @@ struct NowPlayingPager<Content: View>: View {
                         }
                     }
                     .scrollTargetLayout()
+#if DEBUG
+                    .background {
+                        if CommandLine.arguments.contains("-auralis-ui-smoke-page-motion") {
+                            PagerPresentationProbe(enabled: hasPageCommand && !observedAnimatedOffset) { offset in
+                                presentationOffset = offset
+                                presentationSamples += 1
+                                let fraction = abs(offset % 1_000)
+                                if hasPageCommand, fraction > 40, fraction < 960 { observedAnimatedOffset = true }
+                            }
+                            .allowsHitTesting(false)
+                        }
+                    }
+#endif
                 }
                 .scrollIndicators(.hidden)
                 .scrollTargetBehavior(.paging)
@@ -94,7 +112,8 @@ struct NowPlayingPager<Content: View>: View {
                 .accessibilityIdentifier("auralis.nowPlaying.pages")
 #if DEBUG
                 if CommandLine.arguments.contains("-auralis-ui-smoke-page-motion") {
-                    pager.accessibilityValue(observedAnimatedOffset ? "animated-horizontal-offset" : "waiting-offset:\(sampledOffset)")
+                    pager.accessibilityValue(observedAnimatedOffset ? "animated-horizontal-offset"
+                        : "waiting-offset:\(sampledOffset),presentation:\(presentationOffset.map(String.init) ?? "none"),samples:\(presentationSamples)")
                 } else { pager }
 #else
                 pager
@@ -103,4 +122,77 @@ struct NowPlayingPager<Content: View>: View {
         }
     }
 }
+
+#if DEBUG
+/// Geometry callbacks can coalesce a programmatic scroll to its model endpoint.
+/// The smoke test also samples the native presentation bounds, so its existing
+/// intermediate-offset assertion measures what is actually drawn. This probe
+/// only runs for that test flag, for at most 1.5 seconds after a page command.
+private struct PagerPresentationProbe: UIViewRepresentable {
+    let enabled: Bool
+    let onSample: @MainActor (Int) -> Void
+
+    func makeUIView(context: Context) -> PagerPresentationView {
+        let view = PagerPresentationView(frame: .zero)
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        return view
+    }
+
+    func updateUIView(_ uiView: PagerPresentationView, context: Context) {
+        uiView.onSample = onSample
+        uiView.setEnabled(enabled)
+    }
+
+    static func dismantleUIView(_ uiView: PagerPresentationView, coordinator: ()) {
+        uiView.stop()
+    }
+}
+
+private final class PagerPresentationView: UIView {
+    var onSample: (@MainActor (Int) -> Void)?
+    private var requested = false
+    private var deadline: CFTimeInterval = 0
+    private var displayLink: CADisplayLink?
+
+    func setEnabled(_ enabled: Bool) {
+        guard requested != enabled else { return }
+        requested = enabled
+        if enabled { startIfVisible() } else { stop() }
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil { stop() } else if requested { startIfVisible() }
+    }
+
+    private func startIfVisible() {
+        guard window != nil, displayLink == nil else { return }
+        deadline = CACurrentMediaTime() + 1.5
+        let link = CADisplayLink(target: self, selector: #selector(sample(_:)))
+        displayLink = link
+        link.add(to: .main, forMode: .common)
+    }
+
+    func stop() {
+        displayLink?.invalidate()
+        displayLink = nil
+    }
+
+    @objc private func sample(_ link: CADisplayLink) {
+        guard link.timestamp <= deadline else { stop(); return }
+        var ancestor = superview
+        while let view = ancestor {
+            if let scroll = view as? UIScrollView, scroll.bounds.width > 0,
+               scroll.contentSize.width > scroll.bounds.width * 1.5 {
+                let bounds = scroll.layer.presentation()?.bounds ?? scroll.bounds
+                let offset = (bounds.minX + scroll.adjustedContentInset.left) / scroll.bounds.width
+                onSample?(Int((offset * 1_000).rounded()))
+                return
+            }
+            ancestor = view.superview
+        }
+    }
+}
+#endif
 #endif
