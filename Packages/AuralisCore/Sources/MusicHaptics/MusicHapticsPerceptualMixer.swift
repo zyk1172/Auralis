@@ -1140,6 +1140,9 @@ public struct MusicHapticsPerceptualMixer: Sendable {
             let selectedEvents = layeredTransientEvents(realCandidates + modifiers, beat: frame.beat)
             totalMergedCollisions += max(0, realCandidates.count - selectedEvents.count)
             totalSuppressedTransient += max(0, realCandidates.count - selectedEvents.count)
+            totalSuppressedHighPercussion += max(0,
+                realCandidates.filter { $0.classification == .highPercussion }.count
+                    - selectedEvents.filter { $0.classification == .highPercussion }.count)
             for var selected in selectedEvents {
                 pruneDetailTimes(at: selected.time)
                 if shouldSuppressForDensity(selected, beat: frame.beat)
