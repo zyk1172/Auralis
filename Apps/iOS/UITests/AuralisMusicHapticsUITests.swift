@@ -326,6 +326,17 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(artwork.frame.minY - screen.minY, 16)
         XCTAssertGreaterThanOrEqual(screen.maxY - artwork.frame.maxY, 16)
 
+        // Enter lyrics away from the first line. Its automatic vertical
+        // positioning must wait for the horizontal page animation to finish.
+        let progress = app.descendants(matching: .any)["播放进度"].firstMatch
+        XCTAssertTrue(progress.waitForExistence(timeout: 5))
+        progress.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: progress.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
+        let seekFinished = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value BEGINSWITH %@", "1:"), object: progress)
+        XCTAssertEqual(XCTWaiter.wait(for: [seekFinished], timeout: 10), .completed,
+                       "The animation regression must exercise lyrics positioning away from the start")
+
         let pager = app.scrollViews["auralis.nowPlaying.pages"].firstMatch
         print("Landscape pager before the lyrics command: \(String(describing: pager.value))")
         app.buttons["auralis.nowPlaying.lyrics"].firstMatch.tap()

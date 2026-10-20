@@ -466,6 +466,9 @@ struct NowPlayingView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var page = NowPlayingPage.player
+#if os(iOS)
+    @State private var settledPage: NowPlayingPage? = .player
+#endif
     @State private var isPlaylistSheetPresented = false
     @State private var showsTrackInformation = false
     @State private var lyricScrollProxy: ScrollViewProxy?
@@ -753,7 +756,7 @@ struct NowPlayingView: View {
         sectionSpacing: CGFloat,
         playButtonSize: CGFloat
     ) -> some View {
-        NowPlayingPager(selection: $page) { item in
+        NowPlayingPager(selection: $page, onSettledPageChange: updateSettledPage) { item in
             switch item {
             case .player:
                 playbackControls(
@@ -932,7 +935,7 @@ struct NowPlayingView: View {
         return VStack(spacing: sectionSpacing) {
             Group {
 #if os(iOS)
-            NowPlayingPager(selection: $page) { item in
+            NowPlayingPager(selection: $page, onSettledPageChange: updateSettledPage) { item in
                 switch item {
                 case .lyrics:
                     lyrics.contentShape(Rectangle()).simultaneousGesture(lyricsActivityTapGesture)
@@ -1686,7 +1689,23 @@ struct NowPlayingView: View {
         }
     }
 
+#if os(iOS)
+    private func updateSettledPage(_ visible: NowPlayingPage?) {
+        guard settledPage != visible else { return }
+        settledPage = visible
+        if visible == .lyrics { scrollToCurrentLyric(animated: false) }
+    }
+#endif
+
     private func scrollToCurrentLyric(animated: Bool) {
+        guard page == .lyrics else { return }
+#if os(iOS)
+        // A nested vertical scrollTo can reveal its offscreen parent and snap
+        // the horizontal pager to the lyrics before its animation completes.
+        // Wait for native scroll completion, not a timer; Chrome still responds
+        // immediately to the page command and to vertical finger movement.
+        guard settledPage == .lyrics else { return }
+#endif
         guard lyricScrollFollow.isFollowingPlayback,
               !lyricScrollFollow.isUserScrolling,
               let index = currentLyricIndex, let proxy = lyricScrollProxy else { return }
