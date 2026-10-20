@@ -257,6 +257,34 @@ public enum MusicHapticsIntensity: String, Codable, CaseIterable, Hashable, Send
     }
 }
 
+public enum MusicHapticsStyle: String, Codable, CaseIterable, Hashable, Sendable {
+    case rhythm
+    case immersive
+}
+
+/// Musical role is independent of instrument/timbre. A snare can be a pulse
+/// or an off-beat accent; a louder event is not necessarily a downbeat.
+public struct MusicHapticsRhythm: Codable, Hashable, Sendable {
+    public enum Role: String, Codable, Hashable, Sendable { case pulse, accent, ornament, texture }
+    public var role: Role
+    public var confidence: Double
+    public var beatTime: TimeInterval?
+    public var period: TimeInterval?
+
+    public init(role: Role, confidence: Double, beatTime: TimeInterval? = nil, period: TimeInterval? = nil) {
+        self.role = role
+        self.confidence = min(1, max(0, confidence.isFinite ? confidence : 0))
+        self.beatTime = beatTime.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+        self.period = period.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+    }
+
+    static func observed(beat: MusicHapticsBeatEstimate, time: TimeInterval) -> Self? {
+        guard beat.isBeat, beat.confidence >= 0.45 else { return nil }
+        return Self(role: .pulse, confidence: beat.confidence, beatTime: time,
+                    period: beat.tempoBPM.map { 60 / $0 })
+    }
+}
+
 public enum MusicHapticsEventClass: String, Codable, Hashable, Sendable {
     case kick
     case bassAttack
@@ -300,6 +328,11 @@ public struct MusicHapticsEvent: Codable, Hashable, Sendable {
     /// applies this amount to the selected dominant transient.
     public var climaxAmount: Float
     public var curve: [MusicHapticsCurvePoint]
+    public var rhythm: MusicHapticsRhythm?
+
+    public var isRhythmicPulse: Bool {
+        rhythm?.role == .pulse && (rhythm?.confidence ?? 0) >= 0.45
+    }
 
     public init(
         time: TimeInterval,
@@ -309,7 +342,8 @@ public struct MusicHapticsEvent: Codable, Hashable, Sendable {
         kind: MusicHapticsEventKind,
         classification: MusicHapticsEventClass = .unknown,
         climaxAmount: Float = 0,
-        curve: [MusicHapticsCurvePoint] = []
+        curve: [MusicHapticsCurvePoint] = [],
+        rhythm: MusicHapticsRhythm? = nil
     ) {
         self.time = max(0, time)
         self.duration = duration.map { max(0.02, min($0, 20)) }
@@ -319,10 +353,11 @@ public struct MusicHapticsEvent: Codable, Hashable, Sendable {
         self.classification = classification
         self.climaxAmount = min(max(climaxAmount.isFinite ? climaxAmount : 0, 0), 1)
         self.curve = curve.sorted { $0.timeOffset < $1.timeOffset }
+        self.rhythm = rhythm
     }
 
     private enum CodingKeys: String, CodingKey {
-        case time, duration, intensity, sharpness, kind, classification, climaxAmount, curve
+        case time, duration, intensity, sharpness, kind, classification, climaxAmount, curve, rhythm
     }
 
     /// v1 files did not contain event classes or curves.  Missing fields are
@@ -338,7 +373,8 @@ public struct MusicHapticsEvent: Codable, Hashable, Sendable {
             kind: try container.decode(MusicHapticsEventKind.self, forKey: .kind),
             classification: try container.decodeIfPresent(MusicHapticsEventClass.self, forKey: .classification) ?? .unknown,
             climaxAmount: try container.decodeIfPresent(Float.self, forKey: .climaxAmount) ?? 0,
-            curve: try container.decodeIfPresent([MusicHapticsCurvePoint].self, forKey: .curve) ?? []
+            curve: try container.decodeIfPresent([MusicHapticsCurvePoint].self, forKey: .curve) ?? [],
+            rhythm: try container.decodeIfPresent(MusicHapticsRhythm.self, forKey: .rhythm)
         )
     }
 }
@@ -350,9 +386,9 @@ public struct MusicHapticsTimeline: Codable, Hashable, Sendable {
     /// changes. Stored timelines from an older algorithm deliberately become
     /// cache misses so playback cannot silently mix old and new tactile
     /// semantics.
-    /// v3 localizes attacks inside overlapped FFT frames and maps transient
-    /// timbre into a compressed tactile intensity/sharpness space.
-    public static let algorithmVersion = "auralis-haptics-v3.0"
+    /// v4 preserves per-event rhythm through mixing/caching and protects
+    /// observed pulses. Render-time style/intensity never enter this cache.
+    public static let algorithmVersion = "auralis-haptics-v4.0"
     public var formatVersion: Int
     public var algorithmVersion: String
     public var identity: MusicHapticsIdentity

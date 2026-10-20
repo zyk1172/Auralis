@@ -88,16 +88,13 @@ public struct MusicHapticsAnalysisWindow: Hashable, Sendable {
             let duration = segmentEnd - segmentStart
             guard duration >= 0.02 else { return nil }
             let offset = segmentStart - event.time
-            var curve = event.curve.map {
-                MusicHapticsCurvePoint(
-                    timeOffset: min(duration, max(0, $0.timeOffset - offset)),
-                    intensity: $0.intensity,
-                    sharpness: $0.sharpness
-                )
-            }
-            if curve.isEmpty {
-                curve = [MusicHapticsCurvePoint(timeOffset: 0, intensity: event.intensity, sharpness: event.sharpness)]
-            }
+            let startPoint = MusicHapticsRendering.curvePoint(in: event, at: offset)
+            let endPoint = MusicHapticsRendering.curvePoint(in: event, at: offset + duration)
+            let curve = [MusicHapticsCurvePoint(timeOffset: 0, intensity: startPoint.intensity, sharpness: startPoint.sharpness)]
+                + event.curve.filter { $0.timeOffset > offset && $0.timeOffset < offset + duration }.map {
+                    MusicHapticsCurvePoint(timeOffset: $0.timeOffset - offset, intensity: $0.intensity, sharpness: $0.sharpness)
+                }
+                + [MusicHapticsCurvePoint(timeOffset: duration, intensity: endPoint.intensity, sharpness: endPoint.sharpness)]
             return MusicHapticsEvent(
                 time: segmentStart,
                 duration: duration,
@@ -106,7 +103,8 @@ public struct MusicHapticsAnalysisWindow: Hashable, Sendable {
                 kind: .continuous,
                 classification: event.classification,
                 climaxAmount: event.climaxAmount,
-                curve: curve
+                curve: curve,
+                rhythm: event.rhythm
             )
         }
         return Self(

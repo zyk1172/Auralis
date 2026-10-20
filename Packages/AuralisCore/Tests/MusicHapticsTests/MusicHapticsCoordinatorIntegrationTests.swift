@@ -458,6 +458,9 @@ private final class RecordingMusicHapticsOutputEngine: MusicHapticsOutputEngine 
     private(set) var pauseCount = 0
     private(set) var backgroundTransitionCount = 0
     private(set) var restartCount = 0
+    private(set) var configuration = MusicHapticsRenderConfiguration()
+    private(set) var timelinePlayCount = 0
+    private(set) var stopCount = 0
     private var actualSuspensionHandler: (() -> Void)?
 
     func setActualSuspensionHandler(_ handler: (() -> Void)?) {
@@ -468,12 +471,17 @@ private final class RecordingMusicHapticsOutputEngine: MusicHapticsOutputEngine 
         state = .running
     }
 
+    func configure(_ configuration: MusicHapticsRenderConfiguration) {
+        self.configuration = configuration
+    }
+
     func play(
         _ timeline: MusicHapticsTimeline,
         offset: TimeInterval,
         playbackRate: Double
     ) throws {
         state = .running
+        timelinePlayCount += 1
     }
 
     func play(
@@ -481,9 +489,10 @@ private final class RecordingMusicHapticsOutputEngine: MusicHapticsOutputEngine 
         from currentPosition: TimeInterval,
         intensity: MusicHapticsIntensity,
         playbackRate: Double
-    ) {
+    ) -> MusicHapticsOutputResult {
         state = .running
         playedWindows.append(window)
+        return .submitted(pulses: window.events.filter { $0.kind == .transient && $0.isRhythmicPulse }.count)
     }
 
     func pause() { pauseCount += 1 }
@@ -491,7 +500,7 @@ private final class RecordingMusicHapticsOutputEngine: MusicHapticsOutputEngine 
     func seek(to offset: TimeInterval, playing: Bool, playbackRate: Double) {
         if playing { state = .running }
     }
-    func stop() {}
+    func stop() { stopCount += 1 }
 
     func applicationDidEnterBackground() {
         backgroundTransitionCount += 1
@@ -525,4 +534,57 @@ private func makeCoordinatorPCM(duration: TimeInterval) -> Data {
         withUnsafeBytes(of: &sample) { data.append(contentsOf: $0) }
     }
     return data
+}
+
+@Test @MainActor func hapticsRenderingSettingsPersistAndReachOutputEngine() async {
+    let suite = "music-haptics-rendering-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set(MusicHapticsIntensity.light.rawValue, forKey: MusicHapticsCoordinator.intensityDefaultsKey)
+    let output = RecordingMusicHapticsOutputEngine()
+    let coordinator = MusicHapticsCoordinator(defaults: defaults, outputEngine: output, isFeatureAvailable: true)
+    #expect(output.configuration.intensity == .light)
+    let selected = MusicHapticsRenderConfiguration(style: .immersive, intensity: .strong)
+    coordinator.setRenderConfiguration(selected)
+    #expect(output.configuration == selected)
+    #expect(coordinator.renderConfiguration == selected)
+    let restored = MusicHapticsCoordinator(defaults: defaults, outputEngine: RecordingMusicHapticsOutputEngine(), isFeatureAvailable: true)
+    #expect(restored.renderConfiguration == selected)
+    let diagnostics = await coordinator.diagnostics()
+    #expect(diagnostics.renderStyle == .immersive)
+    #expect(diagnostics.renderIntensity == .strong)
+}
+
+@Test @MainActor func previewIsCancellableAndDoesNotStopSubsequentPlayback() async throws {
+    let suite = "music-haptics-preview-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set(true, forKey: MusicHapticsCoordinator.enabledDefaultsKey)
+    let output = RecordingMusicHapticsOutputEngine()
+    let coordinator = MusicHapticsCoordinator(defaults: defaults, outputEngine: output, isFeatureAvailable: true)
+    coordinator.startPreview()
+    #expect(output.timelinePlayCount == 1)
+    let identity = MusicHapticsIdentity(isrc: "USABC1234567", title: "Fixture", artist: "Fixture", durationMilliseconds: 4000)
+    let timeline = MusicHapticsTimeline(identity: identity, duration: 4, analyzedDuration: 4, analysisCoverage: 1,
+        events: [.init(time: 1, intensity: 0.4, sharpness: 0.2, kind: .transient,
+                       rhythm: .init(role: .pulse, confidence: 0.9))])
+    let preparation = MusicHapticsPlaybackPreparation(identity: identity, favorite: false, plan: .custom(timeline),
+        reason: "test", systemAvailability: .init(hasISRC: true, active: false, timelineAvailable: false),
+        fullTimelineExists: true, partialExists: false, preference: .inherit, effectiveEnabled: true, analysisSink: nil)
+    coordinator.activate(preparation, position: 0)
+    #expect(output.timelinePlayCount == 2)
+    let stops = output.stopCount
+    try await Task.sleep(for: .milliseconds(2100))
+    #expect(output.stopCount == stops)
+    coordinator.startPreview()
+    #expect(output.timelinePlayCount == 2)
+    coordinator.handleSystemPlayback(code: "OTHER", isPlaying: true)
+    #expect(output.stopCount == stops)
+    coordinator.handleSystemPlayback(code: "USABC1234567", isPlaying: true)
+    #expect(output.stopCount > stops)
+    #expect(coordinator.source == .system)
+    let count = output.timelinePlayCount
+    coordinator.handleSystemPlayback(code: "USABC1234567", isPlaying: false)
+    coordinator.setRenderConfiguration(.init(style: .immersive, intensity: .light))
+    #expect(output.timelinePlayCount == count)
 }

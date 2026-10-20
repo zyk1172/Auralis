@@ -365,7 +365,7 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         let onsetThreshold = adaptiveThreshold(onsetHistory, multiplier: 2.8, floor: 0.0005)
         let rmsThreshold = adaptiveThreshold(rmsHistory, multiplier: 2.2, floor: 0.004)
         let isTransient = onset >= onsetThreshold && safeRMS >= rmsThreshold && safeRMS > 0.004
-        let hasBeatOnsetCandidate = onset >= onsetThreshold && safeRMS > 0.003
+        let hasBeatOnsetCandidate = onset >= onsetThreshold * 0.55 && safeRMS > 0.003
         let frameCenterTime = time + Double(frameSize) / (2 * sampleRate)
         let localizedAttackTime = hasBeatOnsetCandidate
             ? time + MusicHapticsAttackShaper.localizedAttackOffset(
@@ -440,7 +440,8 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
                 intensity: intensity,
                 sharpness: tactileShape.sharpness,
                 kind: .transient,
-                classification: eventClass
+                classification: eventClass,
+                rhythm: MusicHapticsRhythm.observed(beat: beat, time: localizedAttackTime)
             ))
         }
 
@@ -868,8 +869,14 @@ public enum MusicHapticsEventDeduplicator {
                     classification: event.classification,
                     curve: (existingCurve + eventCurve).sorted { $0.timeOffset < $1.timeOffset }
                 )
-            } else if event.intensity > existing.intensity {
-                result[index] = event
+            } else {
+                var selected = event.intensity > existing.intensity ? event : existing
+                let pulses = [existing, event].filter(\.isRhythmicPulse)
+                if let pulse = pulses.max(by: { ($0.rhythm?.confidence ?? 0) < ($1.rhythm?.confidence ?? 0) }) {
+                    selected.rhythm = pulse.rhythm
+                    selected.time = pulse.time
+                }
+                result[index] = selected
             }
         }
         return collapseTransientCollisions(result)

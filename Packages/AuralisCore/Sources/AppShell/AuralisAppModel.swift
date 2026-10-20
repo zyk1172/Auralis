@@ -1074,7 +1074,8 @@ public final class AuralisAppModel: ObservableObject {
                 position,
                 isPlaying: update.state == .playing,
                 rate: Double(update.rate),
-                source: .playbackEngine
+                source: .playbackEngine,
+                sampledUptime: update.sampledUptime
             )
         }
         guard update.isStateTransition else { return }

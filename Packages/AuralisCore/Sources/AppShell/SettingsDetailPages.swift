@@ -74,6 +74,8 @@ struct PlaybackSettingsPage: View {
     @AppStorage("auralis.audio.highQualityWiFi") private var highQualityWiFi = true
     @AppStorage("auralis.audio.cellularTranscoding") private var cellularTranscoding = true
     @AppStorage(MusicHapticsCoordinator.enabledDefaultsKey) private var musicHapticsEnabled = false
+    @AppStorage(MusicHapticsCoordinator.styleDefaultsKey) private var musicHapticsStyle = MusicHapticsStyle.rhythm.rawValue
+    @AppStorage(MusicHapticsCoordinator.intensityDefaultsKey) private var musicHapticsIntensity = MusicHapticsIntensity.medium.rawValue
     @State private var musicHapticsUsage = MusicHapticsUsage()
     @State private var musicHapticsDiagnostics: MusicHapticsDiagnostics?
 
@@ -123,6 +125,7 @@ struct PlaybackSettingsPage: View {
                     Toggle(String(localized: "自动开启音乐震动", bundle: .module), isOn: $musicHapticsEnabled)
                         .disabled(!model.musicHaptics.supportsHaptics)
                         .accessibilityIdentifier(Self.musicHapticsSettingsIdentifier)
+                    localHapticsControls
 #if DEBUG
                     NavigationLink(String(localized: "Music Haptics 调试诊断", bundle: .module)) {
                         MusicHapticsDiagnosticsPage(model: model, theme: theme, diagnostics: musicHapticsDiagnostics)
@@ -155,6 +158,46 @@ struct PlaybackSettingsPage: View {
         .onChange(of: musicHapticsEnabled) { _, enabled in
             model.setMusicHapticsEnabled(enabled)
         }
+        .onChange(of: musicHapticsStyle) { _, _ in applyHapticsRendering() }
+        .onChange(of: musicHapticsIntensity) { _, _ in applyHapticsRendering() }
+        .onDisappear { model.musicHaptics.stopPreview() }
+    }
+
+    @ViewBuilder
+    private var localHapticsControls: some View {
+        Picker(String(localized: "本地震动风格", bundle: .module), selection: $musicHapticsStyle) {
+            Text(String(localized: "节奏清晰", bundle: .module)).tag(MusicHapticsStyle.rhythm.rawValue)
+            Text(String(localized: "音乐沉浸", bundle: .module)).tag(MusicHapticsStyle.immersive.rawValue)
+        }
+        .accessibilityIdentifier("auralis.settings.musicHaptics.style")
+        Picker(String(localized: "本地震动力度", bundle: .module), selection: $musicHapticsIntensity) {
+            Text(String(localized: "轻", bundle: .module)).tag(MusicHapticsIntensity.light.rawValue)
+            Text(String(localized: "中", bundle: .module)).tag(MusicHapticsIntensity.medium.rawValue)
+            Text(String(localized: "强", bundle: .module)).tag(MusicHapticsIntensity.strong.rawValue)
+        }
+        .accessibilityIdentifier("auralis.settings.musicHaptics.intensity")
+        Text(String(localized: "节奏清晰突出主拍，音乐沉浸保留更多纹理。力度独立调整，轻档也会保留主要节奏。", bundle: .module))
+            .font(.caption).foregroundStyle(.secondary)
+        Text(String(localized: "以上设置用于本地生成的震动；系统 Music Haptics 的风格和力度请在系统辅助功能中调整。", bundle: .module))
+            .font(.caption).foregroundStyle(.secondary)
+        Button(String(localized: "试听两秒", bundle: .module)) {
+            model.musicHaptics.startPreview()
+        }
+        .disabled(!model.musicHaptics.supportsHaptics || model.playbackState == .playing)
+        .accessibilityIdentifier("auralis.settings.musicHaptics.preview")
+        Button(String(localized: "停止试听", bundle: .module)) { model.musicHaptics.stopPreview() }
+        Text(String(localized: "请暂停音乐后试听。", bundle: .module)).font(.caption).foregroundStyle(.secondary)
+        Button(String(localized: "恢复震动默认设置", bundle: .module)) {
+            musicHapticsStyle = MusicHapticsStyle.rhythm.rawValue
+            musicHapticsIntensity = MusicHapticsIntensity.medium.rawValue
+        }
+    }
+
+    private func applyHapticsRendering() {
+        model.musicHaptics.setRenderConfiguration(.init(
+            style: MusicHapticsStyle(rawValue: musicHapticsStyle) ?? .rhythm,
+            intensity: MusicHapticsIntensity(rawValue: musicHapticsIntensity) ?? .medium
+        ))
     }
 
     private static func systemHapticsState(
@@ -256,6 +299,12 @@ private struct MusicHapticsDiagnosticsPage: View {
                 LabeledContent("rollingWindowCount", value: "\(displayDiagnostics.rollingWindowCount)")
                 LabeledContent("tempoBPM", value: displayDiagnostics.tempoBPM.map { String(format: "%.1f", $0) } ?? "none")
                 LabeledContent("beatConfidence", value: String(format: "%.2f", displayDiagnostics.beatConfidence))
+                LabeledContent("renderStyle", value: displayDiagnostics.renderStyle.rawValue)
+                LabeledContent("renderIntensity", value: displayDiagnostics.renderIntensity.rawValue)
+                LabeledContent("submittedPulseCount", value: "\(displayDiagnostics.submittedPulseCount)")
+                LabeledContent("rejectedOutputCount", value: "\(displayDiagnostics.rejectedOutputCount)")
+                LabeledContent("lastOutputReason", value: displayDiagnostics.lastOutputReason ?? "none")
+                LabeledContent("systemTrackPlaying", value: displayDiagnostics.systemTrackPlaying.map { $0 ? "true" : "false" } ?? "unknown")
                 LabeledContent("beatGridConfidence", value: String(format: "%.2f", displayDiagnostics.beatGridConfidence))
                 LabeledContent("beatGridBPM", value: displayDiagnostics.beatGridBPM.map { String(format: "%.1f", $0) } ?? "none")
                 LabeledContent("beatPhaseError", value: String(format: "%.3f", displayDiagnostics.beatPhaseError))

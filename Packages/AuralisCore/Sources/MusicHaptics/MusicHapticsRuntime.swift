@@ -78,6 +78,12 @@ private final class MusicHapticsProgressDelivery: @unchecked Sendable {
 /// URLs, server names and any authentication material.
 public struct MusicHapticsDiagnostics: Sendable, Equatable {
     public var supportsCustomHaptics: Bool
+    public var renderStyle: MusicHapticsStyle = .rhythm
+    public var renderIntensity: MusicHapticsIntensity = .medium
+    public var submittedPulseCount = 0
+    public var rejectedOutputCount = 0
+    public var lastOutputReason: String?
+    public var systemTrackPlaying: Bool?
     public var systemMusicHapticsActive: Bool
     public var globalEnabled: Bool
     public var trackPreference: TrackHapticsPreference
@@ -396,7 +402,17 @@ public enum MusicHapticsPlaybackPlanResolver {
 
 @MainActor
 public final class SystemMusicHapticsAdapter {
+    private var statusToken: (any NSCopying)?
     public init() {}
+
+    func observePlayback(_ handler: @escaping @MainActor @Sendable (String, Bool) -> Void) {
+        #if os(iOS)
+        guard statusToken == nil else { return }
+        statusToken = MAMusicHapticsManager.shared.addStatusObserver { code, playing in
+            Task { @MainActor in handler(code, playing) }
+        }
+        #endif
+    }
 
     public func availability(isrc: String?) async -> MusicHapticsSystemAvailability {
         let hasISRC = !(isrc?.isEmpty ?? true)
@@ -460,6 +476,7 @@ protocol MusicHapticsOutputEngine: AnyObject {
 
     func setActualSuspensionHandler(_ handler: (() -> Void)?)
     func warmUp()
+    func configure(_ configuration: MusicHapticsRenderConfiguration)
     func play(
         _ timeline: MusicHapticsTimeline,
         offset: TimeInterval,
@@ -470,13 +487,27 @@ protocol MusicHapticsOutputEngine: AnyObject {
         from currentPosition: TimeInterval,
         intensity: MusicHapticsIntensity,
         playbackRate: Double
-    )
+    ) -> MusicHapticsOutputResult
     func pause()
     func resume(at offset: TimeInterval, playbackRate: Double)
     func seek(to offset: TimeInterval, playing: Bool, playbackRate: Double)
     func stop()
     func applicationDidEnterBackground()
     func restartIfNeeded()
+}
+
+enum MusicHapticsOutputResult: Equatable, Sendable {
+    case submitted(pulses: Int)
+    case filtered
+    case stale
+    case capacityRejected
+    case unavailable
+    case failed
+}
+
+@MainActor
+extension MusicHapticsOutputEngine {
+    func configure(_ configuration: MusicHapticsRenderConfiguration) {}
 }
 
 @MainActor
@@ -488,6 +519,12 @@ final class CustomMusicHapticsEngine: MusicHapticsOutputEngine {
     private var actualSuspensionHandler: (() -> Void)?
 
     private var currentTimeline: MusicHapticsTimeline?
+    private var configuration = MusicHapticsRenderConfiguration()
+    private var precedingAttacks: [TimeInterval] = []
+
+    func configure(_ configuration: MusicHapticsRenderConfiguration) {
+        self.configuration = configuration
+    }
 
     #if os(iOS)
     private var engine: CHHapticEngine?
@@ -551,7 +588,7 @@ final class CustomMusicHapticsEngine: MusicHapticsOutputEngine {
             events: timeline.events,
             timeShift: 0,
             offset: max(0, offset),
-            intensity: .medium,
+            intensity: configuration.intensity,
             playbackRate: safeRate
         )
         do {
@@ -577,17 +614,19 @@ final class CustomMusicHapticsEngine: MusicHapticsOutputEngine {
         from currentPosition: TimeInterval,
         intensity: MusicHapticsIntensity = .medium,
         playbackRate: Double = 1
-    ) {
+    ) -> MusicHapticsOutputResult {
         #if os(iOS)
-        guard supportsHaptics,
-              canProduceOutput,
-              !window.events.filter({ shouldKeep($0, intensity: intensity) }).isEmpty
-        else { return }
+        guard supportsHaptics, canProduceOutput else { return .unavailable }
+        let future = window.events.filter {
+            $0.kind == .transient ? $0.time >= currentPosition : $0.time + ($0.duration ?? 0) > currentPosition
+        }
+        guard !future.isEmpty else { return .stale }
+        guard future.contains(where: { shouldKeep($0, intensity: intensity) }) else { return .filtered }
         do {
             let safeRate = min(max(playbackRate.isFinite ? playbackRate : 1, 0.5), 2)
             let engine = try prepareEngine()
             let patterns = try makePatterns(
-                events: window.events,
+                events: future,
                 timeShift: 0,
                 offset: max(0, currentPosition),
                 intensity: intensity,
@@ -603,7 +642,7 @@ final class CustomMusicHapticsEngine: MusicHapticsOutputEngine {
             // Haptics are optional. Bound allocation during a burst by
             // dropping this new slice, rather than blocking audio or stopping
             // players that still contain scheduled musical events.
-            guard players.count + patterns.count <= Self.maximumRollingPlayers else { return }
+            guard players.count + patterns.count <= Self.maximumRollingPlayers else { return .capacityRejected }
             let newPlayers = try patterns.map { try engine.makeAdvancedPlayer(with: $0) }
             let startTime = engine.currentTime + 0.005
             let duration = MusicHapticsPlaybackTimeMapping.relativeTime(
@@ -615,11 +654,16 @@ final class CustomMusicHapticsEngine: MusicHapticsOutputEngine {
                 players.append(ActivePlayer(player: player, expiresAt: startTime + duration + 0.1))
                 try player.start(atTime: startTime)
             }
+            let pulses = future.filter { $0.kind == .transient && $0.isRhythmicPulse }.count
+            return .submitted(pulses: pulses)
         } catch {
             stop()
             state = .stopped
             lastStopReason = String(describing: error)
+            return .failed
         }
+        #else
+        return .unavailable
         #endif
     }
 
@@ -652,6 +696,7 @@ final class CustomMusicHapticsEngine: MusicHapticsOutputEngine {
 
     func stop() {
         currentTimeline = nil
+        precedingAttacks.removeAll(keepingCapacity: true)
         #if os(iOS)
         players.forEach { try? $0.player.stop(atTime: CHHapticTimeImmediate) }
         players.removeAll()
@@ -701,21 +746,8 @@ final class CustomMusicHapticsEngine: MusicHapticsOutputEngine {
         ]
     }
 
-    private func shouldKeep(
-        _ event: MusicHapticsEvent,
-        intensity: MusicHapticsIntensity
-    ) -> Bool {
-        let floor = intensity.weakEventFloor
-        switch event.classification {
-        case .kick, .bassAttack, .snareClap, .climax:
-            return event.intensity >= floor * 0.65
-        case .highPercussion:
-            return event.intensity >= (intensity == .light ? 0.48 : floor)
-        case .sustainedBass, .buildTexture:
-            return event.intensity >= (intensity == .light ? 0.30 : floor)
-        case .unknown:
-            return event.intensity >= floor
-        }
+    private func shouldKeep(_ event: MusicHapticsEvent, intensity: MusicHapticsIntensity) -> Bool {
+        MusicHapticsRendering.shouldKeep(event, intensity: intensity)
     }
 
     private func makePatterns(
@@ -731,7 +763,15 @@ final class CustomMusicHapticsEngine: MusicHapticsOutputEngine {
                     ? event.time >= offset
                     : event.time + (event.duration ?? 0) > offset)
         }
-        return try MusicHapticsPatternComposer.layers(for: future).map {
+        let rendered = MusicHapticsRendering.events(future, style: configuration.style,
+                                                    precedingAttacks: precedingAttacks)
+        precedingAttacks = (precedingAttacks + future.filter(MusicHapticsRendering.isStructuralAttack).map(\.time))
+            .filter { $0 >= offset - 0.10 }
+            .sorted()
+        // Bound history to the rolling horizon; full cached timelines need no
+        // history after their one render pass.
+        precedingAttacks = Array(precedingAttacks.suffix(64))
+        return try MusicHapticsPatternComposer.layers(for: rendered).map {
             try makePattern(events: $0, timeShift: timeShift, offset: offset,
                             intensity: intensity, playbackRate: playbackRate)
         }
@@ -745,7 +785,7 @@ final class CustomMusicHapticsEngine: MusicHapticsOutputEngine {
         playbackRate: Double
     ) throws -> CHHapticPattern {
         let safeRate = min(max(playbackRate.isFinite ? playbackRate : 1, 0.5), 2)
-        let selectedEvents = events.filter { shouldKeep($0, intensity: intensity) }
+        let selectedEvents = events
         let hapticEvents = selectedEvents.compactMap { event -> CHHapticEvent? in
             let eventEnd = event.time + (event.duration ?? 0)
             switch event.kind {
@@ -1034,6 +1074,8 @@ public final class MusicHapticsPlaybackPreparation {
 @MainActor
 public final class MusicHapticsCoordinator {
     public static let enabledDefaultsKey = "auralis.playback.musicHaptics.enabled"
+    public static let styleDefaultsKey = "auralis.playback.musicHaptics.style"
+    public static let intensityDefaultsKey = "auralis.playback.musicHaptics.intensity"
     public private(set) var source: MusicHapticsSource = .none
 
     private let store: MusicHapticsStore
@@ -1064,6 +1106,14 @@ public final class MusicHapticsCoordinator {
     private var analysisFailureDetail: String?
     private var currentFavorite = false
     private var currentPosition: TimeInterval = 0
+    private var clockSampleUptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    private var hasAuthoritativeClock = false
+    private var submittedPulseCount = 0
+    private var rejectedOutputCount = 0
+    private var lastOutputReason: String?
+    private var systemTrackPlaying: Bool?
+    private var systemOwnsOutput = false
+    private var previewTask: Task<Void, Never>?
     private var playbackRate: Double = 1
     private var playbackIsPlaying = false
     /// Runtime-only gate used by the per-track playback toggle.  It never
@@ -1128,6 +1178,12 @@ public final class MusicHapticsCoordinator {
         )
         custom.setActualSuspensionHandler { [weak self] in
             self?.handleActualHapticsSuspension()
+        }
+        custom.configure(renderConfiguration)
+        if isFeatureAvailable {
+            system.observePlayback { [weak self] code, playing in
+                self?.handleSystemPlayback(code: code, isPlaying: playing)
+            }
         }
     }
 
@@ -1480,6 +1536,13 @@ public final class MusicHapticsCoordinator {
         rate: Double = 1,
         isPlaying: Bool = true
     ) {
+        stopPreview()
+        systemTrackPlaying = nil
+        systemOwnsOutput = false
+        hasAuthoritativeClock = false
+        submittedPulseCount = 0
+        rejectedOutputCount = 0
+        lastOutputReason = nil
         let globalEnabled = defaults.object(forKey: Self.enabledDefaultsKey) as? Bool ?? false
         let effectiveEnabled = preparation.preference.effective(
             globalEnabled: globalEnabled
@@ -1516,6 +1579,7 @@ public final class MusicHapticsCoordinator {
         currentIdentity = preparation.identity
         currentFavorite = preparation.favorite
         currentPosition = max(0, position)
+        clockSampleUptime = ProcessInfo.processInfo.systemUptime
         playbackRate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
         runtimeOutputEnabled = preparation.plan.kind != .disabled
         playbackIsPlaying = isPlaying
@@ -1557,8 +1621,8 @@ public final class MusicHapticsCoordinator {
             source = .system
         case let .custom(timeline):
             do {
-                if isPlaying, runtimeOutputEnabled, custom.canProduceOutput, !hapticsSuspended {
-                    try custom.play(
+                if isPlaying, runtimeOutputEnabled, custom.canProduceOutput, !hapticsSuspended, !systemOwnsOutput {
+                    try playFullTimeline(
                         timeline,
                         offset: position,
                         playbackRate: playbackRate
@@ -1713,6 +1777,7 @@ public final class MusicHapticsCoordinator {
 
     public func resume(position: TimeInterval, rate: Double = 1) {
         currentPosition = max(0, position)
+        clockSampleUptime = ProcessInfo.processInfo.systemUptime
         playbackRate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
         playbackIsPlaying = true
         audioBuffering = false
@@ -1753,7 +1818,7 @@ public final class MusicHapticsCoordinator {
         if source == .custom, let timeline = currentTimeline {
             custom.stop()
             do {
-                try custom.play(
+                try playFullTimeline(
                     timeline,
                     offset: currentPosition,
                     playbackRate: playbackRate
@@ -1778,6 +1843,7 @@ public final class MusicHapticsCoordinator {
 
     public func seek(position: TimeInterval, playing: Bool, rate: Double = 1) {
         currentPosition = max(0, position)
+        clockSampleUptime = ProcessInfo.processInfo.systemUptime
         playbackRate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
         playbackIsPlaying = playing
         currentPreparation?.lookaheadAnalyzer?.updatePlaybackPosition(
@@ -1814,7 +1880,8 @@ public final class MusicHapticsCoordinator {
         _ position: TimeInterval,
         isPlaying: Bool,
         rate: Double = 1,
-        source: MusicHapticsClockSource = .uiEstimate
+        source: MusicHapticsClockSource = .uiEstimate,
+        sampledUptime: TimeInterval? = nil
     ) {
         // This callback is driven by the UI/progress display and may arrive
         // after the scene has already entered the background.  Background
@@ -1822,12 +1889,18 @@ public final class MusicHapticsCoordinator {
         // tick here would overwrite that clock and make the foreground
         // rebase start from stale data.  The next active transition supplies
         // the authoritative AVPlayer position explicitly.
-        guard source == .playbackEngine || !isInBackground else { return }
+        guard source == .playbackEngine || (!isInBackground && !hasAuthoritativeClock) else { return }
+        if source == .playbackEngine { hasAuthoritativeClock = true }
         let previousPosition = currentPosition
         currentPosition = max(0, position)
+        clockSampleUptime = ProcessInfo.processInfo.systemUptime
+        if let sampledUptime, sampledUptime.isFinite, sampledUptime <= clockSampleUptime {
+            clockSampleUptime = sampledUptime
+        }
         let safeRate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
         let rateChanged = abs(safeRate - playbackRate) > 0.02
         playbackRate = safeRate
+        if isPlaying { stopPreview() }
         playbackIsPlaying = isPlaying
         if isPlaying { audioBuffering = false }
         let analysisCanRun = isPlaying && !audioBuffering && runtimeOutputEnabled && !hapticsSuspended
@@ -2036,6 +2109,7 @@ public final class MusicHapticsCoordinator {
     ) {
         isInBackground = false
         currentPosition = max(0, position)
+        clockSampleUptime = ProcessInfo.processInfo.systemUptime
         playbackRate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
         playbackIsPlaying = isPlaying
         audioBuffering = false
@@ -2094,7 +2168,7 @@ public final class MusicHapticsCoordinator {
         case let .custom(timeline):
             custom.stop()
             do {
-                try custom.play(
+                try playFullTimeline(
                     timeline,
                     offset: currentPosition,
                     playbackRate: playbackRate
@@ -2262,6 +2336,112 @@ public final class MusicHapticsCoordinator {
         scheduleCurrentCheckpoint()
     }
 
+    public var renderConfiguration: MusicHapticsRenderConfiguration {
+        MusicHapticsRenderConfiguration(
+            style: defaults.string(forKey: Self.styleDefaultsKey).flatMap(MusicHapticsStyle.init(rawValue:)) ?? .rhythm,
+            intensity: defaults.string(forKey: Self.intensityDefaultsKey).flatMap(MusicHapticsIntensity.init(rawValue:)) ?? .medium
+        )
+    }
+
+    /// An actual system track taking over is authoritative. A transient false
+    /// callback must not start a second engine while the system still owns
+    /// this recording; the next preparation selects the source afresh.
+    func handleSystemPlayback(code: String, isPlaying: Bool) {
+        let normalized = code.uppercased().filter { $0.isLetter || $0.isNumber }
+        guard let isrc = currentIdentity?.isrc, normalized == isrc else { return }
+        systemTrackPlaying = isPlaying
+        if isPlaying {
+            stopPreview()
+            systemOwnsOutput = true
+            custom.stop()
+            rollingScheduler.pause()
+            source = .system
+            lastOutputReason = "system_track_playing"
+        }
+    }
+
+    public func startPreview() {
+        guard supportsHaptics, !playbackIsPlaying, !isInBackground,
+              source != .system, !systemOwnsOutput else { return }
+        stopPreview()
+        custom.configure(renderConfiguration)
+        var events = (0..<4).map { index in
+            MusicHapticsEvent(time: 0.10 + Double(index) * 0.45, duration: 0.08,
+                             intensity: index == 0 ? 0.75 : 0.50,
+                             sharpness: index.isMultiple(of: 2) ? 0.2 : 0.6,
+                             kind: .transient, classification: index.isMultiple(of: 2) ? .kick : .snareClap,
+                             rhythm: .init(role: .pulse, confidence: 1))
+        }
+        events.append(.init(time: 0, duration: 1.9, intensity: 0.4, sharpness: 0.16, kind: .continuous,
+                            classification: .sustainedBass))
+        let timeline = MusicHapticsTimeline(identity: .init(title: "Preview", artist: "Auralis", durationMilliseconds: 1900),
+                                           duration: 1.9, analyzedDuration: 1.9, analysisCoverage: 1, events: events)
+        do { try custom.play(timeline, offset: 0, playbackRate: 1) } catch { return }
+        previewTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            self?.stopPreview()
+        }
+    }
+
+    public func stopPreview() {
+        guard let previewTask else { return }
+        previewTask.cancel()
+        self.previewTask = nil
+        custom.stop()
+    }
+
+    private var outputPosition: TimeInterval {
+        MusicHapticsPlaybackClock(position: currentPosition, uptime: clockSampleUptime, rate: playbackRate)
+            .position(at: ProcessInfo.processInfo.systemUptime, playing: playbackIsPlaying && !audioBuffering)
+    }
+
+    public func setRenderConfiguration(_ configuration: MusicHapticsRenderConfiguration) {
+        stopPreview()
+        defaults.set(configuration.style.rawValue, forKey: Self.styleDefaultsKey)
+        defaults.set(configuration.intensity.rawValue, forKey: Self.intensityDefaultsKey)
+        custom.configure(configuration)
+        guard runtimeOutputEnabled, !hapticsSuspended, !audioBuffering, source != .system, !systemOwnsOutput else { return }
+        // Re-render future output only. Cached analysis remains independent
+        // of strength/style and the AVPlayer item is never replaced.
+        let position = outputPosition
+        custom.stop()
+        switch currentPlan {
+        case let .custom(timeline):
+            if playbackIsPlaying { try? playFullTimeline(timeline, offset: position, playbackRate: playbackRate) }
+        case .analyzeLookahead:
+            playScheduledWindows(rollingScheduler.seek(to: position, playing: playbackIsPlaying, rate: playbackRate), position: position)
+        case .analyze, .disabled, .system: break
+        }
+    }
+
+    private func playFullTimeline(_ timeline: MusicHapticsTimeline, offset: TimeInterval, playbackRate: Double) throws {
+        guard !systemOwnsOutput else { return }
+        stopPreview()
+        try custom.play(timeline, offset: offset, playbackRate: playbackRate)
+        submittedPulseCount += timeline.events.filter {
+            $0.time >= offset && $0.kind == .transient && $0.isRhythmicPulse
+        }.count
+        lastOutputReason = "submitted_timeline"
+    }
+
+    private func recordOutput(_ result: MusicHapticsOutputResult, window: MusicHapticsAnalysisWindow) {
+        switch result {
+        case let .submitted(pulses):
+            submittedPulseCount += pulses
+            lastOutputReason = "submitted"
+        case .filtered: lastOutputReason = "filtered"
+        case .stale: lastOutputReason = "stale"
+        case .capacityRejected, .unavailable, .failed:
+            rejectedOutputCount += 1
+            lastOutputReason = String(describing: result)
+            if currentPlan.kind == .analyzeLookahead {
+                if result == .failed { rollingScheduler.pause() }
+                else { rollingScheduler.reject(window) }
+            }
+        }
+    }
+
     public func setGlobalEnabled(_ enabled: Bool) {
         defaults.set(enabled, forKey: Self.enabledDefaultsKey)
         guard !enabled else { return }
@@ -2357,7 +2537,7 @@ public final class MusicHapticsCoordinator {
         let decoderFailure = currentPreparation.flatMap {
             lookaheadDecoderFailures[$0.id]
         }
-        return MusicHapticsDiagnostics(
+        var result = MusicHapticsDiagnostics(
             supportsCustomHaptics: custom.supportsHaptics,
             systemMusicHapticsActive: currentSystemAvailability.active || system.isActive,
             globalEnabled: globalEnabled,
@@ -2431,6 +2611,13 @@ public final class MusicHapticsCoordinator {
             lastHapticStopReason: custom.lastStopReason,
             foregroundRecoveryCount: foregroundRecoveryCount
         )
+        result.renderStyle = renderConfiguration.style
+        result.renderIntensity = renderConfiguration.intensity
+        result.submittedPulseCount = submittedPulseCount
+        result.rejectedOutputCount = rejectedOutputCount
+        result.lastOutputReason = lastOutputReason
+        result.systemTrackPlaying = systemTrackPlaying
+        return result
     }
 
     /// Returns the provenance of the plan actually selected for the current
@@ -2913,6 +3100,7 @@ public final class MusicHapticsCoordinator {
               runtimeOutputEnabled,
               !hapticsSuspended,
               !audioBuffering,
+              !systemOwnsOutput,
               currentPlan.kind == expectedPlan
         else { return }
 
@@ -2937,12 +3125,12 @@ public final class MusicHapticsCoordinator {
             return
         }
 
-        custom.play(
+        recordOutput(custom.play(
             window,
-            from: currentPosition,
-            intensity: .medium,
+            from: outputPosition,
+            intensity: renderConfiguration.intensity,
             playbackRate: playbackRate
-        )
+        ), window: window)
         let transientCount = window.events.filter { $0.kind == .transient }.count
         let continuousCount = window.events.filter { $0.kind == .continuous }.count
         analysisSnapshot = MusicHapticsAnalysisSnapshot(
@@ -3169,7 +3357,7 @@ public final class MusicHapticsCoordinator {
             custom.stop()
             guard isPlaying else { return }
             do {
-                try custom.play(
+                try playFullTimeline(
                     timeline,
                     offset: position,
                     playbackRate: playbackRate
@@ -3200,7 +3388,7 @@ public final class MusicHapticsCoordinator {
     }
 
     private func pumpScheduler(position: TimeInterval, isPlaying: Bool) {
-        guard runtimeOutputEnabled, !hapticsSuspended, !audioBuffering else { return }
+        guard runtimeOutputEnabled, !hapticsSuspended, !audioBuffering, !systemOwnsOutput else { return }
         if position + 0.15 < currentPosition { custom.stop() }
         let windows = rollingScheduler.updateClock(
             position: position,
@@ -3220,14 +3408,15 @@ public final class MusicHapticsCoordinator {
         guard runtimeOutputEnabled,
               !hapticsSuspended,
               !audioBuffering,
+              !systemOwnsOutput,
               custom.canProduceOutput else { return }
         for window in windows {
-            custom.play(
+            recordOutput(custom.play(
                 window,
-                from: position,
-                intensity: .medium,
+                from: outputPosition,
+                intensity: renderConfiguration.intensity,
                 playbackRate: playbackRate
-            )
+            ), window: window)
         }
     }
 

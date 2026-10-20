@@ -586,12 +586,16 @@ public struct PlaybackTimingUpdate: Codable, Hashable, Sendable {
     /// periodic AVPlayer position sample. Periodic samples advance sidecars
     /// without replaying pause/resume transition effects.
     public let isStateTransition: Bool
+    /// Monotonic sampling time, captured before an asynchronous MainActor
+    /// delivery. Optional for old serialized diagnostics and other engines.
+    public let sampledUptime: TimeInterval?
 
     public init(
         state: PlaybackTimingState,
         position: TimeInterval? = nil,
         rate: Float = 1,
-        isStateTransition: Bool = true
+        isStateTransition: Bool = true,
+        sampledUptime: TimeInterval? = nil
     ) {
         self.state = state
         self.position = position.flatMap { value in
@@ -599,6 +603,7 @@ public struct PlaybackTimingUpdate: Codable, Hashable, Sendable {
         }
         self.rate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
         self.isStateTransition = isStateTransition
+        self.sampledUptime = sampledUptime
     }
 }
 
