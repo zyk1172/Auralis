@@ -350,8 +350,10 @@ final class AuralisMusicHapticsUITests: XCTestCase {
 
         let feed = app.scrollViews["auralis.home.feed"].firstMatch
         let shelf = app.scrollViews["auralis.home.shelf.random"].firstMatch
+        let title = app.staticTexts["auralis.home.title"].firstMatch
         XCTAssertTrue(feed.waitForExistence(timeout: 15))
         XCTAssertTrue(shelf.waitForExistence(timeout: 10))
+        XCTAssertTrue(title.exists)
 
         for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
             XCUIDevice.shared.orientation = orientation
@@ -370,8 +372,14 @@ final class AuralisMusicHapticsUITests: XCTestCase {
                 format: "identifier BEGINSWITH %@", "auralis.home.card.random."
             )).firstMatch
             XCTAssertTrue(firstCard.exists)
-            XCTAssertEqual(firstCard.frame.minX - shelf.frame.minX, 20, accuracy: 1,
-                           "Inset the cards rather than the scroll viewport")
+            // Landscape includes the device's horizontal safe area. Keep the
+            // viewport full-width while aligning its content with the title.
+            XCTAssertEqual(firstCard.frame.minX, title.frame.minX, accuracy: 1,
+                           "Cards and title must share the same safe-area-aware inset")
+            XCTAssertGreaterThanOrEqual(firstCard.frame.minX - shelf.frame.minX, 19)
+            if !landscape {
+                XCTAssertEqual(firstCard.frame.minX - shelf.frame.minX, 20, accuracy: 1)
+            }
             XCTAssertEqual(firstCard.frame.width, 140, accuracy: 1,
                            "Wider windows must reveal more cards without stretching them")
 

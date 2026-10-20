@@ -113,13 +113,13 @@ struct HomeView: View {
                 .foregroundStyle(colors.primaryText.color)
                 .lineLimit(1)
                 .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("auralis.home.title")
 
             Spacer(minLength: 0)
         }
         .padding(.horizontal, IOSTopLevelChromeMetrics.horizontalPadding)
         .frame(height: IOSTopLevelChromeMetrics.titleOnlyHeight)
         .frame(maxWidth: .infinity)
-        .accessibilityIdentifier("auralis.home.title")
     }
 
     // MARK: - 模块可见性（用户开启 + 有数据）

@@ -12,6 +12,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.unit.LayoutDirection
@@ -83,6 +84,9 @@ class HomeScrollLayoutTest {
             }
         }
         val feed = compose.onNodeWithTag("feed").fetchSemanticsNode().boundsInRoot
+        val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
+        assertThat(feed.left).isWithin(1f).of(root.left)
+        assertThat(feed.right).isWithin(1f).of(root.right)
         val shelf = compose.onNode(hasScrollAction().and(hasAnyAncestor(hasTestTag("module"))))
         val viewport = shelf.fetchSemanticsNode().boundsInRoot
         val inset = with(compose.density) { 20.dp.toPx() }
