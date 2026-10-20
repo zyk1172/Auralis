@@ -79,7 +79,15 @@ enum MusicHapticsRendering {
         if offset <= first.timeOffset {
             return .init(timeOffset: offset, intensity: first.intensity, sharpness: first.sharpness)
         }
-        for (left, right) in zip(points, points.dropFirst()) where offset <= right.timeOffset {
+        if offset < last.timeOffset {
+            var lower = 1
+            var upper = points.count - 1
+            while lower < upper {
+                let middle = (lower + upper) / 2
+                if points[middle].timeOffset < offset { lower = middle + 1 } else { upper = middle }
+            }
+            let left = points[lower - 1]
+            let right = points[lower]
             let fraction = Float((offset - left.timeOffset) / max(0.000001, right.timeOffset - left.timeOffset))
             return .init(timeOffset: offset, intensity: left.intensity + (right.intensity - left.intensity) * fraction,
                          sharpness: left.sharpness + (right.sharpness - left.sharpness) * fraction)

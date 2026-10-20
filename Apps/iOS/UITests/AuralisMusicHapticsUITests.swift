@@ -59,6 +59,10 @@ final class AuralisMusicHapticsUITests: XCTestCase {
 
 #if DEBUG
         let diagnostics = app.buttons["Music Haptics 调试诊断"].firstMatch
+        for _ in 0..<8 {
+            if diagnostics.exists && diagnostics.isHittable { break }
+            app.swipeUp()
+        }
         XCTAssertTrue(diagnostics.waitForExistence(timeout: 5), "DEBUG diagnostics must be reachable even without haptic hardware")
         diagnostics.tap()
         XCTAssertTrue(app.staticTexts["Build provenance"].waitForExistence(timeout: 5))

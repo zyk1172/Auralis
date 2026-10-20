@@ -442,6 +442,8 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
                 kind: .transient,
                 classification: eventClass,
                 rhythm: MusicHapticsRhythm.observed(beat: beat, time: localizedAttackTime)
+                    ?? .init(role: eventClass == .highPercussion ? .ornament : .accent,
+                             confidence: Double(attackStrength))
             ))
         }
 
@@ -620,7 +622,8 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
             sharpness: activeTextureSharpness,
             kind: .continuous,
             classification: eventClass,
-            curve: curve
+            curve: curve,
+            rhythm: .init(role: .texture, confidence: 1)
         )
     }
 

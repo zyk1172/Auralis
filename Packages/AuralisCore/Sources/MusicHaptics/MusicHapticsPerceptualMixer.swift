@@ -104,7 +104,8 @@ public struct MusicHapticsBeatTracker: Sendable {
         let safeEnergy = max(0, energy.isFinite ? energy : 0)
         let safeThreshold = max(0.0001, threshold.isFinite ? threshold : 0.0001)
         let predictedPhase = period.map { makePhaseValues(at: time, period: $0, anchor: phaseAnchor) }
-        let supportedWeakBeat = confidence >= 0.65 && (predictedPhase?.error ?? 1) <= 0.10
+        let supportedWeakBeat = confidence >= 0.65 && time - lastOnsetTime <= (period ?? 0) * 1.5
+            && (predictedPhase?.error ?? 1) <= 0.10
             && onset >= safeThreshold * 0.55
         let candidate = onset.isFinite
             && (onset >= safeThreshold || supportedWeakBeat)
@@ -179,13 +180,14 @@ public struct MusicHapticsBeatTracker: Sendable {
                 onGrid = phaseValues.error <= 0.22
             }
         }
+        let activePeriod = self.period ?? period
         let promoted = candidate && confidence >= 0.45 && onGrid
-            && time - lastPromotedTime >= period * 0.55
+            && time - lastPromotedTime >= activePeriod * 0.55
         if promoted, let anchor = phaseAnchor {
             lastPromotedTime = time
             // A small phase correction follows human timing/tempo drift;
             // the output event itself retains the observed attack timestamp.
-            let predicted = anchor + ((time - anchor) / period).rounded() * period
+            let predicted = anchor + ((time - anchor) / activePeriod).rounded() * activePeriod
             phaseAnchor = anchor + (time - predicted) * 0.12
             phaseValues = makePhaseValues(at: time, period: self.period ?? period, anchor: phaseAnchor)
         }
@@ -219,7 +221,7 @@ public struct MusicHapticsBeatTracker: Sendable {
     /// a hard-coded 4/4 meter. At least five distinct supported pulses and a
     /// substantial amount of evidence are required before locking.
     private mutating func acquireFromMultipleOnsets() {
-        let recent = Array(onsets.suffix(24))
+        let recent = Array(onsets.suffix(24).filter { lastTime - $0.time <= 8 })
         guard recent.count >= 8 else { return }
         var candidates: [TimeInterval] = []
         for right in recent.indices {
@@ -238,6 +240,13 @@ public struct MusicHapticsBeatTracker: Sendable {
         let totalWeight = recent.reduce(0.0) { $0 + Double($1.energy / maxEnergy) }
         var best: (period: Double, anchor: Double, score: Double)?
         for candidate in candidates {
+            if let current = period, confidence >= 0.65 {
+                let ratio = abs(log(candidate / current))
+                // Both metrical levels can fit a dense passage. Preserve a
+                // confident 70 BPM interpretation when eighth notes at 140
+                // arrive; extra subdivisions alone are not a tempo change.
+                if abs(ratio - log(2)) < log(1.10) { continue }
+            }
             for anchor in recent.suffix(8).map(\.time) {
                 var weight = 0.0
                 var indices: Set<Int> = []
@@ -542,6 +551,8 @@ public struct HapticVoiceBudget: Hashable, Sendable {
 }
 
 public struct MusicHapticsMixerDiagnostics: Hashable, Sendable {
+    public var pulseCandidateCount = 0
+    public var pulseOutputCount = 0
     public var dominantTransientCount: Int
     public var suppressedTransientCount: Int
     public var suppressedHighPercussionCount: Int
@@ -755,7 +766,8 @@ public struct MusicHapticsPerceptualMixer: Sendable {
                 sharpness: segmentSharpness,
                 kind: .continuous,
                 classification: eventClass,
-                curve: unique
+                curve: unique,
+                rhythm: .init(role: .texture, confidence: 1)
             )
         }
 
@@ -835,6 +847,8 @@ public struct MusicHapticsPerceptualMixer: Sendable {
     private var acceptedTransientTimes: [TimeInterval] = []
     private var lastHighPercussionTime: TimeInterval = -.infinity
     private var totalDominant = 0
+    private var totalPulseCandidates = 0
+    private var totalPulseOutput = 0
     private var totalSuppressedTransient = 0
     private var totalSuppressedHighPercussion = 0
     private var totalMergedCollisions = 0
@@ -864,6 +878,8 @@ public struct MusicHapticsPerceptualMixer: Sendable {
         acceptedTransientTimes.removeAll(keepingCapacity: true)
         lastHighPercussionTime = -.infinity
         totalDominant = 0
+        totalPulseCandidates = 0
+        totalPulseOutput = 0
         totalSuppressedTransient = 0
         totalSuppressedHighPercussion = 0
         totalMergedCollisions = 0
@@ -1043,6 +1059,7 @@ public struct MusicHapticsPerceptualMixer: Sendable {
             if event.rhythm == nil, abs(event.time - frame.time) <= 0.035 {
                 event.rhythm = MusicHapticsRhythm.observed(beat: frame.beat, time: event.time)
             }
+            if event.isRhythmicPulse { totalPulseCandidates += 1 }
             if var pendingTransientCluster,
                event.time - pendingTransientCluster.firstTime <= voiceBudget.collisionWindow {
                 pendingTransientCluster.candidates.append(event)
@@ -1158,6 +1175,7 @@ public struct MusicHapticsPerceptualMixer: Sendable {
             }
             selected = attenuate(selected, factor: fatigueGain * quietAttenuation)
             output.append(selected)
+            if selected.isRhythmicPulse { totalPulseOutput += 1 }
             acceptedTransientTimes.append(selected.time)
             totalDominant += 1
             if dominant.classification == .highPercussion {
@@ -1345,6 +1363,8 @@ public struct MusicHapticsPerceptualMixer: Sendable {
             beatGridBPM: lastBeat.tempoBPM,
             beatPhaseError: lastBeat.phaseError
         )
+        lastDiagnostics.pulseCandidateCount = totalPulseCandidates
+        lastDiagnostics.pulseOutputCount = totalPulseOutput
         return lastDiagnostics
     }
 

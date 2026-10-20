@@ -136,6 +136,29 @@ struct MusicHapticsRhythmTests {
         #expect(mainBeats >= 6)
     }
 
+    @Test(arguments: [1, 2, 4])
+    func pcmToRenderedPulseSurvivesPowerSavingStride(stride: Int) {
+        let rate = 22_050.0
+        let samples = (0..<Int(rate * 8)).map { index -> Float in
+            let time = Double(index) / rate
+            let age = time.truncatingRemainder(dividingBy: 0.5)
+            return Float(0.8 * exp(-age * 35) * sin(2 * .pi * 70 * time))
+        }
+        var processor = MusicHapticsDSPProcessor(configuration: .init(fftFrameStride: stride))
+        var mixer = MusicHapticsPerceptualMixer()
+        let frames = processor.processCandidates(monoSamples: samples, startTime: 0, sampleRate: rate)
+        var events = mixer.mix(frames: frames).events
+        events += mixer.mix(frames: processor.finishCandidates()).events
+        events += mixer.finish().events
+        let pulses = events.filter { $0.kind == .transient && $0.isRhythmicPulse }
+        #expect(pulses.count >= 5)
+        #expect(pulses.allSatisfy { MusicHapticsRendering.shouldKeep($0, intensity: .light) })
+        #expect(mixer.diagnostics.pulseOutputCount == pulses.count)
+        #expect(mixer.diagnostics.pulseCandidateCount >= pulses.count)
+        let rendered = MusicHapticsRendering.events(events, style: .rhythm)
+        #expect(rendered.filter { $0.kind == .transient && $0.isRhythmicPulse }.count == pulses.count)
+    }
+
     @Test func backwardSeekDropsOldBeatEvidence() {
         var tracker = MusicHapticsBeatTracker()
         for index in 0..<12 { _ = tracker.update(time: Double(index) * 0.5, onset: 1, threshold: 0.5, energy: 0.7) }

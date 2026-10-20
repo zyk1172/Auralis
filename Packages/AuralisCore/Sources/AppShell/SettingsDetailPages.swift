@@ -183,7 +183,7 @@ struct PlaybackSettingsPage: View {
         Button(String(localized: "试听两秒", bundle: .module)) {
             model.musicHaptics.startPreview()
         }
-        .disabled(!model.musicHaptics.supportsHaptics || model.playbackState == .playing)
+        .disabled(!model.musicHaptics.canPreview)
         .accessibilityIdentifier("auralis.settings.musicHaptics.preview")
         Button(String(localized: "停止试听", bundle: .module)) { model.musicHaptics.stopPreview() }
         Text(String(localized: "请暂停音乐后试听。", bundle: .module)).font(.caption).foregroundStyle(.secondary)
@@ -301,6 +301,8 @@ private struct MusicHapticsDiagnosticsPage: View {
                 LabeledContent("beatConfidence", value: String(format: "%.2f", displayDiagnostics.beatConfidence))
                 LabeledContent("renderStyle", value: displayDiagnostics.renderStyle.rawValue)
                 LabeledContent("renderIntensity", value: displayDiagnostics.renderIntensity.rawValue)
+                LabeledContent("pulseCandidateCount", value: "\(displayDiagnostics.pulseCandidateCount)")
+                LabeledContent("pulseOutputCount", value: "\(displayDiagnostics.pulseOutputCount)")
                 LabeledContent("submittedPulseCount", value: "\(displayDiagnostics.submittedPulseCount)")
                 LabeledContent("rejectedOutputCount", value: "\(displayDiagnostics.rejectedOutputCount)")
                 LabeledContent("lastOutputReason", value: displayDiagnostics.lastOutputReason ?? "none")

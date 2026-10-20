@@ -81,6 +81,8 @@ public struct MusicHapticsDiagnostics: Sendable, Equatable {
     public var renderStyle: MusicHapticsStyle = .rhythm
     public var renderIntensity: MusicHapticsIntensity = .medium
     public var submittedPulseCount = 0
+    public var pulseCandidateCount = 0
+    public var pulseOutputCount = 0
     public var rejectedOutputCount = 0
     public var lastOutputReason: String?
     public var systemTrackPlaying: Bool?
@@ -1894,7 +1896,7 @@ public final class MusicHapticsCoordinator {
         let previousPosition = currentPosition
         currentPosition = max(0, position)
         clockSampleUptime = ProcessInfo.processInfo.systemUptime
-        if let sampledUptime, sampledUptime.isFinite, sampledUptime <= clockSampleUptime {
+        if let sampledUptime, sampledUptime.isFinite, sampledUptime >= 0, sampledUptime <= clockSampleUptime {
             clockSampleUptime = sampledUptime
         }
         let safeRate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
@@ -2360,9 +2362,12 @@ public final class MusicHapticsCoordinator {
         }
     }
 
+    public var canPreview: Bool {
+        supportsHaptics && !playbackIsPlaying && !isInBackground && source != .system && !systemOwnsOutput
+    }
+
     public func startPreview() {
-        guard supportsHaptics, !playbackIsPlaying, !isInBackground,
-              source != .system, !systemOwnsOutput else { return }
+        guard canPreview else { return }
         stopPreview()
         custom.configure(renderConfiguration)
         var events = (0..<4).map { index in
@@ -2417,6 +2422,11 @@ public final class MusicHapticsCoordinator {
 
     private func playFullTimeline(_ timeline: MusicHapticsTimeline, offset: TimeInterval, playbackRate: Double) throws {
         guard !systemOwnsOutput else { return }
+        guard custom.supportsHaptics, custom.canProduceOutput else {
+            rejectedOutputCount += 1
+            lastOutputReason = "unavailable"
+            return
+        }
         stopPreview()
         try custom.play(timeline, offset: offset, playbackRate: playbackRate)
         submittedPulseCount += timeline.events.filter {
@@ -2426,6 +2436,9 @@ public final class MusicHapticsCoordinator {
     }
 
     private func recordOutput(_ result: MusicHapticsOutputResult, window: MusicHapticsAnalysisWindow) {
+        musicHapticsLogger.debug(
+            "HAPTICS_OUTPUT result=\(String(describing: result), privacy: .public) position=\(self.outputPosition, privacy: .public) start=\(window.startTime, privacy: .public) end=\(window.endTime, privacy: .public)"
+        )
         switch result {
         case let .submitted(pulses):
             submittedPulseCount += pulses
@@ -2614,6 +2627,9 @@ public final class MusicHapticsCoordinator {
         result.renderStyle = renderConfiguration.style
         result.renderIntensity = renderConfiguration.intensity
         result.submittedPulseCount = submittedPulseCount
+        result.pulseCandidateCount = analysisSnapshot.mixerDiagnostics.pulseCandidateCount
+        result.pulseOutputCount = currentTimeline?.events.filter { $0.kind == .transient && $0.isRhythmicPulse }.count
+            ?? analysisSnapshot.mixerDiagnostics.pulseOutputCount
         result.rejectedOutputCount = rejectedOutputCount
         result.lastOutputReason = lastOutputReason
         result.systemTrackPlaying = systemTrackPlaying
