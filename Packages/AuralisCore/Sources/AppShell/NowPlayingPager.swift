@@ -18,6 +18,8 @@ struct NowPlayingPager<Content: View>: View {
     @State private var hasPageCommand = false
     @State private var observedAnimatedOffset = false
     @State private var sampledOffset = 0
+    @State private var presentationSampler = PagerPresentationSampler()
+    @State private var firstPresentationOffset: Int?
     @State private var presentationOffset: Int?
     @State private var presentationSamples = 0
 #endif
@@ -52,11 +54,15 @@ struct NowPlayingPager<Content: View>: View {
 #if DEBUG
                     .background {
                         if CommandLine.arguments.contains("-auralis-ui-smoke-page-motion") {
-                            PagerPresentationProbe(enabled: hasPageCommand && !observedAnimatedOffset) { offset in
+                            PagerPresentationProbe(sampler: presentationSampler) { offset in
+                                if firstPresentationOffset == nil { firstPresentationOffset = offset }
                                 presentationOffset = offset
                                 presentationSamples += 1
                                 let fraction = abs(offset % 1_000)
-                                if hasPageCommand, fraction > 40, fraction < 960 { observedAnimatedOffset = true }
+                                if fraction > 40, fraction < 960 {
+                                    observedAnimatedOffset = true
+                                    presentationSampler.stop()
+                                }
                             }
                             .allowsHitTesting(false)
                         }
@@ -74,6 +80,13 @@ struct NowPlayingPager<Content: View>: View {
                 .onChange(of: selection) { _, target in
 #if DEBUG
                     hasPageCommand = true
+                    if CommandLine.arguments.contains("-auralis-ui-smoke-page-motion") {
+                        // Arm before scrollTo, not in a later SwiftUI render pass.
+                        if let offset = presentationSampler.begin() {
+                            firstPresentationOffset = offset
+                            presentationOffset = offset
+                        }
+                    }
 #endif
                     withAnimation(reduceMotion ? nil : .smooth(duration: 0.34, extraBounce: 0)) {
                         proxy.scrollTo(target, anchor: .leading)
@@ -102,6 +115,7 @@ struct NowPlayingPager<Content: View>: View {
                         userIsScrolling = true
 #if DEBUG
                         hasPageCommand = false
+                        presentationSampler.stop()
 #endif
                     }
                     if phase == .idle, userIsScrolling {
@@ -113,7 +127,7 @@ struct NowPlayingPager<Content: View>: View {
 #if DEBUG
                 if CommandLine.arguments.contains("-auralis-ui-smoke-page-motion") {
                     pager.accessibilityValue(observedAnimatedOffset ? "animated-horizontal-offset"
-                        : "waiting-offset:\(sampledOffset),presentation:\(presentationOffset.map(String.init) ?? "none"),samples:\(presentationSamples)")
+                        : "waiting-offset:\(sampledOffset),presentation:\(firstPresentationOffset.map(String.init) ?? "none")->\(presentationOffset.map(String.init) ?? "none"),samples:\(presentationSamples)")
                 } else { pager }
 #else
                 pager
@@ -129,24 +143,43 @@ struct NowPlayingPager<Content: View>: View {
 /// intermediate-offset assertion measures what is actually drawn. This probe
 /// only runs for that test flag, for at most 1.5 seconds after a page command.
 private struct PagerPresentationProbe: UIViewRepresentable {
-    let enabled: Bool
+    let sampler: PagerPresentationSampler
     let onSample: @MainActor (Int) -> Void
 
     func makeUIView(context: Context) -> PagerPresentationView {
         let view = PagerPresentationView(frame: .zero)
         view.isUserInteractionEnabled = false
         view.isAccessibilityElement = false
+        view.onSample = onSample
+        sampler.attach(view)
         return view
     }
 
     func updateUIView(_ uiView: PagerPresentationView, context: Context) {
         uiView.onSample = onSample
-        uiView.setEnabled(enabled)
     }
 
     static func dismantleUIView(_ uiView: PagerPresentationView, coordinator: ()) {
         uiView.stop()
     }
+}
+
+@MainActor
+private final class PagerPresentationSampler {
+    private weak var view: PagerPresentationView?
+    private var requested = false
+
+    func attach(_ view: PagerPresentationView) {
+        self.view = view
+        if requested { view.begin() }
+    }
+
+    func begin() -> Int? {
+        requested = true
+        view?.begin()
+        return view?.currentOffset()
+    }
+    func stop() { requested = false; view?.stop() }
 }
 
 private final class PagerPresentationView: UIView {
@@ -155,15 +188,17 @@ private final class PagerPresentationView: UIView {
     private var deadline: CFTimeInterval = 0
     private var displayLink: CADisplayLink?
 
-    func setEnabled(_ enabled: Bool) {
-        guard requested != enabled else { return }
-        requested = enabled
-        if enabled { startIfVisible() } else { stop() }
+    func begin() {
+        requested = true
+        startIfVisible()
     }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window == nil { stop() } else if requested { startIfVisible() }
+        if window == nil {
+            displayLink?.invalidate()
+            displayLink = nil
+        } else if requested { startIfVisible() }
     }
 
     private func startIfVisible() {
@@ -175,23 +210,30 @@ private final class PagerPresentationView: UIView {
     }
 
     func stop() {
+        requested = false
         displayLink?.invalidate()
         displayLink = nil
     }
 
     @objc private func sample(_ link: CADisplayLink) {
         guard link.timestamp <= deadline else { stop(); return }
+        if let offset = currentOffset() { onSample?(offset) }
+    }
+
+    func currentOffset() -> Int? {
         var ancestor = superview
         while let view = ancestor {
             if let scroll = view as? UIScrollView, scroll.bounds.width > 0,
                scroll.contentSize.width > scroll.bounds.width * 1.5 {
-                let bounds = scroll.layer.presentation()?.bounds ?? scroll.bounds
-                let offset = (bounds.minX + scroll.adjustedContentInset.left) / scroll.bounds.width
-                onSample?(Int((offset * 1_000).rounded()))
-                return
+                let viewport = scroll.layer.presentation() ?? scroll.layer
+                let content = layer.presentation() ?? layer
+                let leading = viewport.convert(.zero, from: content).x
+                let offset = (viewport.bounds.minX - leading + scroll.adjustedContentInset.left) / scroll.bounds.width
+                return Int((offset * 1_000).rounded())
             }
             ancestor = view.superview
         }
+        return nil
     }
 }
 #endif
