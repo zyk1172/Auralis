@@ -27,7 +27,7 @@ Apple 编译、Swift 测试和模拟器交互以本 PR 对应最新提交的 App
 
 原生呈现采样复现横屏位置从 1000 直接跳到 0，17 次采样未经过中间位置，确认原有命令式切页存在硬切。分页改用独立的 `ScrollPosition` 绑定，在同一动画事务内写入目标 ID；只有用户横向滚动完成后回写页面选择，避免把中间页反馈到控件状态。初始目标由位置值与布局锚点建立，不引入定时等待，歌词纵向滚动与控制栏手势链路保持独立。
 
-API 使用依据：[Apple ScrollPosition](https://developer.apple.com/documentation/swiftui/scrollposition)。原有 UI 中间位移断言与原生呈现采样继续验证新路径。
+API 使用依据：[Apple ScrollPosition](https://developer.apple.com/documentation/swiftui/scrollposition)。原有 UI 中间位移断言与原生呈现采样继续验证新路径。无障碍可访问页在原生滚动结束后更新，避免切页起始时隐藏正在操作的横屏按钮；减少动态效果时即时更新。采样在原生侧累积，只在观察到中间位移或超时后向 SwiftUI 汇报一次，并记录首帧耗时，避免逐帧状态写入反过来干扰被测动画。
 
 ## 仍需真机验收
 
