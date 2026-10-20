@@ -7,10 +7,13 @@ import UIKit
 
 /// One horizontal scroll container for button navigation and interactive swipes. Its vertical
 /// child scroll views retain their own native pan velocity and deceleration.
+/// Programmatic commands use an independent ScrollPosition value so SwiftUI
+/// owns the animated offset without binding intermediate pages to selection.
 struct NowPlayingPager<Content: View>: View {
     @Binding var selection: NowPlayingPage
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var initialPage: NowPlayingPage
+    @State private var scrollPosition: ScrollPosition
     @State private var userIsScrolling = false
     @State private var nearestPage = NowPlayingPage.player
     let content: (NowPlayingPage) -> Content
@@ -27,6 +30,7 @@ struct NowPlayingPager<Content: View>: View {
     init(selection: Binding<NowPlayingPage>, @ViewBuilder content: @escaping (NowPlayingPage) -> Content) {
         self._selection = selection
         self._initialPage = State(initialValue: selection.wrappedValue)
+        self._scrollPosition = State(initialValue: .init(id: selection.wrappedValue, anchor: .leading))
         self.content = content
     }
 
@@ -40,99 +44,98 @@ struct NowPlayingPager<Content: View>: View {
 
     var body: some View {
         GeometryReader { geometry in
-            ScrollViewReader { proxy in
-                let pager = ScrollView(.horizontal) {
-                    HStack(spacing: 0) {
-                        ForEach(NowPlayingPage.allCases, id: \.self) { page in
-                            content(page)
-                                .frame(width: geometry.size.width, height: geometry.size.height)
-                                .id(page)
-                                .accessibilityHidden(page != selection)
-                        }
+            let pager = ScrollView(.horizontal) {
+                HStack(spacing: 0) {
+                    ForEach(NowPlayingPage.allCases, id: \.self) { page in
+                        content(page)
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                            .id(page)
+                            .accessibilityHidden(page != selection)
                     }
-                    .scrollTargetLayout()
-#if DEBUG
-                    .background {
-                        if CommandLine.arguments.contains("-auralis-ui-smoke-page-motion") {
-                            PagerPresentationProbe(sampler: presentationSampler) { offset in
-                                if firstPresentationOffset == nil { firstPresentationOffset = offset }
-                                presentationOffset = offset
-                                presentationSamples += 1
-                                let fraction = abs(offset % 1_000)
-                                if fraction > 40, fraction < 960 {
-                                    observedAnimatedOffset = true
-                                    presentationSampler.stop()
-                                }
-                            }
-                            .allowsHitTesting(false)
-                        }
-                    }
-#endif
                 }
-                .scrollIndicators(.hidden)
-                .scrollTargetBehavior(.paging)
-                // Initial layout owns its offset: an imperative task can run before the
-                // landscape column has laid out its targets and leave the first page visible.
-                .defaultScrollAnchor(initialAnchor, for: .initialOffset)
-                // Commands flow one way. Binding the selected page directly to the visible
-                // target lets intermediate scroll/layout updates write an old page back and
-                // interrupt the button's animation, especially in the landscape column.
-                .onChange(of: selection) { _, target in
+                .scrollTargetLayout()
 #if DEBUG
-                    hasPageCommand = true
+                .background {
                     if CommandLine.arguments.contains("-auralis-ui-smoke-page-motion") {
-                        // Arm before scrollTo, not in a later SwiftUI render pass.
-                        if let offset = presentationSampler.begin() {
-                            firstPresentationOffset = offset
+                        PagerPresentationProbe(sampler: presentationSampler) { offset in
+                            if firstPresentationOffset == nil { firstPresentationOffset = offset }
                             presentationOffset = offset
+                            presentationSamples += 1
+                            let fraction = abs(offset % 1_000)
+                            if fraction > 40, fraction < 960 {
+                                observedAnimatedOffset = true
+                                presentationSampler.stop()
+                            }
                         }
-                    }
-#endif
-                    withAnimation(reduceMotion ? nil : .smooth(duration: 0.34, extraBounce: 0)) {
-                        proxy.scrollTo(target, anchor: .leading)
+                        .allowsHitTesting(false)
                     }
                 }
-                .onScrollGeometryChange(for: Int.self) { scroll in
-                    guard scroll.containerSize.width > 0 else { return 0 }
-                    return Int(((scroll.contentOffset.x + scroll.contentInsets.leading) / scroll.containerSize.width * 1_000).rounded())
-                } action: { _, offset in
-                    let pages = NowPlayingPage.allCases
-                    let index = min(pages.count - 1, max(0, Int((Double(offset) / 1_000).rounded())))
-                    nearestPage = pages[index]
-#if DEBUG
-                    if CommandLine.arguments.contains("-auralis-ui-smoke-page-motion") {
-                        sampledOffset = offset
-                        let fraction = abs(offset % 1_000)
-                        if hasPageCommand, fraction > 40, fraction < 960 { observedAnimatedOffset = true }
-                    }
-#endif
-                }
-                .onScrollPhaseChange { _, phase in
-                    // Tracking also occurs when tapping an in-page navigation button
-                    // or touching vertical lyrics. Only a real horizontal pan may
-                    // write the visible page back or supersede a button command.
-                    if phase == .interacting {
-                        userIsScrolling = true
-#if DEBUG
-                        hasPageCommand = false
-                        presentationSampler.stop()
-#endif
-                    }
-                    if phase == .idle, userIsScrolling {
-                        selection = nearestPage
-                        userIsScrolling = false
-                    }
-                }
-                .accessibilityIdentifier("auralis.nowPlaying.pages")
-#if DEBUG
-                if CommandLine.arguments.contains("-auralis-ui-smoke-page-motion") {
-                    pager.accessibilityValue(observedAnimatedOffset ? "animated-horizontal-offset"
-                        : "waiting-offset:\(sampledOffset),presentation:\(firstPresentationOffset.map(String.init) ?? "none")->\(presentationOffset.map(String.init) ?? "none"),samples:\(presentationSamples)")
-                } else { pager }
-#else
-                pager
 #endif
             }
+            .scrollIndicators(.hidden)
+            .scrollTargetBehavior(.paging)
+            .scrollPosition($scrollPosition)
+            // Initial layout owns its offset: an imperative task can run before the
+            // landscape column has laid out its targets and leave the first page visible.
+            .defaultScrollAnchor(initialAnchor, for: .initialOffset)
+            // Commands flow one way. Binding the selected page directly to the visible
+            // target lets intermediate scroll/layout updates write an old page back and
+            // interrupt the button's animation, especially in the landscape column.
+            .onChange(of: selection) { _, target in
+#if DEBUG
+                hasPageCommand = true
+                if CommandLine.arguments.contains("-auralis-ui-smoke-page-motion") {
+                    // Arm before scrollTo, not in a later SwiftUI render pass.
+                    if let offset = presentationSampler.begin() {
+                        firstPresentationOffset = offset
+                        presentationOffset = offset
+                    }
+                }
+#endif
+                withAnimation(reduceMotion ? nil : .smooth(duration: 0.34, extraBounce: 0)) {
+                    scrollPosition.scrollTo(id: target, anchor: .leading)
+                }
+            }
+            .onScrollGeometryChange(for: Int.self) { scroll in
+                guard scroll.containerSize.width > 0 else { return 0 }
+                return Int(((scroll.contentOffset.x + scroll.contentInsets.leading) / scroll.containerSize.width * 1_000).rounded())
+            } action: { _, offset in
+                let pages = NowPlayingPage.allCases
+                let index = min(pages.count - 1, max(0, Int((Double(offset) / 1_000).rounded())))
+                nearestPage = pages[index]
+#if DEBUG
+                if CommandLine.arguments.contains("-auralis-ui-smoke-page-motion") {
+                    sampledOffset = offset
+                    let fraction = abs(offset % 1_000)
+                    if hasPageCommand, fraction > 40, fraction < 960 { observedAnimatedOffset = true }
+                }
+#endif
+            }
+            .onScrollPhaseChange { _, phase in
+                // Tracking also occurs when tapping an in-page navigation button
+                // or touching vertical lyrics. Only a real horizontal pan may
+                // write the visible page back or supersede a button command.
+                if phase == .interacting {
+                    userIsScrolling = true
+#if DEBUG
+                    hasPageCommand = false
+                    presentationSampler.stop()
+#endif
+                }
+                if phase == .idle, userIsScrolling {
+                    selection = nearestPage
+                    userIsScrolling = false
+                }
+            }
+            .accessibilityIdentifier("auralis.nowPlaying.pages")
+#if DEBUG
+            if CommandLine.arguments.contains("-auralis-ui-smoke-page-motion") {
+                pager.accessibilityValue(observedAnimatedOffset ? "animated-horizontal-offset"
+                    : "waiting-offset:\(sampledOffset),presentation:\(firstPresentationOffset.map(String.init) ?? "none")->\(presentationOffset.map(String.init) ?? "none"),samples:\(presentationSamples)")
+            } else { pager }
+#else
+            pager
+#endif
         }
     }
 }
