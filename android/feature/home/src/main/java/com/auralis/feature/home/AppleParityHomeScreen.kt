@@ -6,7 +6,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,10 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -77,7 +73,7 @@ import com.auralis.core.image.AuralisArtwork
  * 与旧 Android HomeScreen 的关键差异：
  * - 首页标题占固定 60dp，向上滚动离场，顶部过度滚动不移动标题；
  * - 根背景使用 `[background, accent@12%, background]` 斜向环境渐变；
- * - 内容 20dp 横边距 / 960dp 最大可读宽度；
+ * - 滚动区域使用窗口全宽，标题和卡片内容保留 20dp 横边距；
  * - 快捷入口、140dp 货架卡片、字号和间距按 Apple 源码逐项映射；
  * - 底部留白保持最大 Dock 高度，动画不触发列表逐帧测量。
  */
@@ -154,25 +150,19 @@ private fun AppleHomeContent(
 ) {
     listState.rememberDockBottomReservation(bottomChromeClearance)
 
-    LazyColumn(
+    HomeFeed(
         state = listState,
-        modifier = Modifier
-            .fillMaxSize()
-            .widthIn(max = AuralisChrome.readableContentMaxWidth),
-        contentPadding = PaddingValues(
-            start = AuralisSpacing.large,
-            end = AuralisSpacing.large,
-            top = 60.dp + AuralisSpacing.small,
-            bottom = bottomChromeClearance + AuralisSpacing.large,
-        ),
-        verticalArrangement = Arrangement.spacedBy(AuralisSpacing.xLarge),
+        topPadding = 60.dp + AuralisSpacing.small,
+        bottomPadding = bottomChromeClearance + AuralisSpacing.large,
     ) {
         if (state.quickModules.isNotEmpty()) {
             item(key = "quick") {
-                AppleQuickEntries(
-                    modules = state.quickModules,
-                    onOpen = { module -> onBrowse(module.id.toBrowseDestination()) },
-                )
+                Box(Modifier.padding(horizontal = AuralisSpacing.large)) {
+                    AppleQuickEntries(
+                        modules = state.quickModules,
+                        onOpen = { module -> onBrowse(module.id.toBrowseDestination()) },
+                    )
+                }
             }
         }
 
@@ -185,7 +175,11 @@ private fun AppleHomeContent(
             )
         }
 
-        item(key = "stats") { AppleLibrarySummary(state.stats) }
+        item(key = "stats") {
+            Box(Modifier.padding(horizontal = AuralisSpacing.large)) {
+                AppleLibrarySummary(state.stats)
+            }
+        }
     }
 }
 
@@ -200,7 +194,7 @@ private fun HomeTopHeader(listState: LazyListState) {
                 listState.firstVisibleItemScrollOffset.toFloat(), heightPx)
         }
     }
-    Box(Modifier.widthIn(max = AuralisChrome.readableContentMaxWidth).fillMaxWidth()
+    Box(Modifier.fillMaxWidth()
         .height(60.dp).clipToBounds()) {
         Text(stringResource(AuralisR.string.home_title),
             style = MaterialTheme.typography.displayLarge, color = colors.primaryText,
@@ -258,18 +252,18 @@ private fun AppleQuickEntries(
 }
 
 @Composable
-private fun AppleModuleSection(
+internal fun AppleModuleSection(
     module: HomeModuleSnapshot,
     onPlayTracks: (List<Track>, Int) -> Unit,
     onBrowse: (BrowseDestination) -> Unit,
     onReshuffle: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(AuralisSpacing.medium)) {
-        AppleModuleHeader(module, onBrowse, onReshuffle)
+        Box(Modifier.padding(horizontal = AuralisSpacing.large)) {
+            AppleModuleHeader(module, onBrowse, onReshuffle)
+        }
         when {
-            module.tracks.isNotEmpty() -> LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(AuralisChrome.homeCardSpacing),
-            ) {
+            module.tracks.isNotEmpty() -> HomeShelf {
                 // 用 itemsIndexed 直接拿下标。历史实现对每个 item 做
                 // `module.tracks.indexOfFirst { it.globalId == track.globalId }`，
                 // 单个货架是 O(n²) 的相等比较（n = 24 时 576 次/货架），纯粹为算一个常量。
@@ -278,9 +272,7 @@ private fun AppleModuleSection(
                 }
             }
 
-            module.artists.isNotEmpty() -> LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(AuralisChrome.homeCardSpacing),
-            ) {
+            module.artists.isNotEmpty() -> HomeShelf {
                 items(module.artists, key = { it.first.globalId.serialized }) { (artist, playCount) ->
                     AppleArtistCard(artist, playCount) {
                         onBrowse(BrowseDestination.Artist(artist.globalId))
@@ -288,9 +280,7 @@ private fun AppleModuleSection(
                 }
             }
 
-            module.albums.isNotEmpty() -> LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(AuralisChrome.homeCardSpacing),
-            ) {
+            module.albums.isNotEmpty() -> HomeShelf {
                 items(module.albums, key = { it.first.globalId.serialized }) { (album, playCount) ->
                     AppleAlbumCard(album, playCount) {
                         onBrowse(BrowseDestination.Album(album.globalId))

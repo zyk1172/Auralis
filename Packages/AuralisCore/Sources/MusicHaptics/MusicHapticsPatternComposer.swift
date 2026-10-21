@@ -112,7 +112,8 @@ enum MusicHapticsPatternComposer {
             intensity: min(0.34, event.intensity * intensityScale),
             sharpness: min(sharpnessCeiling, event.sharpness * sharpnessScale),
             kind: .continuous,
-            classification: event.classification
+            classification: event.classification,
+            rhythm: event.rhythm
         )
     }
 }

@@ -60,19 +60,19 @@ struct HomeView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: AuralisSpacing.xLarge) {
                     quickEntriesSection
+                        .padding(.horizontal, AuralisSpacing.large)
                     ForEach(visibleContentModules) { module in
                         moduleSection(module)
                     }
                     librarySummary
+                        .padding(.horizontal, AuralisSpacing.large)
                 }
-                .padding(.horizontal, AuralisSpacing.large)
                 // 标题占位是固定值，不跟随滚动动画改 layout。
                 // 下拉时只有内容被橡皮筋拉开；向上滚动时标题与内容同步向上，直到标题完全离场。
                 .padding(.top, IOSTopLevelChromeMetrics.titleOnlyHeight + AuralisSpacing.small)
                 .padding(.bottom, AuralisSpacing.large)
-                // iPad 宽屏：主内容限宽并居中（可读宽度），卡片仍是固定 140pt，
-                // 宽屏只是自然多显示几张，不拉伸成超宽卡片。
-                .frame(maxWidth: IOSLayoutMetrics.readableContentMaxWidth)
+                // Use the actual window width, including iPad split view.
+                // Cards keep their fixed size; wider windows reveal more cards.
                 .frame(maxWidth: .infinity)
             }
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
@@ -83,6 +83,7 @@ struct HomeView: View {
                 )
             }
             .reportsBottomDockScroll(source: .home)
+            .accessibilityIdentifier("auralis.home.feed")
 
             // 用固定高度 viewport 裁掉已经被向上推出的标题。
             // 之前只做 offset、没有 clip，标题虽然离开内容区仍会继续画进状态栏，
@@ -112,14 +113,13 @@ struct HomeView: View {
                 .foregroundStyle(colors.primaryText.color)
                 .lineLimit(1)
                 .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("auralis.home.title")
 
             Spacer(minLength: 0)
         }
         .padding(.horizontal, IOSTopLevelChromeMetrics.horizontalPadding)
         .frame(height: IOSTopLevelChromeMetrics.titleOnlyHeight)
-        .frame(maxWidth: IOSLayoutMetrics.readableContentMaxWidth)
         .frame(maxWidth: .infinity)
-        .accessibilityIdentifier("auralis.home.title")
     }
 
     // MARK: - 模块可见性（用户开启 + 有数据）
@@ -246,8 +246,9 @@ struct HomeView: View {
         let tracks = trackList(for: module)
         return VStack(alignment: .leading, spacing: AuralisSpacing.medium) {
             moduleHeader(module, count: tracks.count)
+                .padding(.horizontal, AuralisSpacing.large)
             if !tracks.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
+                ArtworkShelf {
                     LazyHStack(spacing: HomeCardMetrics.spacing) {
                         ForEach(tracks) { track in
                             Button {
@@ -259,10 +260,11 @@ struct HomeView: View {
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(HapticCardButtonStyle())
+                            .accessibilityIdentifier("auralis.home.card.\(module.id.rawValue).\(track.id.rawValue)")
                         }
                     }
-                    .padding(.trailing, AuralisSpacing.large)
                 }
+                .accessibilityIdentifier("auralis.home.shelf.\(module.id.rawValue)")
             }
         }
     }
@@ -272,8 +274,9 @@ struct HomeView: View {
         let artists = model.homeTopArtists
         return VStack(alignment: .leading, spacing: AuralisSpacing.medium) {
             moduleHeader(module, count: artists.count)
+                .padding(.horizontal, AuralisSpacing.large)
             if !artists.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
+                ArtworkShelf {
                     LazyHStack(spacing: HomeCardMetrics.spacing) {
                         ForEach(artists) { artist in
                             Button {
@@ -294,8 +297,8 @@ struct HomeView: View {
                             )
                         }
                     }
-                    .padding(.trailing, AuralisSpacing.large)
                 }
+                .accessibilityIdentifier("auralis.home.shelf.\(module.id.rawValue)")
             }
         }
     }
@@ -305,8 +308,9 @@ struct HomeView: View {
         let albums = model.homeTopAlbums
         return VStack(alignment: .leading, spacing: AuralisSpacing.medium) {
             moduleHeader(module, count: albums.count)
+                .padding(.horizontal, AuralisSpacing.large)
             if !albums.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
+                ArtworkShelf {
                     LazyHStack(spacing: HomeCardMetrics.spacing) {
                         ForEach(albums) { album in
                             Button {
@@ -327,8 +331,8 @@ struct HomeView: View {
                             )
                         }
                     }
-                    .padding(.trailing, AuralisSpacing.large)
                 }
+                .accessibilityIdentifier("auralis.home.shelf.\(module.id.rawValue)")
             }
         }
     }

@@ -87,6 +87,7 @@ private func texture(_ time: TimeInterval, duration: TimeInterval = 0.24) -> Mus
     #expect(result.events.first?.classification == .kick)
     #expect((result.events.first?.intensity ?? 0) > 0.9)
     #expect(result.diagnostics.suppressedTransientCount >= 2)
+    #expect(result.diagnostics.suppressedHighPercussionCount == 2)
 }
 
 @Test func collisionFusesKickAndSnareWithoutSupportingTransientVoice() {

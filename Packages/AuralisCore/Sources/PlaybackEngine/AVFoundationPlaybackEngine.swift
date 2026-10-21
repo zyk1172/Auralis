@@ -1016,6 +1016,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         ) { [weak self] time in
             let seconds = time.seconds
             guard seconds.isFinite, seconds >= 0 else { return }
+            let sampledUptime = ProcessInfo.processInfo.systemUptime
             Task { @MainActor [weak self] in
                 guard let self,
                       self.playGeneration == observedGeneration,
@@ -1027,7 +1028,8 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
                     state: .playing,
                     position: seconds,
                     rate: rate > 0 ? rate : self.playbackRate,
-                    isStateTransition: false
+                    isStateTransition: false,
+                    sampledUptime: sampledUptime
                 ))
             }
         }

@@ -121,6 +121,19 @@ public final class RollingMusicHapticsScheduler {
         resetTimingAnchor()
     }
 
+    /// A slice handed to the engine is not necessarily accepted. Restore its
+    /// cursor so the next authoritative clock tick can retry only its future
+    /// suffix (capacity pressure must never replay stale attacks).
+    public func reject(_ slice: MusicHapticsAnalysisWindow) {
+        for window in windows where window.startTime <= slice.startTime + 0.001
+            && window.endTime >= slice.endTime - 0.001 {
+            let windowKey = key(for: window)
+            let retryFrom = max(playbackPosition, slice.startTime)
+            sliceCursors[windowKey] = min(sliceCursors[windowKey] ?? retryFrom, retryFrom)
+            scheduledUntil = min(scheduledUntil, retryFrom)
+        }
+    }
+
     @discardableResult
     public func resume(position: TimeInterval, rate: Double = 1) -> [MusicHapticsAnalysisWindow] {
         resetTimingAnchor()

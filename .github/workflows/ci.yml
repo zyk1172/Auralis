@@ -208,6 +208,26 @@ jobs:
             echo "::error::AuralisUITests did not report an executed passing test run."
             exit 1
           fi
+      - name: Export UI rendering evidence
+        if: always()
+        shell: bash
+        run: |
+          for result_bundle in "$RUNNER_TEMP"/auralis-ui-smoke*.xcresult; do
+            if [ -d "$result_bundle" ]; then
+              xcrun xcresulttool export attachments \
+                --path "$result_bundle" \
+                --output-path "$RUNNER_TEMP/auralis-ui-rendering/$(basename "$result_bundle" .xcresult)"
+            fi
+          done
+
+      - name: Preserve UI rendering evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ui-rendering
+          path: ${{ runner.temp }}/auralis-ui-rendering
+          retention-days: 3
+          if-no-files-found: error
 
       - name: Preserve failed simulator diagnostics
         if: failure()

@@ -89,7 +89,7 @@ func absoluteTextureEnvelopeAppliesGainExactlyOnce(intensity: MusicHapticsIntens
         point.intensity, continuous: true, intensity: intensity
     )
     let effective = base.intensity * control
-    let expected = min(1, point.intensity * intensity.masterIntensity * intensity.continuousTextureScale)
+    let expected = min(1, point.intensity * intensity.masterIntensity)
     #expect(abs(effective - expected) < 0.00001)
     #expect(abs(base.sharpness + point.sharpness - point.sharpness) < 0.00001)
 }

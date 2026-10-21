@@ -388,7 +388,7 @@ public struct AuralisRootView: View {
 /// 统一 iOS UI 的布局视觉 token（iPhone 与 iPad 共用同一套 Shell）。
 /// 这些只是「可用宽度」约束，不承载任何业务状态：
 /// - 浮动控件（Bottom Dock / AI 输入框）在 iPad 宽屏不铺满，居中、最大约 760pt；
-/// - 可读内容宽度上限约 960pt；
+/// - 一级页面与横向货架使用窗口全宽；浮动控件保留自己的宽度上限；
 /// - 播放页内容宽度上限约 680pt（与 NowPlayingView 既有策略一致）。
 /// 一级页面自定义顶部 Chrome。三页使用同一左边距和标题基线；
 /// 首页标题可随向上滚动离场，音乐库 / AI 助手保持固定。
@@ -403,7 +403,7 @@ enum IOSTopLevelChromeMetrics {
 enum IOSLayoutMetrics {
     /// 底部浮动控件（Dock / 输入框）在宽屏的最大宽度。
     static let floatingChromeMaxWidth: CGFloat = 760
-    /// 主内容容器可读宽度上限（宽屏居中）。
+    /// 长文本面板的可读宽度上限；不用于一级页面或横向货架。
     static let readableContentMaxWidth: CGFloat = 960
     /// 播放页内容最大宽度。
     static let playerContentMaxWidth: CGFloat = 680

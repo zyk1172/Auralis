@@ -576,10 +576,10 @@ struct NowPlayingView: View {
                 if NowPlayingLayoutPolicy.usesLandscapeLayout(containerSize: outer.size) {
                     landscapeBody(in: outer.size)
                 } else {
-                    portraitBody
+                    portraitBody(viewportWidth: outer.size.width)
                 }
 #else
-                portraitBody
+                portraitBody(viewportWidth: outer.size.width)
 #endif
             }
         }
@@ -629,7 +629,7 @@ struct NowPlayingView: View {
         }
     }
 
-    private var portraitBody: some View {
+    private func portraitBody(viewportWidth: CGFloat) -> some View {
         VStack(spacing: AuralisSpacing.medium) {
 #if os(iOS)
             // 歌词沉浸态隐藏顶部 Chrome；向下滑后恢复。
@@ -641,7 +641,7 @@ struct NowPlayingView: View {
             header
 #endif
             GeometryReader { geo in
-                playbackContent(in: geo)
+                playbackContent(in: geo, viewportWidth: viewportWidth)
             }
         }
         .padding(.horizontal, AuralisSpacing.large)
@@ -911,7 +911,7 @@ struct NowPlayingView: View {
 
     /// 普通播放/队列保持完整底部控制；歌词页额外支持沉浸 Chrome：
     /// 5 秒无操作或向上滑后只保留歌曲名，其余控制向下收缩退出。
-    private func playbackContent(in geo: GeometryProxy) -> some View {
+    private func playbackContent(in geo: GeometryProxy, viewportWidth: CGFloat) -> some View {
         // iPhone 保持既有按高度收紧的规则；iPad 额外根据当前窗口宽度判断。
         // 因此 iPad mini、Split View、台前调度窄窗口都会自动进入更紧凑的控制区。
         let compactHeight = geo.size.height < 650
@@ -928,11 +928,14 @@ struct NowPlayingView: View {
         // Glow 画布以封面为中心向外扩散；允许的最大值不超过页面可用高度，
         // 避免光效被 TabView 页面边缘裁成方框，同时封面本体尺寸不受影响。
         let glowCanvasSize = max(0, heroHeight - AuralisSpacing.medium * 2)
+        // Keep every original content proposal and artwork calculation. Only the
+        // pager's drawing surface extends through the gutters to the window edge.
+        let pageInset = max(0, (viewportWidth - geo.size.width) / 2 + AuralisSpacing.medium)
 
         return VStack(spacing: sectionSpacing) {
             Group {
 #if os(iOS)
-            NowPlayingPager(selection: $page) { item in
+            NowPlayingPager(selection: $page, horizontalContentInset: pageInset) { item in
                 switch item {
                 case .lyrics:
                     lyrics.contentShape(Rectangle()).simultaneousGesture(lyricsActivityTapGesture)
@@ -942,6 +945,7 @@ struct NowPlayingView: View {
                     queue
                 }
             }
+            .padding(.horizontal, -pageInset)
 #else
             TabView(selection: $page) {
                 lyrics
@@ -1007,6 +1011,7 @@ struct NowPlayingView: View {
                     x: 0,
                     y: 2
                 )
+                .accessibilityIdentifier("auralis.nowPlaying.artwork")
             }
             // Apple Music：播放时封面舒展，暂停时明显缩小；scaleEffect 不改布局尺寸，
             // 因此下面歌曲信息不会跟着上下跳动。

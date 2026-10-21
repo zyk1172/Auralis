@@ -67,6 +67,9 @@ public struct MusicHapticsBeatTracker: Sendable {
     private var candidateHistory: [CandidateObservation] = []
     private var lowConfidenceSince: TimeInterval?
     private var lastReacquireTime: TimeInterval = -.infinity
+    private var lastPromotedTime: TimeInterval = -.infinity
+    private var lastHypothesisTime: TimeInterval = -.infinity
+    private var multiOnsetConfidence: Double = 0
 
     public init() {}
 
@@ -81,6 +84,9 @@ public struct MusicHapticsBeatTracker: Sendable {
         candidateHistory.removeAll(keepingCapacity: true)
         lowConfidenceSince = nil
         lastReacquireTime = -.infinity
+        lastPromotedTime = -.infinity
+        lastHypothesisTime = -.infinity
+        multiOnsetConfidence = 0
     }
 
     public mutating func update(
@@ -90,11 +96,19 @@ public struct MusicHapticsBeatTracker: Sendable {
         energy: Float
     ) -> MusicHapticsBeatEstimate {
         guard time.isFinite, time >= 0 else { return MusicHapticsBeatEstimate() }
+        if time + 0.001 < lastTime || (lastOnsetTime.isFinite
+            && time - lastOnsetTime > max(2, (period ?? 0.5) * 3)) {
+            reset()
+        }
         lastTime = time
         let safeEnergy = max(0, energy.isFinite ? energy : 0)
         let safeThreshold = max(0.0001, threshold.isFinite ? threshold : 0.0001)
+        let predictedPhase = period.map { makePhaseValues(at: time, period: $0, anchor: phaseAnchor) }
+        let supportedWeakBeat = confidence >= 0.65 && time - lastOnsetTime <= (period ?? 0) * 1.5
+            && (predictedPhase?.error ?? 1) <= 0.10
+            && onset >= safeThreshold * 0.55
         let candidate = onset.isFinite
-            && onset >= safeThreshold
+            && (onset >= safeThreshold || supportedWeakBeat)
             && safeEnergy > 0.003
             && (!lastOnsetTime.isFinite || time - lastOnsetTime >= 0.12)
 
@@ -118,6 +132,12 @@ public struct MusicHapticsBeatTracker: Sendable {
             if onsets.count > 48 { onsets.removeFirst() }
         }
 
+        if candidate, onsets.count >= 8, time - lastHypothesisTime >= 1,
+           confidence < 0.45 || multiOnsetConfidence > 0
+            || candidateHistory.suffix(8).filter({ !$0.onGrid }).count >= 3 {
+            acquireFromMultipleOnsets()
+            lastHypothesisTime = time
+        }
         guard let period, period > 0 else {
             return MusicHapticsBeatEstimate(
                 isBeat: false,
@@ -127,7 +147,9 @@ public struct MusicHapticsBeatTracker: Sendable {
             )
         }
 
-        confidence = gridConfidence(for: period)
+        let evidenceAge = max(0, time - lastOnsetTime - period * 1.25)
+        let freshness = exp(-evidenceAge / max(0.15, period * 0.60))
+        confidence = max(gridConfidence(for: period), multiOnsetConfidence) * freshness
         if phaseAnchor == nil, candidate, confidence >= 0.35 {
             phaseAnchor = time
         }
@@ -158,7 +180,17 @@ public struct MusicHapticsBeatTracker: Sendable {
                 onGrid = phaseValues.error <= 0.22
             }
         }
+        let activePeriod = self.period ?? period
         let promoted = candidate && confidence >= 0.45 && onGrid
+            && time - lastPromotedTime >= activePeriod * 0.55
+        if promoted, let anchor = phaseAnchor {
+            lastPromotedTime = time
+            // A small phase correction follows human timing/tempo drift;
+            // the output event itself retains the observed attack timestamp.
+            let predicted = anchor + ((time - anchor) / activePeriod).rounded() * activePeriod
+            phaseAnchor = anchor + (time - predicted) * 0.12
+            phaseValues = makePhaseValues(at: time, period: self.period ?? period, anchor: phaseAnchor)
+        }
         let strength: MusicHapticsBeatStrength
         if promoted {
             // Compare like with like: the onset threshold includes spectral
@@ -182,6 +214,69 @@ public struct MusicHapticsBeatTracker: Sendable {
             nextBeatTime: phaseValues.next,
             phaseError: phaseValues.error
         )
+    }
+
+    /// Fallback for alternating/swing/missing-onset material. A bounded set
+    /// of period/phase hypotheses votes with observed onset energy, not with
+    /// a hard-coded 4/4 meter. At least five distinct supported pulses and a
+    /// substantial amount of evidence are required before locking.
+    private mutating func acquireFromMultipleOnsets() {
+        let recent = Array(onsets.suffix(24).filter { lastTime - $0.time <= 8 })
+        guard recent.count >= 8 else { return }
+        var candidates: [TimeInterval] = []
+        for right in recent.indices {
+            for distance in 1...4 where right >= distance {
+                let span = recent[right].time - recent[right - distance].time
+                for count in 1...4 {
+                    let value = span / Double(count)
+                    if value >= 0.30, value <= 1.091,
+                       !candidates.contains(where: { abs(log($0 / value)) < log(1.02) }) {
+                        candidates.append(value)
+                    }
+                }
+            }
+        }
+        let maxEnergy = max(0.003, recent.map(\.energy).max() ?? 0.003)
+        let totalWeight = recent.reduce(0.0) { $0 + Double($1.energy / maxEnergy) }
+        var best: (period: Double, anchor: Double, score: Double)?
+        for candidate in candidates {
+            if let current = period, confidence >= 0.65 {
+                let ratio = abs(log(candidate / current))
+                // Both metrical levels can fit a dense passage. Preserve a
+                // confident 70 BPM interpretation when eighth notes at 140
+                // arrive; extra subdivisions alone are not a tempo change.
+                if abs(ratio - log(2)) < log(1.10) { continue }
+            }
+            for anchor in recent.suffix(8).map(\.time) {
+                var weight = 0.0
+                var indices: Set<Int> = []
+                for onset in recent {
+                    let index = ((onset.time - anchor) / candidate).rounded()
+                    let error = abs(onset.time - anchor - index * candidate) / candidate
+                    if error <= 0.10 {
+                        weight += Double(onset.energy / maxEnergy) * (1 - error * 2)
+                        indices.insert(Int(index))
+                    }
+                }
+                guard indices.count >= 5, let first = indices.min(), let last = indices.max(),
+                      last > first else { continue }
+                let continuity = Double(indices.count) / Double(last - first + 1)
+                let support = weight / max(0.001, totalWeight)
+                guard support >= 0.62, continuity >= 0.65 else { continue }
+                // Mild continuity/hysteresis avoids choosing a fast grid
+                // simply because it can explain more subdivisions.
+                let hysteresis = period.map { abs(log(candidate / $0)) < log(1.06) ? 0.03 : 0 } ?? 0
+                let score = support * 0.8 + continuity * 0.2 + hysteresis
+                if score > (best?.score ?? 0) { best = (candidate, anchor, score) }
+            }
+        }
+        guard let best else {
+            multiOnsetConfidence *= 0.65
+            return
+        }
+        period = best.period
+        phaseAnchor = best.anchor
+        multiOnsetConfidence = min(0.90, best.score)
     }
 
     private func gridConfidence(for candidatePeriod: TimeInterval) -> Double {
@@ -252,6 +347,22 @@ public struct MusicHapticsBeatTracker: Sendable {
                     abs(log($0 / value)) < log(1.01)
                 }) else { continue }
                 candidates.append(value)
+            }
+        }
+        // Pairwise spans preserve evidence when intervening hats, syncopation
+        // or a missed kick make adjacent intervals misleading. Keep a bounded
+        // hypothesis set; never evaluate an unbounded whole-track search.
+        let times = onsets.suffix(12).map(\.time)
+        for right in times.indices {
+            for distance in 2...4 where right >= distance {
+                let span = times[right] - times[right - distance]
+                for beats in 1...4 {
+                    let value = span / Double(beats)
+                    if value >= 0.30, value <= 1.091,
+                       !candidates.contains(where: { abs(log($0 / value)) < log(1.01) }) {
+                        candidates.append(value)
+                    }
+                }
             }
         }
         guard !candidates.isEmpty else { return false }
@@ -420,14 +531,12 @@ public struct MusicHapticsCandidateFrame: Hashable, Sendable {
     }
 }
 
-/// The perceptual budget is intentionally small. A collision can produce one
-/// fused transient and one independent continuous texture, but never a stack
-/// of transient voices.
+/// A collision has one musical-detail voice plus one observed-pulse voice,
+/// alongside the independent continuous texture. Adding the pulse must not
+/// replace the detail voice; duplicate observations still share one voice.
 public struct HapticVoiceBudget: Hashable, Sendable {
     public let collisionWindow: TimeInterval
-    /// Collision resolution is intentionally hard-capped at one transient;
-    /// this is a perceptual invariant, not a caller-tunable stack size.
-    public let maxTransientVoices: Int = 1
+    public let maxTransientVoices: Int = 2
     public let maxContinuousVoices: Int
 
     public init(
@@ -440,6 +549,8 @@ public struct HapticVoiceBudget: Hashable, Sendable {
 }
 
 public struct MusicHapticsMixerDiagnostics: Hashable, Sendable {
+    public var pulseCandidateCount = 0
+    public var pulseOutputCount = 0
     public var dominantTransientCount: Int
     public var suppressedTransientCount: Int
     public var suppressedHighPercussionCount: Int
@@ -490,8 +601,8 @@ public struct MusicHapticsMixerResult: Hashable, Sendable {
 }
 
 /// Stateful perceptual mixing sits between DSP candidates and the final
-/// haptic event stream. It owns only bounded history and deliberately does not
-/// amplify intensity when reducing voices.
+/// haptic event stream. It owns bounded history, composes pulse/detail voices,
+/// and keeps the continuous texture envelope independent of added pulses.
 public struct MusicHapticsPerceptualMixer: Sendable {
     private struct PendingTransientCluster: Sendable {
         let firstTime: TimeInterval
@@ -653,7 +764,8 @@ public struct MusicHapticsPerceptualMixer: Sendable {
                 sharpness: segmentSharpness,
                 kind: .continuous,
                 classification: eventClass,
-                curve: unique
+                curve: unique,
+                rhythm: .init(role: .texture, confidence: 1)
             )
         }
 
@@ -730,9 +842,11 @@ public struct MusicHapticsPerceptualMixer: Sendable {
     private var activeTexture: TextureAccumulator?
     private var pendingTransientCluster: PendingTransientCluster?
     private var recentOutput: [MusicHapticsEvent] = []
-    private var acceptedTransientTimes: [TimeInterval] = []
+    private var acceptedDetailTimes: [TimeInterval] = []
     private var lastHighPercussionTime: TimeInterval = -.infinity
     private var totalDominant = 0
+    private var totalPulseCandidates = 0
+    private var totalPulseOutput = 0
     private var totalSuppressedTransient = 0
     private var totalSuppressedHighPercussion = 0
     private var totalMergedCollisions = 0
@@ -759,9 +873,11 @@ public struct MusicHapticsPerceptualMixer: Sendable {
         activeTexture = nil
         pendingTransientCluster = nil
         recentOutput.removeAll(keepingCapacity: true)
-        acceptedTransientTimes.removeAll(keepingCapacity: true)
+        acceptedDetailTimes.removeAll(keepingCapacity: true)
         lastHighPercussionTime = -.infinity
         totalDominant = 0
+        totalPulseCandidates = 0
+        totalPulseOutput = 0
         totalSuppressedTransient = 0
         totalSuppressedHighPercussion = 0
         totalMergedCollisions = 0
@@ -789,7 +905,7 @@ public struct MusicHapticsPerceptualMixer: Sendable {
             }
         }
         // A transient is held for one collision window so adjacent DSP frames
-        // cannot escape the same one-voice cluster. Texture sections remain a
+        // share the same bounded pulse/detail composition. Texture sections remain a
         // single logical accumulator, but materialize non-overlapping suffixes
         // progressively instead of waiting for section close.
         let resultEvents = output.sorted { $0.time < $1.time }
@@ -934,7 +1050,14 @@ public struct MusicHapticsPerceptualMixer: Sendable {
         frame: MusicHapticsCandidateFrame,
         output: inout [MusicHapticsEvent]
     ) {
-        for event in candidates.sorted(by: { $0.time < $1.time }) {
+        for candidate in candidates.sorted(by: { $0.time < $1.time }) {
+            var event = candidate
+            // Compatibility callers supply beat context separately. Production
+            // DSP already attaches it to the exact localized attack.
+            if event.rhythm == nil, abs(event.time - frame.time) <= 0.035 {
+                event.rhythm = MusicHapticsRhythm.observed(beat: frame.beat, time: event.time)
+            }
+            if event.isRhythmicPulse { totalPulseCandidates += 1 }
             if var pendingTransientCluster,
                event.time - pendingTransientCluster.firstTime <= voiceBudget.collisionWindow {
                 pendingTransientCluster.candidates.append(event)
@@ -980,7 +1103,7 @@ public struct MusicHapticsPerceptualMixer: Sendable {
             energyLevel: max(first.energyLevel, second.energyLevel),
             slowEnergy: max(first.slowEnergy, second.slowEnergy),
             onsetActivity: max(first.onsetActivity, second.onsetActivity),
-            beat: second.beat,
+            beat: first.beat.isBeat && !second.beat.isBeat ? first.beat : second.beat,
             isQuiet: first.isQuiet && second.isQuiet
         )
     }
@@ -1005,63 +1128,47 @@ public struct MusicHapticsPerceptualMixer: Sendable {
             var realCandidates = cluster.filter { $0.classification != .climax }
             if quietMode {
                 let before = realCandidates.count
+                let highPercussionBefore = realCandidates.filter { $0.classification == .highPercussion }.count
                 let quietNoiseFloor = 0.20 + 0.12 * quietGain
                 realCandidates.removeAll {
-                    ($0.classification == .highPercussion || $0.classification == .unknown)
+                    !$0.isRhythmicPulse && ($0.classification == .highPercussion || $0.classification == .unknown)
                         && $0.intensity < quietNoiseFloor
                 }
                 totalSuppressedTransient += before - realCandidates.count
-                totalSuppressedHighPercussion += before - realCandidates.filter { $0.classification != .highPercussion }.count
+                totalSuppressedHighPercussion += highPercussionBefore - realCandidates.filter { $0.classification == .highPercussion }.count
             }
-            guard let dominant = realCandidates.max(by: {
-                score($0, beat: frame.beat) < score($1, beat: frame.beat)
-            }) else {
-                totalSuppressedTransient += cluster.count
-                totalMergedCollisions += max(0, cluster.count - 1)
-                continue
-            }
-            pruneTransientTimes(at: dominant.time)
-            if shouldSuppressForDensity(dominant, beat: frame.beat) {
-                totalSuppressedTransient += cluster.count
-                if dominant.classification == .highPercussion {
-                    totalSuppressedHighPercussion += 1
+            let selectedEvents = layeredTransientEvents(realCandidates + modifiers, beat: frame.beat)
+            totalMergedCollisions += max(0, realCandidates.count - selectedEvents.count)
+            totalSuppressedTransient += max(0, realCandidates.count - selectedEvents.count)
+            totalSuppressedHighPercussion += max(0,
+                realCandidates.filter { $0.classification == .highPercussion }.count
+                    - selectedEvents.filter { $0.classification == .highPercussion }.count)
+            for var selected in selectedEvents {
+                pruneDetailTimes(at: selected.time)
+                if shouldSuppressForDensity(selected, beat: frame.beat)
+                    || (selected.classification == .highPercussion && !selected.isRhythmicPulse
+                        && selected.time - lastHighPercussionTime < highPercussionSpacing(energyLevel: frame.energyLevel)) {
+                    totalSuppressedTransient += 1
+                    if selected.classification == .highPercussion { totalSuppressedHighPercussion += 1 }
+                    continue
                 }
-                continue
+                // The added pulse has its own bounded lane. It must not consume
+                // the pre-existing detail rate, spacing or fatigue allowance.
+                let fatigueGain = selected.classification == .highPercussion && !selected.isRhythmicPulse
+                    ? Float(fatigue(at: selected.time)) : 1
+                let quietAttenuation: Float = !selected.isRhythmicPulse
+                    && (selected.classification == .highPercussion || selected.classification == .unknown)
+                    ? quietGain : 1
+                selected = attenuate(selected, factor: fatigueGain * quietAttenuation)
+                output.append(selected)
+                if selected.isRhythmicPulse {
+                    totalPulseOutput += 1
+                } else {
+                    acceptedDetailTimes.append(selected.time)
+                    if selected.classification == .highPercussion { lastHighPercussionTime = selected.time }
+                }
+                totalDominant += 1
             }
-            if dominant.classification == .highPercussion,
-               dominant.time - lastHighPercussionTime < highPercussionSpacing(energyLevel: frame.energyLevel) {
-                totalSuppressedTransient += cluster.count
-                totalSuppressedHighPercussion += 1
-                continue
-            }
-            let supports = realCandidates.filter { $0 != dominant }
-            var selected = fusedTransientEvent(
-                dominant: dominant,
-                supports: supports,
-                climaxModifiers: modifiers,
-                beat: frame.beat
-            )
-            let fatigueGain = dominant.classification == .highPercussion
-                ? Float(fatigue(at: selected.time))
-                : 1
-            let quietAttenuation: Float = switch dominant.classification {
-            case .highPercussion, .unknown: quietGain
-            default: 1
-            }
-            selected = attenuate(selected, factor: fatigueGain * quietAttenuation)
-            output.append(selected)
-            acceptedTransientTimes.append(selected.time)
-            totalDominant += 1
-            if dominant.classification == .highPercussion {
-                lastHighPercussionTime = dominant.time
-            }
-            // Every non-dominant transient becomes a small accent inside the
-            // selected event. It is never emitted as a second haptic voice.
-            totalSuppressedTransient += max(0, cluster.count - 1)
-            totalSuppressedHighPercussion += supports.filter {
-                $0.classification == .highPercussion
-            }.count
-            totalMergedCollisions += max(0, cluster.count - 1)
         }
     }
 
@@ -1132,29 +1239,16 @@ public struct MusicHapticsPerceptualMixer: Sendable {
             climaxAmount: event.climaxAmount,
             curve: event.curve.map {
                 MusicHapticsCurvePoint(timeOffset: $0.timeOffset, intensity: $0.intensity * safeFactor, sharpness: $0.sharpness)
-            }
+            },
+            rhythm: event.rhythm
         )
-    }
-
-    private func score(_ event: MusicHapticsEvent, beat: MusicHapticsBeatEstimate) -> Float {
-        let beatPriority: Float
-        if beat.isBeat {
-            beatPriority = switch beat.strength {
-            case .strongBeat: 0.12
-            case .normalBeat: 0.05
-            case .subBeat: 0
-            }
-        } else {
-            beatPriority = 0
-        }
-        return transientScore(event) + beatPriority
     }
 
     private func shouldSuppressForDensity(
         _ event: MusicHapticsEvent,
         beat: MusicHapticsBeatEstimate
     ) -> Bool {
-        let projectedRate = Double(acceptedTransientTimes.count + 1) / shortDensityWindow
+        let projectedRate = Double(acceptedDetailTimes.count + 1) / shortDensityWindow
         guard projectedRate > transientDensityRate else { return false }
         return !isImportantAttack(event, beat: beat)
     }
@@ -1172,7 +1266,10 @@ public struct MusicHapticsPerceptualMixer: Sendable {
         _ event: MusicHapticsEvent,
         beat: MusicHapticsBeatEstimate = .init()
     ) -> Bool {
-        if beat.isBeat {
+        // Pulse density is protected independently of the decoration budget.
+        // The tracker bounds it to 55...200 BPM; details keep their own voice.
+        if event.isRhythmicPulse, event.intensity >= 0.03 { return true }
+        if beat.isBeat && event.rhythm == nil {
             switch beat.strength {
             case .strongBeat:
                 if event.classification != .unknown && event.intensity >= 0.42 {
@@ -1198,11 +1295,11 @@ public struct MusicHapticsPerceptualMixer: Sendable {
 
     private mutating func pruneHistory(at time: TimeInterval) {
         recentOutput.removeAll { time - $0.time > 15 }
-        pruneTransientTimes(at: time)
+        pruneDetailTimes(at: time)
     }
 
-    private mutating func pruneTransientTimes(at time: TimeInterval) {
-        acceptedTransientTimes.removeAll { time - $0 > shortDensityWindow }
+    private mutating func pruneDetailTimes(at time: TimeInterval) {
+        acceptedDetailTimes.removeAll { time - $0 > shortDensityWindow }
     }
 
     private mutating func appendHistory(_ events: [MusicHapticsEvent]) {
@@ -1212,7 +1309,7 @@ public struct MusicHapticsPerceptualMixer: Sendable {
 
     private func fatigue(at time: TimeInterval) -> Double {
         let recent = recentOutput.filter { time - $0.time >= 0 && time - $0.time <= 15 }
-        let transientRate = Double(recent.filter { $0.kind == .transient }.count) / 15
+        let transientRate = Double(recent.filter { $0.kind == .transient && !$0.isRhythmicPulse }.count) / 15
         let duty = recent
             .filter { $0.kind == .continuous }
             .reduce(0) { $0 + ($1.duration ?? 0) } / 15
@@ -1243,6 +1340,8 @@ public struct MusicHapticsPerceptualMixer: Sendable {
             beatGridBPM: lastBeat.tempoBPM,
             beatPhaseError: lastBeat.phaseError
         )
+        lastDiagnostics.pulseCandidateCount = totalPulseCandidates
+        lastDiagnostics.pulseOutputCount = totalPulseOutput
         return lastDiagnostics
     }
 
@@ -1268,7 +1367,40 @@ func transientScore(_ event: MusicHapticsEvent) -> Float {
     return event.intensity * 0.70 + classWeight * 0.30
 }
 
-/// Fuses all transient candidates in one collision into the dominant event.
+/// Preserve the original detail voice when a newly recognized pulse shares
+/// its collision window. Copies of that same instrument attack are supports,
+/// not another layer. Both the streaming mixer and cache merge use this rule.
+func layeredTransientEvents(
+    _ candidates: [MusicHapticsEvent],
+    beat: MusicHapticsBeatEstimate = .init()
+) -> [MusicHapticsEvent] {
+    let modifiers = candidates.filter { $0.classification == .climax }
+    let real = candidates.filter { $0.classification != .climax }
+    let pulses = real.filter(\.isRhythmicPulse)
+    guard let pulse = pulses.max(by: { transientScore($0) < transientScore($1) }) else {
+        guard let dominant = real.max(by: { transientScore($0) < transientScore($1) }) else { return [] }
+        return [fusedTransientEvent(dominant: dominant, supports: real.filter { $0 != dominant },
+                                    climaxModifiers: modifiers, beat: beat)]
+    }
+    let copies = real.filter { event in
+        !event.isRhythmicPulse && pulses.contains {
+            $0.classification == event.classification
+                && abs($0.time - event.time) < event.classification.deduplicationWindow
+        }
+    }
+    var observedPulse = pulse
+    observedPulse.intensity = max(pulse.intensity, copies.map(\.intensity).max() ?? 0)
+    var result = [fusedTransientEvent(dominant: observedPulse,
+        supports: pulses.filter { $0 != pulse }, climaxModifiers: modifiers, beat: beat)]
+    let details = real.filter { !$0.isRhythmicPulse && !copies.contains($0) }
+    if let detail = details.max(by: { transientScore($0) < transientScore($1) }) {
+        result.append(fusedTransientEvent(dominant: detail, supports: details.filter { $0 != detail },
+                                          climaxModifiers: []))
+    }
+    return result.sorted { $0.time < $1.time }
+}
+
+/// Fuses candidates within one pulse or detail lane into the dominant event.
 /// Supporting attacks only contribute a bounded intensity accent and a small
 /// sharpness blend; they never become another Core Haptics event.
 func fusedTransientEvent(
@@ -1307,14 +1439,19 @@ func fusedTransientEvent(
     } else {
         beatIntensity = 0
     }
+    let pulse = ([dominant] + supports).filter(\.isRhythmicPulse).max {
+        ($0.rhythm?.confidence ?? 0) < ($1.rhythm?.confidence ?? 0)
+    }
     return MusicHapticsEvent(
-        time: dominant.time,
+        // Keep the audible pulse's time when a timbral support wins fusion.
+        time: pulse?.time ?? dominant.time,
         duration: dominant.duration,
         intensity: min(1, dominant.intensity + min(0.10, supportAccent) + climaxIntensity + beatIntensity),
         sharpness: min(1, blendedSharpness + climaxSharpness),
         kind: .transient,
         classification: dominant.classification,
         climaxAmount: climaxAmount,
-        curve: dominant.curve
+        curve: dominant.curve,
+        rhythm: pulse?.rhythm ?? dominant.rhythm
     )
 }
