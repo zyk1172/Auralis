@@ -152,6 +152,22 @@ cd android
 如果需要运行 UI smoke test，请使用已经创建的 iPhone Simulator、Android Emulator 或连接设备，
 并按 `Docs/ManualValidation.md` 执行。CI 不依赖贡献者临时创建新的测试设备。
 
+### iOS 本地签名
+
+主 App、Intents 和 Live Activity 扩展需要在 Xcode 的 Signing & Capabilities 中选择同一个
+开发团队，并启用 Automatically manage signing。当前 iOS Bundle ID 前缀为
+`com.zyk1172.auralis.ios`，三个 Target 使用同一个 App Group：
+`group.com.zyk1172.auralis.player`。这些标识符仍需在所选 Apple 开发团队下成功注册；
+无签名构建通过不代表真机签名或安装已经通过。
+
+若团队无法注册这些标识符，应同步修改 `project.yml` 中 iOS 主 App、两个扩展和 UI 测试的
+Bundle ID，更新主 App 与 Intents 的共享钥匙串 entitlement，并保持三个 iOS entitlement
+与代码中所有共享容器访问位置使用同一个 App Group。不要仅修改 Xcode 界面的组名。
+
+更改 Bundle ID 会改变 App 的安装身份，更改 App Group 和钥匙串访问组会改变其可访问的
+共享数据与凭据。旧安装的数据不会自动迁移到新身份；需要保留已有数据时，应优先使用
+原标识符所属的开发团队，不要卸载旧 App 来排查签名。
+
 ## AI Assistant
 
 AI Assistant 默认可以保持未配置。没有 API key 或没有启用 Provider 时，播放、资料库、本地搜索、

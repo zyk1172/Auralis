@@ -38,7 +38,7 @@ public actor LocalCatalogStore: LibrarySyncStore {
     /// opening different databases and reintroducing a second music-library snapshot.
     public nonisolated static func defaultStoreURL(
         fileManager: FileManager = .default,
-        appGroupIdentifier: String = "group.com.auralis.player"
+        appGroupIdentifier: String = "group.com.zyk1172.auralis.player"
     ) -> URL {
         let base: URL
         #if os(macOS)

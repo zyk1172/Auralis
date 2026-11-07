@@ -93,7 +93,7 @@ targets:
           - $(SRCROOT)/Apps/iOS/BuildProvenance.generated.swift
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.auralis.player.ios
+        PRODUCT_BUNDLE_IDENTIFIER: com.zyk1172.auralis.ios
         PRODUCT_NAME: Auralis
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
@@ -119,7 +119,7 @@ targets:
       - target: Auralis
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.auralis.player.ios.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: com.zyk1172.auralis.ios.uitests
         PRODUCT_NAME: AuralisUITests
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: Auralis
@@ -174,7 +174,7 @@ targets:
         product: LocalCatalog
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.auralis.player.ios.AuralisIntents
+        PRODUCT_BUNDLE_IDENTIFIER: com.zyk1172.auralis.ios.AuralisIntents
         ENABLE_APP_INTENTS_METADATA_EXTRACTION: NO
         PRODUCT_NAME: AuralisIntents
         INFOPLIST_FILE: Apps/iOS/Intents/Info.plist
@@ -198,7 +198,7 @@ targets:
         product: Domain
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.auralis.player.ios.AuralisLiveActivity
+        PRODUCT_BUNDLE_IDENTIFIER: com.zyk1172.auralis.ios.AuralisLiveActivity
         PRODUCT_NAME: AuralisLiveActivity
         INFOPLIST_FILE: Apps/iOS/LiveActivity/Info.plist
         GENERATE_INFOPLIST_FILE: NO

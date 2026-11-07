@@ -110,7 +110,7 @@ public final class CatalogCoordinator: ObservableObject {
     }
 
     /// App Group 标识：App、Siri Intents 扩展、小组件共用。
-    public static let appGroupIdentifier = "group.com.auralis.player"
+    public static let appGroupIdentifier = "group.com.zyk1172.auralis.player"
 
     // MARK: - Server registration
 
