@@ -86,7 +86,7 @@ final class IntentHandler: INExtension, INPlayMediaIntentHandling {
 
     private static func sharedStore() -> LocalCatalogStore? {
         guard let group = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: "group.com.zyk1172.auralis.player"
+            forSecurityApplicationGroupIdentifier: "group.com.auralis.player"
         ) else { return nil }
         let dir = group.appendingPathComponent("Auralis", isDirectory: true)
         return try? LocalCatalogStore(url: dir.appendingPathComponent("catalog.sqlite"))

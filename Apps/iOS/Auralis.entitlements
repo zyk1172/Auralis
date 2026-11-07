@@ -4,11 +4,11 @@
 <dict>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.com.zyk1172.auralis.player</string>
+		<string>group.com.auralis.player</string>
 	</array>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)com.zyk1172.auralis.ios</string>
+		<string>$(AppIdentifierPrefix)com.auralis.player.ios</string>
 	</array>
 </dict>
 </plist>

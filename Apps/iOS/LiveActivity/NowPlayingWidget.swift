@@ -29,7 +29,7 @@ struct NowPlayingTimelineProvider: TimelineProvider {
     /// 读取共享容器中的播放快照（失败返回 nil → 显示占位）。
     static func readSnapshot() -> PlaybackActivityAttributes.ContentState? {
         guard let group = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: "group.com.zyk1172.auralis.player"
+            forSecurityApplicationGroupIdentifier: "group.com.auralis.player"
         ) else { return nil }
         let url = group.appendingPathComponent("Auralis/playback-snapshot.json")
         guard let data = try? Data(contentsOf: url) else { return nil }

@@ -33,7 +33,7 @@ public final class LiveActivityManager {
     public static let shared = LiveActivityManager()
 
     /// 与 CatalogCoordinator.appGroupIdentifier / 小组件读取路径保持一致。
-    private static let appGroupIdentifier = "group.com.zyk1172.auralis.player"
+    private static let appGroupIdentifier = "group.com.auralis.player"
     private static let snapshotRelativePath = "Auralis/playback-snapshot.json"
     /// ActivityKit 对更新频率有限额；5 秒内的重复更新直接跳过。
     nonisolated static let activityUpdateInterval: TimeInterval = 5

@@ -581,7 +581,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.zyk1172.auralis.ios.AuralisLiveActivity;
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios.zyk1172.AuralisLiveActivity;
 				PRODUCT_NAME = AuralisLiveActivity;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = NO;
@@ -707,7 +707,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.zyk1172.auralis.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios;
 				PRODUCT_NAME = Auralis;
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -758,7 +758,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.zyk1172.auralis.ios.uitests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios.uitests;
 				PRODUCT_NAME = AuralisUITests;
 				SDKROOT = iphoneos;
 				SWIFT_STRICT_CONCURRENCY = complete;
@@ -784,7 +784,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.zyk1172.auralis.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios;
 				PRODUCT_NAME = Auralis;
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -808,7 +808,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.zyk1172.auralis.ios.AuralisLiveActivity;
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios.zyk1172.AuralisLiveActivity;
 				PRODUCT_NAME = AuralisLiveActivity;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = NO;
@@ -833,7 +833,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.zyk1172.auralis.ios.AuralisIntents;
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios.zyk1172.AuralisIntents;
 				PRODUCT_NAME = AuralisIntents;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = NO;
@@ -921,7 +921,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.zyk1172.auralis.ios.AuralisIntents;
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios.zyk1172.AuralisIntents;
 				PRODUCT_NAME = AuralisIntents;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = NO;
@@ -942,7 +942,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.zyk1172.auralis.ios.uitests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios.uitests;
 				PRODUCT_NAME = AuralisUITests;
 				SDKROOT = iphoneos;
 				SWIFT_STRICT_CONCURRENCY = complete;
