@@ -152,6 +152,17 @@ cd android
 如果需要运行 UI smoke test，请使用已经创建的 iPhone Simulator、Android Emulator 或连接设备，
 并按 `Docs/ManualValidation.md` 执行。CI 不依赖贡献者临时创建新的测试设备。
 
+### iOS 签名与已有数据
+
+已有安装使用 `com.auralis.player.ios`、App Group `group.com.auralis.player`，以及
+`$(AppIdentifierPrefix)com.auralis.player.ios` 钥匙串访问组。修复扩展的注册冲突时，保留这些
+数据访问标识，并使用原开发团队签名；不要通过更改主 App 身份来绕过扩展签名错误。
+当前两个扩展使用 `com.auralis.player.ios.zyk1172.AuralisIntents` 和
+`com.auralis.player.ios.zyk1172.AuralisLiveActivity`，仍与主 App 共用原 App Group。
+
+恢复已有安装时应覆盖更新，保留原 App 及其容器。构建或签名成功并不代表手机上的服务器配置、
+钥匙串凭据和资料库已恢复，需要在原身份的 App 中实际验证。
+
 ## AI Assistant
 
 AI Assistant 默认可以保持未配置。没有 API key 或没有启用 Provider 时，播放、资料库、本地搜索、

@@ -174,7 +174,7 @@ targets:
         product: LocalCatalog
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.auralis.player.ios.AuralisIntents
+        PRODUCT_BUNDLE_IDENTIFIER: com.auralis.player.ios.zyk1172.AuralisIntents
         ENABLE_APP_INTENTS_METADATA_EXTRACTION: NO
         PRODUCT_NAME: AuralisIntents
         INFOPLIST_FILE: Apps/iOS/Intents/Info.plist
@@ -198,7 +198,7 @@ targets:
         product: Domain
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.auralis.player.ios.AuralisLiveActivity
+        PRODUCT_BUNDLE_IDENTIFIER: com.auralis.player.ios.zyk1172.AuralisLiveActivity
         PRODUCT_NAME: AuralisLiveActivity
         INFOPLIST_FILE: Apps/iOS/LiveActivity/Info.plist
         GENERATE_INFOPLIST_FILE: NO

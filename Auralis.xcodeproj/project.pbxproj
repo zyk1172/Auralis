@@ -581,7 +581,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios.AuralisLiveActivity;
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios.zyk1172.AuralisLiveActivity;
 				PRODUCT_NAME = AuralisLiveActivity;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = NO;
@@ -808,7 +808,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios.AuralisLiveActivity;
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios.zyk1172.AuralisLiveActivity;
 				PRODUCT_NAME = AuralisLiveActivity;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = NO;
@@ -833,7 +833,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios.AuralisIntents;
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios.zyk1172.AuralisIntents;
 				PRODUCT_NAME = AuralisIntents;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = NO;
@@ -921,7 +921,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios.AuralisIntents;
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios.zyk1172.AuralisIntents;
 				PRODUCT_NAME = AuralisIntents;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = NO;
