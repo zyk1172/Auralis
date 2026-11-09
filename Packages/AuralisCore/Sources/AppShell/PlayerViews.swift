@@ -607,8 +607,7 @@ struct NowPlayingView: View {
                 showLyricsChromeAndScheduleAutoHide()
             } else if oldPage == .lyrics {
                 resetLyricsScrollInteraction()
-                lyricsChromeAutoHideTask?.cancel()
-                lyricsChromeAutoHideTask = nil
+                cancelLyricsChromeAutoHide()
                 lyricsChromeHidden = false
             }
         }
@@ -650,6 +649,9 @@ struct NowPlayingView: View {
         // 900pt 只是大尺寸 iPad 的内容上限；较小 iPad、分屏和台前调度窗口
         // 会由 SwiftUI 根据实际可用宽度自然收缩，不依赖具体设备型号。
         .frame(maxWidth: nowPlayingContentMaxWidth)
+        // Animate the handle and available pager height as well as the controls.
+        // Watching the effective mode also covers a swipe's unanimated page binding.
+        .animation(LyricsChromeMotion.animation(reduceMotion: reduceMotion), value: lyricsImmersiveMode)
     }
 
     private var portraitTopPadding: CGFloat {
@@ -665,7 +667,8 @@ struct NowPlayingView: View {
     }
 
     private var lyricsChromeTransition: AnyTransition {
-        .asymmetric(
+        if reduceMotion { return .opacity }
+        return .asymmetric(
             insertion: .move(edge: .bottom).combined(with: .opacity),
             removal: .move(edge: .bottom).combined(with: .opacity)
         )
@@ -962,19 +965,13 @@ struct NowPlayingView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            Group {
-                if page == .lyrics {
-                    lyricsPlaybackChrome(
-                        sectionSpacing: sectionSpacing,
-                        playButtonSize: playButtonSize
-                    )
-                } else {
-                    playbackControls(
-                        sectionSpacing: sectionSpacing,
-                        playButtonSize: playButtonSize
-                    )
-                }
-            }
+            // Keep one control tree across pages. Replacing the entire lyrics
+            // branch loses its child transition when a native swipe selects artwork.
+            playbackControls(
+                sectionSpacing: sectionSpacing,
+                playButtonSize: playButtonSize,
+                isExpanded: !lyricsImmersiveMode
+            )
             .frame(maxWidth: 560)
             // 控制区贴近可用区域底部，不再用下方 Spacer 把它悬在页面中间。
             .fixedSize(horizontal: false, vertical: true)
@@ -1065,59 +1062,6 @@ struct NowPlayingView: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// 歌词页完整态复用主分支歌曲信息位置；沉浸态保留歌曲名 + 歌手，
-    /// 其余进度、控制、音量与状态向下收缩消失。
-    private func lyricsPlaybackChrome(
-        sectionSpacing: CGFloat,
-        playButtonSize: CGFloat
-    ) -> some View {
-        VStack(spacing: sectionSpacing) {
-            lyricsTrackIdentityHeader(showActions: !lyricsChromeHidden)
-
-            if !lyricsChromeHidden {
-                VStack(spacing: sectionSpacing) {
-                    VStack(spacing: AuralisSpacing.xSmall) {
-                        ThinSlider(
-                            value: model.playbackProgress,
-                            accent: theme.colorTokens.accent.color,
-                            track: theme.colorTokens.separator.color.opacity(0.4),
-                            thumb: Color.white,
-                            onEditingChanged: { editing in
-                                registerLyricsInteraction()
-                                if !editing, let pending = pendingSeek {
-                                    model.playbackProgress = pending
-                                    pendingSeek = nil
-                                }
-                            },
-                            onValueChanged: {
-                                registerLyricsInteraction()
-                                pendingSeek = $0
-                            },
-                            accessibilityStep: min(1, 5 / max(model.effectivePlaybackDuration, 1))
-                        )
-                        .accessibilityLabel(String(localized: "播放进度", bundle: .module))
-                        .accessibilityValue(Text("\(formatDuration(displayedPlaybackPosition)) / \(formatDuration(model.effectivePlaybackDuration))"))
-
-                        HStack {
-                            Text(formatDuration(displayedPlaybackPosition))
-                            Spacer()
-                            Text("-" + formatDuration(max(model.effectivePlaybackDuration - displayedPlaybackPosition, 0)))
-                        }
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(theme.colorTokens.secondaryText.color)
-                    }
-
-                    transportControls(playButtonSize: playButtonSize)
-                    volumeControl
-                    nowPlayingBottomNavigation
-                }
-                .transition(lyricsChromeTransition)
-            }
-        }
-        .animation(LyricsChromeMotion.animation(reduceMotion: reduceMotion), value: lyricsChromeHidden)
-        .simultaneousGesture(lyricsActivityTapGesture)
-    }
-
     private func cancelLyricsChromeAutoHide() {
         guard let task = lyricsChromeAutoHideTask else { return }
         task.cancel()
@@ -1174,11 +1118,27 @@ struct NowPlayingView: View {
         }
     }
 
-    private func playbackControls(sectionSpacing: CGFloat, playButtonSize: CGFloat) -> some View {
+    /// A stable identity/header and one expandable action group serve every page.
+    /// The default keeps the landscape artwork page's controls fully expanded.
+    private func playbackControls(
+        sectionSpacing: CGFloat,
+        playButtonSize: CGFloat,
+        isExpanded: Bool = true
+    ) -> some View {
         VStack(spacing: sectionSpacing) {
-            // 与歌词页共用同一歌曲信息布局，避免模式切换后标题位置漂移。
-            lyricsTrackIdentityHeader(showActions: true)
+            lyricsTrackIdentityHeader(showActions: isExpanded)
 
+            if isExpanded {
+                playbackControlActions(sectionSpacing: sectionSpacing, playButtonSize: playButtonSize)
+                    .transition(lyricsChromeTransition)
+            }
+        }
+        .animation(LyricsChromeMotion.animation(reduceMotion: reduceMotion), value: isExpanded)
+        .simultaneousGesture(lyricsActivityTapGesture)
+    }
+
+    private func playbackControlActions(sectionSpacing: CGFloat, playButtonSize: CGFloat) -> some View {
+        VStack(spacing: sectionSpacing) {
             VStack(spacing: AuralisSpacing.xSmall) {
                 ThinSlider(
                     value: model.playbackProgress,
@@ -1186,12 +1146,16 @@ struct NowPlayingView: View {
                     track: theme.colorTokens.separator.color.opacity(0.4),
                     thumb: Color.white,
                     onEditingChanged: { editing in
+                        registerLyricsInteraction()
                         if !editing, let pending = pendingSeek {
                             model.playbackProgress = pending
                             pendingSeek = nil
                         }
                     },
-                    onValueChanged: { pendingSeek = $0 },
+                    onValueChanged: {
+                        registerLyricsInteraction()
+                        pendingSeek = $0
+                    },
                     // VoiceOver 单次步进约 ±5 秒（0...1 fraction 空间）。
                     accessibilityStep: min(1, 5 / max(model.effectivePlaybackDuration, 1))
                 )
