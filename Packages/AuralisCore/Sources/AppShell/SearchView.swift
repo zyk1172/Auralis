@@ -126,7 +126,7 @@ struct SearchView: View {
         }
         .padding(AuralisSpacing.medium)
         .background(theme.colorTokens.surface.color)
-        .clipShape(RoundedRectangle(cornerRadius: AuralisSpacing.medium))
+        .clipShape(RoundedRectangle(cornerRadius: AuralisSpacing.medium, style: .continuous))
         .padding(.horizontal, AuralisSpacing.large)
         .padding(.top, AuralisSpacing.large)
         .padding(.bottom, AuralisSpacing.small)

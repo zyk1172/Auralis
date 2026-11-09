@@ -177,6 +177,9 @@ public enum AuralisSpacing {
     public static let huge: CGFloat = 40
 }
 
+/// Apple 平台的圆角尺寸。卡片、封面和圆角面板使用
+/// `RoundedRectangle(cornerRadius: ..., style: .continuous)`，让直线与圆角之间
+/// 保持连续曲率；省略 style 会回到普通圆弧。详见 Docs/AppleCardCorners.md。
 public enum AuralisRadius {
     public static let small: CGFloat = 8
     public static let medium: CGFloat = 14

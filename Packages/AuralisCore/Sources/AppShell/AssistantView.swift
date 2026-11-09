@@ -306,7 +306,7 @@ struct AssistantView: View {
             }
             .padding(AuralisSpacing.small)
             .background(theme.colorTokens.surface.color)
-            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small))
+            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small, style: .continuous))
             .padding(.horizontal, AuralisSpacing.medium)
             .padding(.vertical, AuralisSpacing.small)
 
@@ -885,7 +885,7 @@ struct AssistantView: View {
         .padding(.horizontal, AuralisSpacing.small)
         .padding(.vertical, 4)
         .background(theme.colorTokens.surface.color.opacity(0.24))
-        .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium))
+        .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
         .frame(maxWidth: 560, alignment: .leading)
     }
 
@@ -925,7 +925,7 @@ struct AssistantView: View {
             }
             .padding(AuralisSpacing.medium)
             .background(isUser ? theme.colorTokens.accent.color.opacity(0.22) : theme.colorTokens.elevated.color)
-            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium))
+            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
             .frame(maxWidth: 560, alignment: isUser ? .trailing : .leading)
             .contextMenu {
                 Button {
@@ -946,7 +946,7 @@ struct AssistantView: View {
             }
             .padding(AuralisSpacing.medium)
             .background(theme.colorTokens.elevated.color.opacity(0.7))
-            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium))
+            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
             .frame(maxWidth: 560, alignment: .leading)
             .textSelection(.enabled)
 
@@ -1001,7 +1001,7 @@ struct AssistantView: View {
             }
             .padding(AuralisSpacing.medium)
             .background(theme.colorTokens.elevated.color)
-            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium))
+            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
             .frame(maxWidth: 560, alignment: .leading)
 
         case let .playlistProposal(name, tracks):
@@ -1019,7 +1019,7 @@ struct AssistantView: View {
             }
             .padding(AuralisSpacing.medium)
             .background(theme.colorTokens.elevated.color)
-            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium))
+            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
             .frame(maxWidth: 560, alignment: .leading)
 
         case let .actionPreview(title, detail):
@@ -1032,7 +1032,7 @@ struct AssistantView: View {
             .padding(.horizontal, AuralisSpacing.small)
             .padding(.vertical, 4)
             .background(theme.colorTokens.surface.color.opacity(0.22))
-            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small))
+            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small, style: .continuous))
 
         case let .toolProgress(step):
             Label(step, systemImage: "gearshape.arrow.trianglehead.2.clockwise.rotate.90")
@@ -1346,7 +1346,7 @@ private struct AlbumCardList: View {
                 }
                 .padding(AuralisSpacing.small)
                 .background(theme.colorTokens.elevated.color)
-                .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small))
+                .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small, style: .continuous))
             }
             if cards.count > 5 {
                 Button {
@@ -1388,7 +1388,7 @@ private struct PlaylistCardList: View {
                 }
                 .padding(AuralisSpacing.small)
                 .background(theme.colorTokens.elevated.color)
-                .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small))
+                .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small, style: .continuous))
             }
             if cards.count > 5 {
                 expandButton
@@ -1434,7 +1434,7 @@ private struct ArtistCardList: View {
                 }
                 .padding(AuralisSpacing.small)
                 .background(theme.colorTokens.elevated.color)
-                .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small))
+                .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small, style: .continuous))
             }
             if cards.count > 5 {
                 expandButton
@@ -1518,7 +1518,7 @@ private struct TrackCardRow: View {
             .padding(AuralisSpacing.small)
         }
         .background(theme.colorTokens.elevated.color)
-        .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small))
+        .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small, style: .continuous))
         .contentShape(Rectangle())
         // 整行点击也直接播放，无需再走大模型。
         .onTapGesture { agent.play(card: card) }

@@ -271,7 +271,7 @@ struct TagClassificationNotice: View {
                     .accessibilityLabel(String(localized: "关闭", bundle: .module))
             }
             .padding(12)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .padding(.horizontal, 16).padding(.top, 12)
             .accessibilityIdentifier("auralis.classification.notice")
         }
