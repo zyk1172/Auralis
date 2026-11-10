@@ -1808,7 +1808,7 @@ struct NowPlayingView: View {
                 .font(.caption.weight(.semibold))
                 .padding(6)
                 .background(theme.colorTokens.surface.color)
-                .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small))
+                .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small, style: .continuous))
                 .padding(.top, 4)
             }
         }
