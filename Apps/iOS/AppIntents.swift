@@ -58,6 +58,10 @@ struct AuralisAppShortcuts: AppShortcutsProvider {
             shortTitle: "播放随机音乐",
             systemImageName: "shuffle"
         )
+        // 注意：App Shortcut 短语里的参数插值只允许 AppEntity / AppEnum 类型，
+        // `AuralisPlaySongIntent.song` 是 String，无法写成 "\(\.$song)"（会触发
+        // AppIntents 元数据导出错误 "only allowed types for 'song'"），
+        // 因此这里保留不带参数的短语，具体歌名由 Siri 追问后填充。
         AppShortcut(
             intent: AuralisPlaySongIntent(),
             phrases: ["\(.applicationName) 播放歌曲"],

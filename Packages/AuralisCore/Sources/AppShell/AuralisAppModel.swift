@@ -14,6 +14,7 @@ import Observability
 import OfflineManager
 import PlaybackEngine
 import SystemMediaIntegration
+import os
 #if os(macOS)
 import AppKit
 #elseif os(iOS)
@@ -868,6 +869,12 @@ public final class AuralisAppModel: ObservableObject {
     private var pendingSiriQuery: String?
     /// Siri 媒体项携带的精确 GlobalID（Intents 扩展从共享资料库解析而来）。
     private var pendingSiriGlobalID: GlobalID?
+    /// Siri 只说「播放音乐」时携带的占位媒体项（Intents 扩展的 `auralis-play-all`）。
+    private var pendingSiriPlayAll = false
+
+    /// Siri / 快捷指令路径的诊断日志。播放失败必须留下可核对的记录，
+    /// 不能静默丢弃请求（否则 Siri 侧只是「没有声音」，无从定位）。
+    private static let siriLog = os.Logger(subsystem: "com.auralis.player.ios", category: "siri")
 
     private static let playCountsDefaultsKey = "auralis.playCounts"
     private static let volumeDefaultsKey = "auralis.volume"
@@ -1350,6 +1357,14 @@ public final class AuralisAppModel: ObservableObject {
         }
     }
 
+    /// 登记一次「播放音乐」请求（Siri 只说「播放音乐」时走这里）。
+    /// 与 `handleSiriUserActivity` 解耦，便于单元测试验证这条路不会被静默丢弃。
+    func enqueueSiriPlayAllRequest() {
+        pendingSiriPlayAll = true
+        pendingSiriGlobalID = nil
+        pendingSiriQuery = nil
+    }
+
     /// 处理 Siri 经 continueUserActivity 交还的 INPlayMediaIntent（播放某首歌 / 播放音乐）。
     public func handleSiriUserActivity(_ userActivity: NSUserActivity) {
         #if os(iOS)
@@ -1357,25 +1372,32 @@ public final class AuralisAppModel: ObservableObject {
         if let intent = userActivity.interaction?.intent as? INPlayMediaIntent,
            let item = intent.mediaItems?.first {
             // Intents 扩展已从共享资料库解析出精确媒体项：identifier 形如「服务器ID:歌曲ID」。
-            if let identifier = item.identifier, let gid = GlobalID(identifier) {
+            if item.identifier == SiriMediaIdentifier.playAll {
+                // 「播放音乐」：扩展返回的占位项，交给统一的 .playMusic 分支。
+                enqueueSiriPlayAllRequest()
+            } else if let identifier = item.identifier, let gid = GlobalID(identifier) {
                 pendingSiriGlobalID = gid
                 pendingSiriQuery = nil
+                pendingSiriPlayAll = false
             } else {
                 title = item.title ?? item.identifier ?? ""
                 let query = title.trimmingCharacters(in: .whitespacesAndNewlines)
                 pendingSiriQuery = query.isEmpty ? nil : query
                 pendingSiriGlobalID = nil
+                pendingSiriPlayAll = false
             }
         } else {
             title = userActivity.title ?? ""
             let query = title.trimmingCharacters(in: .whitespacesAndNewlines)
             pendingSiriQuery = query.isEmpty ? nil : query
             pendingSiriGlobalID = nil
+            pendingSiriPlayAll = false
         }
         #else
         let query = (userActivity.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         pendingSiriQuery = query.isEmpty ? nil : query
         pendingSiriGlobalID = nil
+        pendingSiriPlayAll = false
         #endif
         Task { [weak self] in
             await self?.restorePersistedLibrary()
@@ -1412,22 +1434,44 @@ public final class AuralisAppModel: ObservableObject {
         }
     }
 
-    /// 执行待处理的 Siri 播放请求。资料库为空（未连接服务器）时静默放弃。
+    /// 执行待处理的 Siri 播放请求。资料库为空（未连接服务器 / 尚未同步）时不发起播放，
+    /// 并留下诊断日志——不能假装已经在播。
     /// 优先使用本地持久化资料库匹配；唯一匹配直接播放，多匹配按类型与文本相似度选择最接近的。
     public func processSiriPlayRequest() {
+        // 「播放音乐」：扩展返回的占位项，直接走统一的 playMusic 分支。
+        if pendingSiriPlayAll {
+            pendingSiriPlayAll = false
+            pendingSiriGlobalID = nil
+            pendingSiriQuery = nil
+            guard !catalog.tracks.isEmpty else {
+                Self.siriLog.error("Siri「播放音乐」未执行：本地资料库为空（未连接服务器或尚未完成同步）")
+                return
+            }
+            Task { @MainActor in
+                await self.executeSiriIntent("")
+            }
+            return
+        }
         // 优先精确 GlobalID（来自共享资料库的 Siri 媒体解析）。
         if let gid = pendingSiriGlobalID {
             pendingSiriGlobalID = nil
-            guard !catalog.tracks.isEmpty else { return }
+            guard !catalog.tracks.isEmpty else {
+                Self.siriLog.error("Siri 精确曲目未播放：本地资料库为空，globalID=\(gid.description, privacy: .public)")
+                return
+            }
             if let track = catalog.tracks.first(where: {
                 $0.id.rawValue == gid.remoteID && $0.serverID == gid.serverID
             }) {
                 playTracks([track])
                 return
             }
+            Self.siriLog.error("Siri 精确曲目未播放：本地资料库中找不到 globalID=\(gid.description, privacy: .public)")
         }
         guard let query = pendingSiriQuery else { return }
-        guard !catalog.tracks.isEmpty else { return }
+        guard !catalog.tracks.isEmpty else {
+            Self.siriLog.error("Siri 请求「\(query, privacy: .public)」未执行：本地资料库为空")
+            return
+        }
         pendingSiriQuery = nil
         Task { @MainActor in
             await self.executeSiriIntent(query)
