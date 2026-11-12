@@ -7,7 +7,7 @@
 
 | 机制 | 决定什么 | Auralis 现状 |
 | --- | --- | --- |
-| SiriKit 媒体域（`INPlayMediaIntent`） | 用户说「播放音乐」时，Siri 的 **App 选择列表**里有谁；点选后由谁播放 | 已配置（本文第 2 节） |
+| SiriKit 媒体域（`INPlayMediaIntent`） | 用户说「播放音乐」时，Siri 的 **App 选择列表**里有谁；点选后由谁播放 | 配置已完成；需付费团队开通 Siri 能力才能生效（第 2 节） |
 | App Shortcuts（`AppShortcutsProvider`） | 用户说「Auralis 播放音乐」这类**带 App 名**的短语 | 已实现（`Apps/iOS/AppIntents.swift`） |
 | Apple Intelligence 音频 Schema（`.audio.playAudio` + `IntentValueQuery`） | iOS 26+ 的 Siri AI 走 App Intents 语义层 | **未实现**，见第 6 节 |
 
@@ -45,14 +45,44 @@
 
 - `Info.plist`：`INIntentsSupported`、`INSupportedMediaCategories`（iOS 14+ 的 App 侧声明）、
   `NSSiriUsageDescription`、`NSUserActivityTypes = [INPlayMediaIntent]`（冷启动交付 continueInApp）。
-- `Auralis.entitlements`：`com.apple.developer.siri = true`。
+- `Auralis.entitlements`：默认**不含** `com.apple.developer.siri`，原因见下。
 
 ### 签名前提（硬性）
 
-`com.apple.developer.siri` 必须能在描述文件中生效：App ID 上要开启 **Siri** capability。
-免费 Apple ID（Personal Team，描述文件 `TimeToLive = 7`）通常无法启用该 capability，
-此时带 entitlement 的构建会在签名阶段失败。这是账号能力限制，不是代码问题，
-无法通过修改 Info.plist 绕过。
+`com.apple.developer.siri` 必须同时满足两件事才能生效：
+
+1. App ID 上开启 **Siri** capability；
+2. 对应的描述文件包含该 entitlement。
+
+**Personal Team（免费 Apple ID）不支持 Siri capability。** 实测报错：
+
+```
+error: Cannot create a iOS App Development provisioning profile for "com.auralis.player.ios".
+       Personal development teams, including "云凯 郑", do not support the Siri capability.
+error: Provisioning profile "iOS Team Provisioning Profile: com.auralis.player.ios"
+       doesn't include the com.apple.developer.siri entitlement.
+```
+
+因此仓库默认的 `Apps/iOS/Auralis.entitlements` **不声明**该键——否则任何免费账号都无法
+在真机上构建、安装、调试，连 `Auralis` 本身都跑不起来。这是 Apple 的账号能力限制，
+不是代码问题，也无法通过修改 Info.plist 或 signing 配置绕过。
+
+付费 Apple Developer Program 团队启用 Siri 的真实步骤：
+
+1. developer.apple.com → Certificates, Identifiers & Profiles → Identifiers →
+   `com.auralis.player.ios` → 勾选 **Siri** → Save；
+2. 在 `Apps/iOS/Auralis.entitlements` 的 `<dict>` 中加回：
+
+   ```xml
+   <key>com.apple.developer.siri</key>
+   <true/>
+   ```
+
+3. Xcode → Signing & Capabilities → 确认团队为付费团队，删除旧描述文件后重新下载。
+
+**在没有付费账号时**：App 可正常编译、签名、侧载、播放本地与 Navidrome 音乐，
+但 Siri 不会把 Auralis 列入音乐 App 列表——因为系统层面根本没有授权这项能力。
+这与代码实现无关，任何第三方播放器在免费账号下都一样。
 
 ## 3. 调用链
 
@@ -80,6 +110,10 @@ Siri「用 Auralis 播放…」
 容器不可用时记录 `siri-intents` 分类的错误日志并返回「不支持」，不会静默假装搜索成功。
 
 ## 5. 真机验证步骤
+
+以下步骤**前置条件**：已按第 2 节完成付费账号下的 Siri 能力开通，并在
+`Auralis.entitlements` 中加回 `com.apple.developer.siri`。免费账号无法进行本节的验证，
+因为系统层面不允许该 App 出现在媒体列表里。
 
 1. 确认签名：Xcode → Target Auralis → Signing & Capabilities 中存在 **Siri**；
    `security cms -D -i <profile> | grep -A1 developer.siri` 应能查到该键。
