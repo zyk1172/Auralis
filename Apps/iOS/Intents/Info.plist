@@ -18,13 +18,26 @@
 	<dict>
 		<key>NSExtensionPointIdentifier</key>
 		<string>com.apple.intents-service</string>
+		<!-- Swift 类在 ObjC 运行时的名字带模块前缀（编译产物中为
+		     _TtC14AuralisIntents13IntentHandler）。只写 IntentHandler 时
+		     NSClassFromString 返回 nil，扩展会以
+		     “Extension's principal object should not be nil” 直接终止，
+		     Siri 侧表现为「应用处理失败」。Apple DTS 要求写成
+		     $(PRODUCT_MODULE_NAME).IntentHandler。 -->
 		<key>NSExtensionPrincipalClass</key>
-		<string>IntentHandler</string>
+		<string>$(PRODUCT_MODULE_NAME).IntentHandler</string>
 		<key>NSExtensionAttributes</key>
 		<dict>
 			<key>IntentsSupported</key>
 			<array>
 				<string>INPlayMediaIntent</string>
+			</array>
+			<!-- 让 Siri 在用户说「播放音乐」时把 Auralis 当作可用的音乐 App 调用。
+			     缺少该键时系统不知道本 App 支持哪个媒体类别，媒体域不会把
+			     Auralis 列入候选。 -->
+			<key>SupportedMediaCategories</key>
+			<array>
+				<string>INMediaCategoryMusic</string>
 			</array>
 		</dict>
 	</dict>

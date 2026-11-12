@@ -22,6 +22,26 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- SiriKit 媒体域：主 App 自己处理 INPlayMediaIntent（扩展返回 .continueInApp 后
+	     由 App 完成真实播放）。这两个键是 iOS 14+ 的 App 侧声明，缺少时系统只把 App
+	     当作「有扩展」而不认为 App 本身能处理媒体播放。 -->
+	<key>INIntentsSupported</key>
+	<array>
+		<string>INPlayMediaIntent</string>
+	</array>
+	<key>INSupportedMediaCategories</key>
+	<array>
+		<string>INMediaCategoryMusic</string>
+	</array>
+	<key>NSSiriUsageDescription</key>
+	<string>Auralis 需要 Siri 权限，才能通过「用 Auralis 播放音乐」这类语音指令播放你的音乐。</string>
+	<!-- Intents 扩展返回 .continueInApp 后，系统以 activityType = INPlayMediaIntent
+	     的 NSUserActivity 拉起 App（冷启动同样走这条路）。声明支持的 activity 类型，
+	     保证冷启动时该活动不会被系统丢弃。 -->
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>INPlayMediaIntent</string>
+	</array>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>MusicHapticsSupported</key>
